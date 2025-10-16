@@ -20,11 +20,37 @@ This system combines:
 - **GPS**: For initial positioning and RTL functionality
 
 ### Software Requirements
-- Python 2.7 or 3.x
-- OpenCV 3.4.0+ with ArUco support
+- Python 3.9 (tested on Raspberry Pi 5)
+- OpenCV 4.7+ with ArUco support
 - DroneKit-Python
 - PyMAVLink
 - NumPy
+- lxml, future, monotonic
+
+## Raspberry Pi 5 Setup (Python 3.9)
+
+### Quick start
+
+```bash
+# 1) Install Python dependencies
+pip3 install -r requirements.txt
+
+# 2) Install legacy Pi camera support (if using Raspberry Pi Camera Module)
+sudo apt-get update && sudo apt-get install -y python3-picamera
+
+# 3) Enable camera interface (if not already enabled)
+sudo raspi-config  # Interfacing Options -> Camera -> Enable (or enable via OS settings)
+
+# 4) Verify OpenCV can see a camera (optional for USB cams)
+python -c "import cv2; cap=cv2.VideoCapture(0); print('opened', cap.isOpened()); cap.release()"
+```
+
+Notes:
+- The code auto-detects PiCamera where applicable and falls back to OpenCV capture.
+- If you prefer forcing modes in tools that support it:
+  - Use `opencv/save_snapshots.py --raspi` to force PiCamera or `--no-raspi` to force OpenCV.
+  - `opencv/aruco_pose_estimation.py` auto-detects; no flags needed.
+  - `opencv/lib_aruco_pose.py` consumers can pass `use_picamera=True|False` if they need to override.
 
 ## Installation Steps
 
@@ -70,17 +96,13 @@ sudo make install
 sudo ldconfig
 ```
 
-### 3. Python Dependencies
+### 3. Python Dependencies (recommended)
 
 ```bash
-# Install Python packages
-pip install dronekit
-pip install pymavlink
-pip install numpy
-pip install opencv-python
+pip3 install -r requirements.txt
 
-# For Raspberry Pi camera support
-sudo modprobe bcm2835-v4l2
+# Raspberry Pi camera (legacy) via apt, not pip
+sudo apt-get install -y python3-picamera
 ```
 
 ### 4. DroneKit Update (Critical)
@@ -106,8 +128,11 @@ sudo python setup.py install
 
 ### 2. Capture Calibration Images
 ```bash
-# Use the provided script to capture images
-python opencv/save_snapshots.py
+# Use the provided script to capture images (auto-detects PiCamera on Pi)
+python opencv/save_snapshots.py --folder opencv/snaps --name snapshot
+# Force PiCamera or OpenCV if needed
+# python opencv/save_snapshots.py --raspi
+# python opencv/save_snapshots.py --no-raspi
 ```
 
 Take **at least 20 images** with:
@@ -193,7 +218,7 @@ LAND_SPEED = 30        # cm/s descent rate
 3. **Camera System Test**
    ```bash
    # Test ArUco detection
-   python opencv/aruco_pose_estimation.py
+python opencv/aruco_pose_estimation.py  # auto-uses PiCamera on Pi, falls back to OpenCV
    ```
 
 ### Phase 2: Pre-Flight Setup
