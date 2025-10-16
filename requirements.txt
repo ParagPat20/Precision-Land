@@ -1,0 +1,20 @@
+# Python 3.9 requirements for Raspberry Pi 5 (aarch64)
+# Note: Install legacy Pi camera support via apt (not pip):
+#   sudo apt-get update && sudo apt-get install -y python3-picamera
+# If using the newer libcamera stack, consider picamera2 (not required here).
+
+# Core numerical
+numpy==1.26.4
+
+# OpenCV (if wheels fail on your image, install via OS packages)
+opencv-python==4.7.0.72
+opencv-contrib-python==4.7.0.72
+
+# MAVLink / DroneKit stack
+pymavlink==2.4.40
+DroneKit==2.9.2
+
+# Utilities
+lxml==4.9.3
+future==1.0.0
+monotonic==1.6
