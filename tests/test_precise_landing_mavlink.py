@@ -27,7 +27,7 @@ from pymavlink import mavutil
 from opencv.lib_aruco_pose import *
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--connect', default = 'tcp:127.0.0.1:5762')
+parser.add_argument('--connect', default = '/dev/ttyS0')
 args = parser.parse_args()
 
 #--------------------------------------------------

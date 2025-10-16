@@ -144,8 +144,6 @@ def save_snaps(width=0, height=0, name="snapshot", folder=".", raspi=False):
         save_snaps_opencv(width, height, name, folder, raspi)
 
 
-
-
 def main():
     # ---- DEFAULT VALUES ---
     SAVE_FOLDER = "."
