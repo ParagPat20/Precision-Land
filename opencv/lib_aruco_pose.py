@@ -41,13 +41,12 @@ import cv2
 import cv2.aruco as aruco
 import sys, time, math
 
-# Optional Raspberry Pi camera support via picamera, with graceful fallback
+# Optional Raspberry Pi camera support via Picamera2, with graceful fallback
 try:
-    from picamera import PiCamera
-    from picamera.array import PiRGBArray
-    _PICAMERA_AVAILABLE = True
+    from picamera2 import Picamera2
+    _PICAMERA2_AVAILABLE = True
 except Exception:
-    _PICAMERA_AVAILABLE = False
+    _PICAMERA2_AVAILABLE = False
 
 class ArucoSingleTracker():
     def __init__(self,
@@ -101,29 +100,24 @@ class ArucoSingleTracker():
                 pass
             self._detector = None
 
-        # Decide capture backend (picamera vs OpenCV) with graceful fallback
-        # use_picamera: True forces PiCamera, False forces OpenCV, None auto-detect
+        # Decide capture backend (Picamera2 vs OpenCV) with graceful fallback
+        # use_picamera: True forces Picamera2, False forces OpenCV, None auto-detect
         self._use_picamera = False
-        if use_picamera is True and _PICAMERA_AVAILABLE:
+        if use_picamera is True and _PICAMERA2_AVAILABLE:
             self._use_picamera = True
-        elif use_picamera is None and _PICAMERA_AVAILABLE:
+        elif use_picamera is None and _PICAMERA2_AVAILABLE:
             # Auto-enable if library is available
             try:
-                self._picam = PiCamera()
-                self._picam.resolution = (int(camera_size[0]), int(camera_size[1]))
-                self._picam.framerate = 30
-                time.sleep(2.0)  # warmup
+                self._picam2 = Picamera2()
+                cfg = self._picam2.create_preview_configuration(main={"size": (int(camera_size[0]), int(camera_size[1]))})
+                self._picam2.configure(cfg)
+                self._picam2.start()
+                time.sleep(0.5)  # warmup
                 self._use_picamera = True
             except Exception:
                 self._use_picamera = False
-        
+
         if self._use_picamera:
-            # Ensure camera is initialized if not done in auto-detect path
-            if not hasattr(self, '_picam'):
-                self._picam = PiCamera()
-                self._picam.resolution = (int(camera_size[0]), int(camera_size[1]))
-                self._picam.framerate = 30
-                time.sleep(2.0)
             self._cap = None
         else:
             #--- Capture the videocamera (this may also be a video or a picture)
@@ -186,8 +180,9 @@ class ArucoSingleTracker():
         except Exception:
             pass
         try:
-            if self._use_picamera and hasattr(self, '_picam') and self._picam is not None:
-                self._picam.close()
+                if self._use_picamera and hasattr(self, '_picam2') and self._picam2 is not None:
+                    self._picam2.stop()
+                    self._picam2.close()
         except Exception:
             pass
 
@@ -201,12 +196,11 @@ class ArucoSingleTracker():
         
         while not self._kill:
             
-            #-- Read the camera frame (PiCamera or OpenCV)
+            #-- Read the camera frame (Picamera2 or OpenCV)
             if self._use_picamera:
                 try:
-                    raw = PiRGBArray(self._picam)
-                    self._picam.capture(raw, format="bgr")
-                    frame = raw.array
+                    rgb = self._picam2.capture_array()
+                    frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                     ret = True
                 except Exception:
                     ret = False
@@ -336,8 +330,9 @@ class ArucoSingleTracker():
                     except Exception:
                         pass
                     try:
-                        if self._use_picamera and hasattr(self, '_picam') and self._picam is not None:
-                            self._picam.close()
+                        if self._use_picamera and hasattr(self, '_picam2') and self._picam2 is not None:
+                            self._picam2.stop()
+                            self._picam2.close()
                     except Exception:
                         pass
                     cv2.destroyAllWindows()

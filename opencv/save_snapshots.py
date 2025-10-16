@@ -1,6 +1,6 @@
 """
 Saves a series of snapshots with the current camera as snapshot_<width>_<height>_<nnn>.jpg
-Uses Raspberry Pi camera (picamera) if available, falls back to OpenCV for regular cameras.
+Uses Raspberry Pi camera (Picamera2) if available, falls back to OpenCV for regular cameras.
 
 Arguments:
     --f <output folder>     default: current folder
@@ -21,55 +21,52 @@ import sys
 import argparse
 import os
 
-# Try to import picamera for Raspberry Pi camera support
+# Try to import Picamera2 for Raspberry Pi camera support
 try:
-    from picamera import PiCamera
-    from picamera.array import PiRGBArray
-    PICAMERA_AVAILABLE = True
-except ImportError:
-    PICAMERA_AVAILABLE = False
+    from picamera2 import Picamera2
+    PICAMERA2_AVAILABLE = True
+except Exception:
+    PICAMERA2_AVAILABLE = False
 
 __author__ = "Parag"
 __date__ = "16/10/2025"
 
 
-def save_snaps_picamera(width=0, height=0, name="snapshot", folder="."):
-    """Save snapshots using Raspberry Pi camera (picamera library)"""
+def save_snaps_picamera2(width=0, height=0, name="snapshot", folder="."):
+    """Save snapshots using Raspberry Pi camera (Picamera2 library)"""
     try:
         # Create folder if it doesn't exist
         if not os.path.exists(folder):
             os.makedirs(folder)
-        
-        # Initialize PiCamera
-        camera = PiCamera()
-        
-        # Set resolution if specified
+
+        cam = Picamera2()
+        # Configure resolution
         if width > 0 and height > 0:
-            camera.resolution = (width, height)
-            print(f"Setting camera resolution to {width}x{height}")
+            config = cam.create_preview_configuration(main={"size": (int(width), int(height))})
+            cam.configure(config)
+            eff_w, eff_h = int(width), int(height)
+            print(f"Setting camera resolution to {eff_w}x{eff_h}")
         else:
-            # Use default resolution
-            width, height = camera.resolution
-        
-        # Start preview
-        camera.start_preview()
-        time.sleep(2)  # Allow camera to adjust to lighting
-        
+            config = cam.create_preview_configuration()
+            cam.configure(config)
+            eff_w, eff_h = config["main"]["size"]
+
+        cam.start()
+        time.sleep(0.5)  # brief warmup
+
         nSnap = 0
-        fileName = "%s/%s_%d_%d_" % (folder, name, width, height)
-        
-        print("Using Raspberry Pi Camera (picamera)")
+        fileName = "%s/%s_%d_%d_" % (folder, name, eff_w, eff_h)
+
+        print("Using Raspberry Pi Camera (Picamera2)")
         print("Press 'q' to quit, 's' to save snapshot")
-        
+
         while True:
-            # Capture image to memory
-            raw_capture = PiRGBArray(camera)
-            camera.capture(raw_capture, format="bgr")
-            frame = raw_capture.array
-            
-            # Display the frame
+            # capture_array returns RGB; convert to BGR for OpenCV
+            rgb = cam.capture_array()
+            frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
             cv2.imshow('Raspberry Pi Camera', frame)
-            
+
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
@@ -77,13 +74,13 @@ def save_snaps_picamera(width=0, height=0, name="snapshot", folder="."):
                 print(f"Saving image {nSnap}")
                 cv2.imwrite("%s%d.jpg" % (fileName, nSnap), frame)
                 nSnap += 1
-        
-        camera.stop_preview()
-        camera.close()
+
+        cam.stop()
+        cam.close()
         cv2.destroyAllWindows()
-        
+
     except Exception as e:
-        print(f"Error with Raspberry Pi camera: {e}")
+        print(f"Error with Raspberry Pi Picamera2: {e}")
         print("Falling back to regular camera mode...")
         save_snaps_opencv(width, height, name, folder)
 
@@ -135,13 +132,13 @@ def save_snaps_opencv(width=0, height=0, name="snapshot", folder=".", raspi=Fals
 
 
 def save_snaps(width=0, height=0, name="snapshot", folder=".", raspi=False):
-    """Main function that chooses between picamera and OpenCV"""
-    if PICAMERA_AVAILABLE and raspi:
-        print("Raspberry Pi camera mode detected, using picamera library...")
-        save_snaps_picamera(width, height, name, folder)
+    """Main function that chooses between Picamera2 and OpenCV"""
+    if PICAMERA2_AVAILABLE and raspi:
+        print("Raspberry Pi camera mode detected, using Picamera2 library...")
+        save_snaps_picamera2(width, height, name, folder)
     else:
-        if not PICAMERA_AVAILABLE:
-            print("picamera library not available, using OpenCV...")
+        if not PICAMERA2_AVAILABLE:
+            print("Picamera2 library not available, using OpenCV...")
         else:
             print("Using OpenCV camera mode...")
         save_snaps_opencv(width, height, name, folder, raspi)
@@ -175,19 +172,19 @@ def main():
     elif args.raspi:
         use_raspi = True
         print("Forcing Raspberry Pi camera mode...")
-    elif PICAMERA_AVAILABLE:
-        # Auto-detect Raspberry Pi camera
+    elif PICAMERA2_AVAILABLE:
+        # Auto-detect Raspberry Pi camera via Picamera2 init
         try:
-            test_camera = PiCamera()
-            test_camera.close()
+            test_cam = Picamera2()
+            test_cam.close()
             use_raspi = True
-            print("Raspberry Pi camera detected automatically.")
+            print("Raspberry Pi camera (Picamera2) detected automatically.")
         except:
             use_raspi = False
             print("Raspberry Pi camera not available, using OpenCV...")
     else:
         use_raspi = False
-        print("picamera library not available, using OpenCV...")
+        print("Picamera2 library not available, using OpenCV...")
 
     save_snaps(width=args.dwidth, height=args.dheight, name=args.name, folder=args.folder, raspi=use_raspi)
 

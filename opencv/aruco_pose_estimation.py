@@ -40,6 +40,13 @@ import cv2.aruco as aruco
 import sys, time, math
 import os
 
+# Optional Raspberry Pi camera support via Picamera2
+try:
+    from picamera2 import Picamera2
+    _PICAMERA2_AVAILABLE = True
+except Exception:
+    _PICAMERA2_AVAILABLE = False
+
 # Optional Raspberry Pi camera support via picamera, with graceful fallback
 try:
     from picamera import PiCamera
@@ -132,13 +139,14 @@ REQ_W, REQ_H = 640, 480
 
 use_picamera = False
 cap = None
-_picam = None
-if _PICAMERA_AVAILABLE:
+_picam2 = None
+if _PICAMERA2_AVAILABLE:
     try:
-        _picam = PiCamera()
-        _picam.resolution = (REQ_W, REQ_H)
-        _picam.framerate = 30
-        time.sleep(2.0)  # warmup
+        _picam2 = Picamera2()
+        _cfg = _picam2.create_preview_configuration(main={"size": (REQ_W, REQ_H)})
+        _picam2.configure(_cfg)
+        _picam2.start()
+        time.sleep(0.5)
         use_picamera = True
     except Exception:
         use_picamera = False
@@ -174,9 +182,8 @@ while True:
     #-- Read the camera frame
     if use_picamera:
         try:
-            raw = PiRGBArray(_picam)
-            _picam.capture(raw, format="bgr")
-            frame = raw.array
+            _rgb = _picam2.capture_array()
+            frame = cv2.cvtColor(_rgb, cv2.COLOR_RGB2BGR)
             ret = True
         except Exception:
             ret = False
@@ -276,8 +283,9 @@ while True:
         except Exception:
             pass
         try:
-            if use_picamera and _picam is not None:
-                _picam.close()
+            if use_picamera and _picam2 is not None:
+                _picam2.stop()
+                _picam2.close()
         except Exception:
             pass
         cv2.destroyAllWindows()
