@@ -27,7 +27,7 @@ from pymavlink import mavutil
 from opencv.lib_aruco_pose import *
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--connect', default = '/dev/ttyS0')
+parser.add_argument('--connect', default = '/dev/ttyAMA0')
 args = parser.parse_args()
 
 #--------------------------------------------------
@@ -97,7 +97,7 @@ print(vehicle, "connected!!!")
 vehicle.parameters['PLND_ENABLED']       = 1
 vehicle.parameters['PLND_TYPE']          = 1 # Mavlink landing backend
 
-vehicle.parameters['LAND_REPOSITION']   = 0 # !!!!!! ONLY FOR SITL IF NO RC IS CONNECTED
+# vehicle.parameters['LAND_REPOSITION']   = 0 # !!!!!! ONLY FOR SITL IF NO RC IS CONNECTED
 
 
 # vehicle.parameters['RNGFND_TYPE']       = 10
