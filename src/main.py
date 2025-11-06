@@ -86,9 +86,15 @@ def camera_to_uav(x_cam, y_cam):
 #--------------------------------------------------
 #-------------- CONNECTION  
 #--------------------------------------------------    
-#-- Connect to the vehicle
+#-- Connect to the vehicle with retry loop
 print('Connecting...')
-vehicle = connect(args.connect)  
+while True:
+    try:
+        vehicle = connect(args.connect)
+        break
+    except Exception as e:
+        print(f"Connection failed: {e}. Retrying in 2s...")
+        time.sleep(2)
 print(vehicle, "connected!!!")
 
 #--------------------------------------------------

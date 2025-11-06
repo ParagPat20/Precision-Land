@@ -1,0 +1,11 @@
+sudo systemctl stop precision-land.service
+sudo systemctl disable precision-land.service
+
+tmux attach -t precision_land
+
+systemctl status precision-land.service --no-pager -l
+journalctl -u precision-land.service -f
+
+#If you change the service or script later
+sudo systemctl daemon-reload
+sudo systemctl restart precision-land.service
