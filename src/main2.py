@@ -238,7 +238,7 @@ vehicle.parameters['PLND_TYPE']          = 1 # Mavlink landing backend
 #--------------------------------------------------    
 #--- Define Tag
 id_to_find      = 72
-marker_size     = 10 #- [cm]
+marker_size     = 29.7 #- [cm]
 freq_send       = 10 #- Hz
 white_ground_size_cm = 75.0  # 750mm = 75cm
 
