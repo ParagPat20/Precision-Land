@@ -54,7 +54,7 @@ class ArucoSingleTracker():
                 marker_size,
                 camera_matrix,
                 camera_distortion,
-                camera_size=[640,480],
+                camera_size=[4608,2592],  # Default resolution for imx708_wide_noir camera at 30fps
                 show_video=False,
                 axis_scale=0.03,
                 use_picamera=None
@@ -109,8 +109,13 @@ class ArucoSingleTracker():
             # Auto-enable if library is available
             try:
                 self._picam2 = Picamera2()
-                cfg = self._picam2.create_preview_configuration(main={"size": (int(camera_size[0]), int(camera_size[1]))})
+                # Configure for imx708_wide_noir camera at 4608x2592 resolution, 30fps
+                cfg = self._picam2.create_preview_configuration(
+                    main={"size": (int(camera_size[0]), int(camera_size[1])), "format": "RGB888"}
+                )
                 self._picam2.configure(cfg)
+                # Set frame rate to 30 fps
+                self._picam2.set_controls({"FrameRate": 30.0})
                 self._picam2.start()
                 time.sleep(0.5)  # warmup
                 self._use_picamera = True
@@ -132,7 +137,19 @@ class ArucoSingleTracker():
         self._t_read      = time.time()
         self._t_detect    = self._t_read
         self.fps_read    = 0.0
-        self.fps_detect  = 0.0    
+        self.fps_detect  = 0.0
+        
+        #--- OpenCV tracker for hybrid ArUco + visual tracking
+        # Tracker state variables
+        self._tracker = None  # OpenCV tracker object (CSRT or KCF)
+        self._tracker_active = False  # Whether tracker is currently active
+        self._last_aruco_detection_time = 0  # Timestamp of last ArUco detection
+        self._last_aruco_update_time = 0  # Timestamp of last ArUco update to tracker
+        self._tracker_expiry_time = 3.0  # Tracker expires after 3 seconds without ArUco detection
+        self._aruco_update_interval = 1.5  # Update tracker with ArUco every 1.5 seconds
+        self._tracked_bbox = None  # Current tracked bounding box (x, y, w, h)
+        self._last_known_tvec = None  # Last known position from ArUco detection (for interpolation)
+        self._last_known_rvec = None  # Last known rotation from ArUco detection    
 
     def _rotationMatrixToEulerAngles(self,R):
     # Calculates rotation matrix to euler angles
@@ -170,7 +187,112 @@ class ArucoSingleTracker():
     def _update_fps_detect(self):
         t           = time.time()
         self.fps_detect  = 1.0/(t - self._t_detect)
-        self._t_detect      = t    
+        self._t_detect      = t
+    
+    def _initialize_tracker(self, frame, bbox):
+        """Initialize OpenCV tracker with bounding box from ArUco detection"""
+        try:
+            # Try CSRT tracker first (more accurate, slower), fallback to KCF (faster)
+            try:
+                self._tracker = cv2.TrackerCSRT_create()
+            except AttributeError:
+                # OpenCV 4.5+ uses different API
+                try:
+                    self._tracker = cv2.legacy.TrackerCSRT_create()
+                except:
+                    self._tracker = cv2.legacy.TrackerKCF_create()
+            
+            self._tracker.init(frame, bbox)
+            self._tracker_active = True
+            self._tracked_bbox = bbox
+            return True
+        except Exception as e:
+            print(f"Tracker initialization failed: {e}")
+            self._tracker = None
+            self._tracker_active = False
+            return False
+    
+    def _update_tracker(self, frame):
+        """Update OpenCV tracker with current frame, returns True if tracking successful"""
+        if self._tracker is None or not self._tracker_active:
+            return False
+        
+        try:
+            success, bbox = self._tracker.update(frame)
+            if success:
+                self._tracked_bbox = bbox
+                return True
+            else:
+                # Tracker lost the target
+                self._tracker_active = False
+                return False
+        except Exception:
+            self._tracker_active = False
+            return False
+    
+    def _estimate_pose_from_bbox(self, bbox, frame_shape):
+        """Estimate approximate pose from tracked bounding box center
+        Uses last known z distance and camera intrinsics to estimate x, y
+        Returns (x, y, z) in cm, or None if estimation fails
+        """
+        if bbox is None or self._last_known_tvec is None:
+            return None
+        
+        # Extract bounding box coordinates
+        x_bbox, y_bbox, w_bbox, h_bbox = bbox
+        
+        # Calculate center of bounding box
+        center_x = x_bbox + w_bbox / 2.0
+        center_y = y_bbox + h_bbox / 2.0
+        
+        # Use last known z distance (in cm)
+        z_cm = self._last_known_tvec[2]
+        
+        # Estimate x, y from bbox center using camera intrinsics
+        # Convert pixel coordinates to normalized camera coordinates
+        fx = self._camera_matrix[0, 0]
+        fy = self._camera_matrix[1, 1]
+        cx = self._camera_matrix[0, 2]
+        cy = self._camera_matrix[1, 2]
+        
+        # Normalized coordinates
+        x_norm = (center_x - cx) / fx
+        y_norm = (center_y - cy) / fy
+        
+        # Estimate x, y in cm (approximate, using last known z)
+        x_cm = x_norm * z_cm
+        y_cm = y_norm * z_cm
+        
+        return (x_cm, y_cm, z_cm)
+    
+    def _get_bbox_from_corners(self, corners, frame_shape):
+        """Extract bounding box from ArUco marker corners"""
+        # corners shape: (1, 4, 2) or (4, 2)
+        if len(corners.shape) == 3:
+            corners_2d = corners[0]
+        else:
+            corners_2d = corners
+        
+        # Get bounding box
+        x_coords = corners_2d[:, 0]
+        y_coords = corners_2d[:, 1]
+        
+        x_min = int(np.min(x_coords))
+        y_min = int(np.min(y_coords))
+        x_max = int(np.max(x_coords))
+        y_max = int(np.max(y_coords))
+        
+        # Add padding (10% on each side)
+        padding = int(min(x_max - x_min, y_max - y_min) * 0.1)
+        x_min = max(0, x_min - padding)
+        y_min = max(0, y_min - padding)
+        x_max = min(frame_shape[1], x_max + padding)
+        y_max = min(frame_shape[0], y_max + padding)
+        
+        width = x_max - x_min
+        height = y_max - y_min
+        
+        return (x_min, y_min, width, height)    
 
     def stop(self):
         self._kill = True
@@ -193,8 +315,10 @@ class ArucoSingleTracker():
         
         marker_found = False
         x = y = z = 0
+        tracking_confidence = 0.0  # 1.0 = ArUco detection, 0.7 = tracker, 0.0 = no tracking
         
         while not self._kill:
+            current_time = time.time()
             
             #-- Read the camera frame (Picamera2 or OpenCV)
             if self._use_picamera:
@@ -207,27 +331,52 @@ class ArucoSingleTracker():
                     frame = None
             else:
                 ret, frame = self._cap.read()
+            
+            if not ret or frame is None:
+                continue
 
             self._update_fps_read()
+            frame_shape = frame.shape
             
-            #-- Convert in gray scale
-            gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) #-- remember, OpenCV stores color images in Blue, Green, Red
+            #-- Convert in gray scale for ArUco detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            #-- Check if tracker has expired (3 seconds without ArUco detection)
+            if self._tracker_active and (current_time - self._last_aruco_detection_time) > self._tracker_expiry_time:
+                self._tracker_active = False
+                self._tracker = None
+                if verbose:
+                    print("Tracker expired after 3 seconds without ArUco detection")
 
             #-- Find all the aruco markers in the image
-            if self._use_new_api:
-                corners, ids, rejected = self._detector.detectMarkers(gray)
-            else:
-                corners, ids, rejected = aruco.detectMarkers(image=gray, dictionary=self._aruco_dict, 
-                                parameters=self._parameters,
-                                cameraMatrix=self._camera_matrix, 
-                                distCoeff=self._camera_distortion)
+            # Only detect ArUco if: not tracking, or it's time for update (every 1.5s), or tracker expired
+            should_detect_aruco = (not self._tracker_active or 
+                                 (current_time - self._last_aruco_update_time) >= self._aruco_update_interval)
+            
+            aruco_detected = False
+            corners = None
+            ids = None
+            
+            if should_detect_aruco:
+                if self._use_new_api:
+                    corners, ids, rejected = self._detector.detectMarkers(gray)
+                else:
+                    corners, ids, rejected = aruco.detectMarkers(image=gray, dictionary=self._aruco_dict, 
+                                    parameters=self._parameters,
+                                    cameraMatrix=self._camera_matrix, 
+                                    distCoeff=self._camera_distortion)
                             
             if ids is not None and self.id_to_find in (np.array(ids).flatten().tolist() if hasattr(ids, 'flatten') else ids[0]):
+                aruco_detected = True
                 marker_found = True
+                tracking_confidence = 1.0  # Full confidence from ArUco detection
                 self._update_fps_detect()
+                self._last_aruco_detection_time = current_time
+                
                 # select correct marker index
                 ids_flat = np.array(ids).flatten()
                 idx = int(np.where(ids_flat == self.id_to_find)[0][0]) if hasattr(ids_flat, 'shape') else 0
+                
                 #-- Estimate pose with compatible path
                 rvec = None
                 tvec = None
@@ -253,6 +402,35 @@ class ArucoSingleTracker():
                 x = tvec[0]
                 y = tvec[1]
                 z = tvec[2]
+                
+                # Store last known position for tracker interpolation
+                self._last_known_tvec = tvec.copy()
+                self._last_known_rvec = rvec.copy()
+                
+                # Initialize or update tracker with ArUco bounding box
+                bbox = self._get_bbox_from_corners(corners[idx], frame_shape)
+                if not self._tracker_active:
+                    # Initialize tracker on first detection
+                    if self._initialize_tracker(frame, bbox):
+                        if verbose:
+                            print("Tracker initialized with ArUco detection")
+                        self._last_aruco_update_time = current_time
+                elif (current_time - self._last_aruco_update_time) >= self._aruco_update_interval:
+                    # Update tracker with new ArUco detection (every 1.5s)
+                    try:
+                        # Reinitialize tracker with new bbox to keep it accurate
+                        self._tracker = None
+                        if self._initialize_tracker(frame, bbox):
+                            if verbose:
+                                print("Tracker updated with ArUco detection")
+                            self._last_aruco_update_time = current_time
+                    except Exception as e:
+                        if verbose:
+                            print(f"Tracker update failed: {e}")
+                else:
+                    # Tracker is active but not time for ArUco update yet - still update tracker every frame
+                    # This keeps tracking smooth between ArUco updates
+                    self._update_tracker(frame)
 
                 #-- Draw the detected marker and put a reference frame over it
                 aruco.drawDetectedMarkers(frame, corners)
@@ -310,11 +488,49 @@ class ArucoSingleTracker():
                     str_attitude = "CAMERA Attitude r=%4.0f  p=%4.0f  y=%4.0f"%(math.degrees(roll_camera),math.degrees(pitch_camera),
                                         math.degrees(yaw_camera))
                     cv2.putText(frame, str_attitude, (0, 250), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)
-
+                    
+                    # Draw tracker status
+                    if self._tracker_active:
+                        status_text = "TRACKER: Active (ArUco)"
+                        cv2.putText(frame, status_text, (0, 300), self.font, 1, (0, 255, 255), 2, cv2.LINE_AA)
 
             else:
-                if verbose:
-                    print("Nothing detected - fps = %.0f" % self.fps_read)
+                # ArUco not detected - try using tracker if active
+                if self._tracker_active and (current_time - self._last_aruco_detection_time) <= self._tracker_expiry_time:
+                    # Update tracker with current frame
+                    if self._update_tracker(frame):
+                        # Estimate pose from tracked bounding box (70% confidence)
+                        tracked_pose = self._estimate_pose_from_bbox(self._tracked_bbox, frame_shape)
+                        if tracked_pose is not None:
+                            marker_found = True
+                            tracking_confidence = 0.7  # 70% confidence from tracker
+                            x, y, z = tracked_pose
+                            
+                            if verbose:
+                                print("Tracking (no ArUco): x=%.1f y=%.1f z=%.1f" % (x, y, z))
+                            
+                            if show_video:
+                                # Draw tracked bounding box
+                                x_bbox, y_bbox, w_bbox, h_bbox = self._tracked_bbox
+                                cv2.rectangle(frame, (int(x_bbox), int(y_bbox)), 
+                                            (int(x_bbox + w_bbox), int(y_bbox + h_bbox)), (255, 165, 0), 2)
+                                status_text = "TRACKER: Active (Visual) - Confidence: 70%%"
+                                cv2.putText(frame, status_text, (0, 100), self.font, 1, (255, 165, 0), 2, cv2.LINE_AA)
+                                pos_text = "TRACKED Position x=%4.0f  y=%4.0f  z=%4.0f" % (x, y, z)
+                                cv2.putText(frame, pos_text, (0, 130), self.font, 1, (255, 165, 0), 2, cv2.LINE_AA)
+                    else:
+                        # Tracker lost the target
+                        self._tracker_active = False
+                        marker_found = False
+                        tracking_confidence = 0.0
+                        if verbose:
+                            print("Tracker lost target")
+                else:
+                    # No ArUco and no active tracker
+                    marker_found = False
+                    tracking_confidence = 0.0
+                    if verbose:
+                        print("Nothing detected - fps = %.0f" % self.fps_read)
             
 
             if show_video:
@@ -338,7 +554,10 @@ class ArucoSingleTracker():
                     cv2.destroyAllWindows()
                     break
             
-            if not loop: return(marker_found, x, y, z)
+            if not loop: 
+                # Return marker_found, x, y, z, and tracking_confidence
+                # tracking_confidence: 1.0 = ArUco, 0.7 = tracker, 0.0 = none
+                return (marker_found, x, y, z, tracking_confidence)
             
 
 if __name__ == "__main__":

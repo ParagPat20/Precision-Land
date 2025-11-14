@@ -40,15 +40,21 @@ def save_snaps_picamera2(width=0, height=0, name="snapshot", folder="."):
             os.makedirs(folder)
 
         cam = Picamera2()
-        # Configure resolution
+        # Configure resolution for imx708_wide_noir camera
         if width > 0 and height > 0:
-            config = cam.create_preview_configuration(main={"size": (int(width), int(height))})
+            config = cam.create_preview_configuration(
+                main={"size": (int(width), int(height)), "format": "RGB888"}
+            )
             cam.configure(config)
+            # Set frame rate to 30 fps
+            cam.set_controls({"FrameRate": 30.0})
             eff_w, eff_h = int(width), int(height)
-            print(f"Setting camera resolution to {eff_w}x{eff_h}")
+            print(f"Setting camera resolution to {eff_w}x{eff_h} at 30fps")
         else:
             config = cam.create_preview_configuration()
             cam.configure(config)
+            # Set frame rate to 30 fps
+            cam.set_controls({"FrameRate": 30.0})
             eff_w, eff_h = config["main"]["size"]
 
         cam.start()
@@ -146,10 +152,11 @@ def save_snaps(width=0, height=0, name="snapshot", folder=".", raspi=False):
 
 def main():
     # ---- DEFAULT VALUES ---
+    # Default resolution for imx708_wide_noir camera at 30fps
     SAVE_FOLDER = "."
     FILE_NAME = "snapshot"
-    FRAME_WIDTH = 0
-    FRAME_HEIGHT = 0
+    FRAME_WIDTH = 4608   # Default width for imx708_wide_noir
+    FRAME_HEIGHT = 2592  # Default height for imx708_wide_noir
 
     # ----------- PARSE THE INPUTS -----------------
     parser = argparse.ArgumentParser(

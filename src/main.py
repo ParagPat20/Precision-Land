@@ -21,6 +21,7 @@ import time
 import math
 import argparse
 import os
+import numpy as np
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
 from pymavlink import mavutil
@@ -124,10 +125,13 @@ freq_send       = 10 #- Hz
 # Find full directory path of this script, used for loading config and other files
 cwd                 = path.dirname(path.abspath(__file__))
 calib_path          = cwd+"/../opencv/"
+# Camera resolution: 4608x2592 for imx708_wide_noir at 30fps
+camera_resolution   = [4608, 2592]
+# Load calibration files (update filename if using imx708_wide calibration)
 camera_matrix       = np.loadtxt(calib_path+'cameraMatrix_webcam.txt', delimiter=',')
 camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_webcam.txt', delimiter=',')                                      
 aruco_tracker       = ArucoSingleTracker(id_to_find=id_to_find, marker_size=marker_size, show_video=True, axis_scale=0.01,
-                camera_matrix=camera_matrix, camera_distortion=camera_distortion)
+                camera_matrix=camera_matrix, camera_distortion=camera_distortion, camera_size=camera_resolution)
                 
                 
 time_0 = time.time()
@@ -136,8 +140,10 @@ time_0 = time.time()
 mavlink20 = 'MAVLINK20' in os.environ
 
 while True:                
-
-    marker_found, x_cm, y_cm, z_cm = aruco_tracker.track(loop=False)
+    # Track returns: marker_found, x, y, z, tracking_confidence
+    # tracking_confidence: 1.0 = ArUco detection, 0.7 = visual tracker, 0.0 = none
+    marker_found, x_cm, y_cm, z_cm, tracking_confidence = aruco_tracker.track(loop=False)
+    
     if marker_found:
         x_cm, y_cm          = camera_to_uav(x_cm, y_cm)
         # ensure positive distance in cm
@@ -146,7 +152,15 @@ while True:
         
         if time.time() >= time_0 + 1.0/freq_send:
             time_0 = time.time()
-            print("Marker found x = %5.0f cm  y = %5.0f cm -> angle_x = %5f  angle_y = %5f"%(x_cm, y_cm, angle_x, angle_y))
+            # Display tracking confidence status
+            if tracking_confidence >= 1.0:
+                status = "ArUco"
+            elif tracking_confidence >= 0.7:
+                status = "Tracker (70%)"
+            else:
+                status = "Unknown"
+            print("Marker found [%s] x = %5.0f cm  y = %5.0f cm -> angle_x = %5f  angle_y = %5f" % 
+                  (status, x_cm, y_cm, angle_x, angle_y))
             # send_land_message(x_m=x_cm*0.01, y_m=y_cm*0.01, z_m=z_cm*0.01)
             send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
       

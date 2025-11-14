@@ -97,6 +97,8 @@ def rotationMatrixToEulerAngles(R):
 
 
 #--- Get the camera calibration path (relative to this file)
+# Note: Update filename to cameraMatrix_imx708_wide.txt and cameraDistortion_imx708_wide.txt 
+# after calibrating at 4608x2592 resolution
 calib_dir = os.path.dirname(os.path.abspath(__file__))
 camera_matrix = np.loadtxt(os.path.join(calib_dir, 'cameraMatrix_webcam.txt'), delimiter=',')
 camera_distortion = np.loadtxt(os.path.join(calib_dir, 'cameraDistortion_webcam.txt'), delimiter=',')
@@ -133,9 +135,9 @@ except Exception:
 
 
 #--- Capture the videocamera (this may also be a video or a picture)
-#-- Calibration was done at 640x480.
-CALIB_W, CALIB_H = 640, 480
-REQ_W, REQ_H = 640, 480
+#-- Calibration resolution for imx708_wide_noir camera at 30fps
+CALIB_W, CALIB_H = 4608, 2592  # Calibration resolution
+REQ_W, REQ_H = 4608, 2592      # Requested capture resolution
 
 use_picamera = False
 cap = None
@@ -143,8 +145,13 @@ _picam2 = None
 if _PICAMERA2_AVAILABLE:
     try:
         _picam2 = Picamera2()
-        _cfg = _picam2.create_preview_configuration(main={"size": (REQ_W, REQ_H)})
+        # Configure for imx708_wide_noir camera at 4608x2592 resolution, 30fps
+        _cfg = _picam2.create_preview_configuration(
+            main={"size": (REQ_W, REQ_H), "format": "RGB888"}
+        )
         _picam2.configure(_cfg)
+        # Set frame rate to 30 fps
+        _picam2.set_controls({"FrameRate": 30.0})
         _picam2.start()
         time.sleep(0.5)
         use_picamera = True
