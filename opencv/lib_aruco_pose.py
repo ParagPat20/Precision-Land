@@ -347,10 +347,9 @@ class ArucoSingleTracker():
                 try:
                     # Get frame from Picamera2
                     cam_array = self._picam2.capture_array()
-                    # Check format and convert if necessary
-                    # Picamera2 with RGB888 format - use frame directly without conversion
-                    # If colors appear wrong, the camera may already be returning BGR format
-                    frame = cam_array.copy()
+                    # Picamera2 returns RGB888, convert to BGR for OpenCV compatibility
+                    # OpenCV functions expect BGR format (cvtColor, imshow, etc.)
+                    frame = cv2.cvtColor(cam_array, cv2.COLOR_RGB2BGR)
                     ret = True
                 except Exception as e:
                     ret = False
