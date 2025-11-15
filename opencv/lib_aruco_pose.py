@@ -212,18 +212,21 @@ class ArucoSingleTracker():
         self._last_drone_send_data = (x_cm, y_cm, z_cm, angle_x, angle_y, dist_m)
     
     def _initialize_tracker(self, frame, bbox):
-        """Initialize OpenCV tracker with bounding box from ArUco detection"""
+        """Initialize simple OpenCV tracker to track white paper area"""
         try:
-            # Try different tracker APIs based on OpenCV version
+            # Try simple, basic trackers that are widely available
             # Check if cv2.legacy exists (OpenCV 4.5.1+)
             has_legacy = hasattr(cv2, 'legacy')
             tracker_created = False
             
-            # Try old API first (OpenCV 3.x and early 4.x) - most compatible
+            # Try basic trackers first - these are simpler and more widely available
+            # MOSSE tracker - very simple and fast
             if not tracker_created:
                 try:
-                    self._tracker = cv2.TrackerCSRT_create()
-                    # Test initialization
+                    if has_legacy:
+                        self._tracker = cv2.legacy.TrackerMOSSE_create()
+                    else:
+                        self._tracker = cv2.TrackerMOSSE_create()
                     init_result = self._tracker.init(frame, bbox)
                     if init_result:
                         tracker_created = True
@@ -231,11 +234,13 @@ class ArucoSingleTracker():
                     self._tracker = None
                     pass
             
-            # Try new object-oriented API (OpenCV 4.5.1+)
+            # MIL tracker - basic but reliable
             if not tracker_created:
                 try:
-                    self._tracker = cv2.TrackerCSRT.create()
-                    # Test initialization
+                    if has_legacy:
+                        self._tracker = cv2.legacy.TrackerMIL_create()
+                    else:
+                        self._tracker = cv2.TrackerMIL_create()
                     init_result = self._tracker.init(frame, bbox)
                     if init_result:
                         tracker_created = True
@@ -243,23 +248,13 @@ class ArucoSingleTracker():
                     self._tracker = None
                     pass
             
-            # Try legacy API only if it exists (OpenCV 4.5.1+)
-            if not tracker_created and has_legacy:
-                try:
-                    self._tracker = cv2.legacy.TrackerCSRT_create()
-                    # Test initialization
-                    init_result = self._tracker.init(frame, bbox)
-                    if init_result:
-                        tracker_created = True
-                except (AttributeError, cv2.error, Exception):
-                    self._tracker = None
-                    pass
-            
-            # Try KCF with old API as fallback (faster, less accurate)
+            # BOOSTING tracker - basic
             if not tracker_created:
                 try:
-                    self._tracker = cv2.TrackerKCF_create()
-                    # Test initialization
+                    if has_legacy:
+                        self._tracker = cv2.legacy.TrackerBoosting_create()
+                    else:
+                        self._tracker = cv2.TrackerBoosting_create()
                     init_result = self._tracker.init(frame, bbox)
                     if init_result:
                         tracker_created = True
@@ -267,11 +262,13 @@ class ArucoSingleTracker():
                     self._tracker = None
                     pass
             
-            # Try KCF with new object-oriented API
+            # Try KCF - faster than CSRT
             if not tracker_created:
                 try:
-                    self._tracker = cv2.TrackerKCF.create()
-                    # Test initialization
+                    if has_legacy:
+                        self._tracker = cv2.legacy.TrackerKCF_create()
+                    else:
+                        self._tracker = cv2.TrackerKCF_create()
                     init_result = self._tracker.init(frame, bbox)
                     if init_result:
                         tracker_created = True
@@ -279,11 +276,13 @@ class ArucoSingleTracker():
                     self._tracker = None
                     pass
             
-            # Try KCF with legacy API only if it exists
-            if not tracker_created and has_legacy:
+            # Try CSRT as last resort (more advanced, may not be available)
+            if not tracker_created:
                 try:
-                    self._tracker = cv2.legacy.TrackerKCF_create()
-                    # Test initialization
+                    if has_legacy:
+                        self._tracker = cv2.legacy.TrackerCSRT_create()
+                    else:
+                        self._tracker = cv2.TrackerCSRT_create()
                     init_result = self._tracker.init(frame, bbox)
                     if init_result:
                         tracker_created = True
@@ -292,7 +291,7 @@ class ArucoSingleTracker():
                     pass
             
             if not tracker_created:
-                print("No compatible tracker found in OpenCV")
+                # Tracker is optional - continue with ArUco detection only
                 self._tracker = None
                 self._tracker_active = False
                 return False
@@ -303,7 +302,6 @@ class ArucoSingleTracker():
             return True
             
         except Exception as e:
-            print(f"Tracker initialization failed: {e}")
             self._tracker = None
             self._tracker_active = False
             return False
@@ -541,6 +539,14 @@ class ArucoSingleTracker():
 
                 #-- Draw the detected marker and put a reference frame over it
                 aruco.drawDetectedMarkers(frame, corners)
+                
+                #-- Draw bounding box around the white paper surface (bbox already calculated above for tracker)
+                x_bbox, y_bbox, w_bbox, h_bbox = bbox
+                # Draw rectangle with green color and thicker lines for visibility
+                box_thickness = max(3, int(self.font_thickness * 0.8))
+                cv2.rectangle(frame, (int(x_bbox), int(y_bbox)), 
+                            (int(x_bbox + w_bbox), int(y_bbox + h_bbox)), (0, 255, 0), box_thickness)
+                
                 # Choose a short axis length relative to image size
                 axis_len = max(3, int(min(frame.shape[0], frame.shape[1]) * float(self._axis_scale)))
                 # Project a few axis endpoints to check if they are in frame
