@@ -214,10 +214,23 @@ class ArucoSingleTracker():
     def _initialize_tracker(self, frame, bbox):
         """Initialize simple OpenCV tracker to track white paper area"""
         try:
+            # Validate bounding box
+            x, y, w, h = bbox
+            if w <= 0 or h <= 0 or x < 0 or y < 0:
+                return False
+            if x + w > frame.shape[1] or y + h > frame.shape[0]:
+                # Adjust bbox to fit within frame
+                x = max(0, min(x, frame.shape[1] - 1))
+                y = max(0, min(y, frame.shape[0] - 1))
+                w = min(w, frame.shape[1] - x)
+                h = min(h, frame.shape[0] - y)
+                bbox = (x, y, w, h)
+            
             # Try simple, basic trackers that are widely available
             # Check if cv2.legacy exists (OpenCV 4.5.1+)
             has_legacy = hasattr(cv2, 'legacy')
             tracker_created = False
+            tracker_type = None
             
             # Try basic trackers first - these are simpler and more widely available
             # MOSSE tracker - very simple and fast
@@ -227,10 +240,12 @@ class ArucoSingleTracker():
                         self._tracker = cv2.legacy.TrackerMOSSE_create()
                     else:
                         self._tracker = cv2.TrackerMOSSE_create()
+                    # init() returns True on success, or None in some versions
                     init_result = self._tracker.init(frame, bbox)
-                    if init_result:
+                    if init_result is True or init_result is None:
                         tracker_created = True
-                except (AttributeError, cv2.error, Exception):
+                        tracker_type = "MOSSE"
+                except (AttributeError, cv2.error, Exception) as e:
                     self._tracker = None
                     pass
             
@@ -242,8 +257,9 @@ class ArucoSingleTracker():
                     else:
                         self._tracker = cv2.TrackerMIL_create()
                     init_result = self._tracker.init(frame, bbox)
-                    if init_result:
+                    if init_result is True or init_result is None:
                         tracker_created = True
+                        tracker_type = "MIL"
                 except (AttributeError, cv2.error, Exception):
                     self._tracker = None
                     pass
@@ -256,8 +272,9 @@ class ArucoSingleTracker():
                     else:
                         self._tracker = cv2.TrackerBoosting_create()
                     init_result = self._tracker.init(frame, bbox)
-                    if init_result:
+                    if init_result is True or init_result is None:
                         tracker_created = True
+                        tracker_type = "BOOSTING"
                 except (AttributeError, cv2.error, Exception):
                     self._tracker = None
                     pass
@@ -270,8 +287,9 @@ class ArucoSingleTracker():
                     else:
                         self._tracker = cv2.TrackerKCF_create()
                     init_result = self._tracker.init(frame, bbox)
-                    if init_result:
+                    if init_result is True or init_result is None:
                         tracker_created = True
+                        tracker_type = "KCF"
                 except (AttributeError, cv2.error, Exception):
                     self._tracker = None
                     pass
@@ -284,8 +302,9 @@ class ArucoSingleTracker():
                     else:
                         self._tracker = cv2.TrackerCSRT_create()
                     init_result = self._tracker.init(frame, bbox)
-                    if init_result:
+                    if init_result is True or init_result is None:
                         tracker_created = True
+                        tracker_type = "CSRT"
                 except (AttributeError, cv2.error, Exception):
                     self._tracker = None
                     pass
@@ -299,9 +318,11 @@ class ArucoSingleTracker():
             # Tracker successfully created and initialized
             self._tracker_active = True
             self._tracked_bbox = bbox
+            print(f"Tracker initialized: {tracker_type} (bbox: {bbox})")
             return True
             
         except Exception as e:
+            print(f"Tracker initialization exception: {e}")
             self._tracker = None
             self._tracker_active = False
             return False
@@ -313,15 +334,17 @@ class ArucoSingleTracker():
         
         try:
             success, bbox = self._tracker.update(frame)
-            if success:
-                self._tracked_bbox = bbox
-                return True
-            else:
-                # Tracker lost the target
-                self._tracker_active = False
-                return False
-        except Exception:
-            self._tracker_active = False
+            if success and bbox is not None:
+                # Validate the tracked bbox
+                x, y, w, h = bbox
+                if w > 0 and h > 0 and x >= 0 and y >= 0:
+                    self._tracked_bbox = bbox
+                    return True
+            # Tracker update failed, but don't deactivate immediately
+            # Let it try a few more times before giving up
+            return False
+        except Exception as e:
+            # Don't deactivate on exception - might be temporary
             return False
     
     def _estimate_pose_from_bbox(self, bbox, frame_shape):
@@ -678,7 +701,8 @@ class ArucoSingleTracker():
                 # ArUco not detected - try using tracker if active
                 if self._tracker_active and (current_time - self._last_aruco_detection_time) <= self._tracker_expiry_time:
                     # Update tracker with current frame
-                    if self._update_tracker(frame):
+                    tracker_success = self._update_tracker(frame)
+                    if tracker_success:
                         # Estimate pose from tracked bounding box (70% confidence)
                         tracked_pose = self._estimate_pose_from_bbox(self._tracked_bbox, frame_shape)
                         if tracked_pose is not None:
@@ -688,25 +712,38 @@ class ArucoSingleTracker():
                             
                             if verbose:
                                 print("Tracking (no ArUco): x=%.1f y=%.1f z=%.1f" % (x, y, z))
+                    else:
+                        # Tracker update failed, but tracker is still active
+                        # Use last known position as fallback (lower confidence)
+                        if self._last_known_tvec is not None:
+                            marker_found = True
+                            tracking_confidence = 0.5  # 50% confidence - using last known position
+                            x = self._last_known_tvec[0]
+                            y = self._last_known_tvec[1]
+                            z = self._last_known_tvec[2]
+                            
+                            if verbose:
+                                print("Tracking (fallback to last known): x=%.1f y=%.1f z=%.1f" % (x, y, z))
                             
                             if show_video:
-                                # Draw tracked bounding box with thicker lines for high resolution
-                                x_bbox, y_bbox, w_bbox, h_bbox = self._tracked_bbox
-                                box_thickness = max(2, int(self.font_thickness * 0.5))
-                                cv2.rectangle(frame, (int(x_bbox), int(y_bbox)), 
-                                            (int(x_bbox + w_bbox), int(y_bbox + h_bbox)), (255, 165, 0), box_thickness)
+                                # Draw tracked bounding box if available
+                                if self._tracked_bbox is not None:
+                                    x_bbox, y_bbox, w_bbox, h_bbox = self._tracked_bbox
+                                    box_thickness = max(2, int(self.font_thickness * 0.5))
+                                    cv2.rectangle(frame, (int(x_bbox), int(y_bbox)), 
+                                                (int(x_bbox + w_bbox), int(y_bbox + h_bbox)), (255, 140, 0), box_thickness)
                                 
                                 # Calculate y position for text lines with proper spacing
                                 y_pos = self.line_spacing
                                 
-                                # Display tracking status
-                                status_text = "TRACKING STATUS: Visual Tracker (70%% confidence)"
-                                cv2.putText(frame, status_text, (0, y_pos), self.font, self.font_scale, (255, 165, 0), self.font_thickness, cv2.LINE_AA)
+                                # Display tracking status (lower confidence for fallback)
+                                status_text = "TRACKING STATUS: Last Known Position (50%% confidence)"
+                                cv2.putText(frame, status_text, (0, y_pos), self.font, self.font_scale, (255, 140, 0), self.font_thickness, cv2.LINE_AA)
                                 y_pos += self.line_spacing
                                 
                                 # Display tracked position
                                 pos_text = "TRACKED Position x=%4.0f  y=%4.0f  z=%4.0f" % (x, y, z)
-                                cv2.putText(frame, pos_text, (0, y_pos), self.font, self.font_scale, (255, 165, 0), self.font_thickness, cv2.LINE_AA)
+                                cv2.putText(frame, pos_text, (0, y_pos), self.font, self.font_scale, (255, 140, 0), self.font_thickness, cv2.LINE_AA)
                                 y_pos += self.line_spacing
                                 
                                 # Display tracker expiration time status
