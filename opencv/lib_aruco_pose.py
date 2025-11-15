@@ -215,10 +215,26 @@ class ArucoSingleTracker():
         """Initialize OpenCV tracker with bounding box from ArUco detection"""
         try:
             # Try different tracker APIs based on OpenCV version
-            # First try newer API (OpenCV 4.5.1+)
+            # OpenCV 4.5.1+ moved trackers to cv2.legacy or use new object-oriented API
             tracker_created = False
             
-            # Try TrackerCSRT_create (OpenCV 3.x and early 4.x)
+            # Try new object-oriented API (OpenCV 4.5.1+)
+            if not tracker_created:
+                try:
+                    self._tracker = cv2.TrackerCSRT.create()
+                    tracker_created = True
+                except (AttributeError, cv2.error):
+                    pass
+            
+            # Try legacy API (OpenCV 4.5.1+)
+            if not tracker_created:
+                try:
+                    self._tracker = cv2.legacy.TrackerCSRT_create()
+                    tracker_created = True
+                except (AttributeError, cv2.error):
+                    pass
+            
+            # Try old API (OpenCV 3.x and early 4.x) - for backward compatibility
             if not tracker_created:
                 try:
                     self._tracker = cv2.TrackerCSRT_create()
@@ -226,26 +242,26 @@ class ArucoSingleTracker():
                 except (AttributeError, cv2.error):
                     pass
             
-            # Try Tracker.create with string (OpenCV 4.5.4+)
+            # Try KCF with new object-oriented API as fallback (faster, less accurate)
             if not tracker_created:
                 try:
-                    self._tracker = cv2.Tracker.create("CSRT")
+                    self._tracker = cv2.TrackerKCF.create()
                     tracker_created = True
                 except (AttributeError, cv2.error):
                     pass
             
-            # Try KCF as fallback (faster, less accurate)
+            # Try KCF with legacy API
+            if not tracker_created:
+                try:
+                    self._tracker = cv2.legacy.TrackerKCF_create()
+                    tracker_created = True
+                except (AttributeError, cv2.error):
+                    pass
+            
+            # Try old KCF API for backward compatibility
             if not tracker_created:
                 try:
                     self._tracker = cv2.TrackerKCF_create()
-                    tracker_created = True
-                except (AttributeError, cv2.error):
-                    pass
-            
-            # Try KCF with new API
-            if not tracker_created:
-                try:
-                    self._tracker = cv2.Tracker.create("KCF")
                     tracker_created = True
                 except (AttributeError, cv2.error):
                     pass
