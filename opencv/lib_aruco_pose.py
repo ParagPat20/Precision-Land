@@ -793,13 +793,13 @@ class ArucoSingleTracker():
                                     sent_data_text = "LAST SENT: x=%.0fcm y=%.0fcm z=%.0fcm | angles(%.3f,%.3f) | dist=%.2fm" % (
                                         x_sent, y_sent, z_sent, angle_x_sent, angle_y_sent, dist_sent)
                                     cv2.putText(frame, sent_data_text, (0, y_pos), self.font, self.font_scale * 0.8, (200, 200, 200), self.font_thickness, cv2.LINE_AA)
-                                else:
-                                    # Tracker lost the target
-                                    self._tracker_active = False
-                                    marker_found = False
-                                    tracking_confidence = 0.0
-                                    if verbose:
-                                        print("Tracker lost target")
+                        else:
+                            # Tracker lost the target
+                            self._tracker_active = False
+                            marker_found = False
+                            tracking_confidence = 0.0
+                            if verbose:
+                                print("Tracker lost target")
                 else:
                     # No ArUco and no active tracker
                     marker_found = False
