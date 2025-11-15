@@ -110,10 +110,18 @@ class ArucoSingleTracker():
             try:
                 self._picam2 = Picamera2()
                 # Configure for imx708_wide_noir camera at 4608x2592 resolution, 30fps
-                # Use RGB888 format - Picamera2 returns RGB, we'll convert to BGR for OpenCV
-                cfg = self._picam2.create_preview_configuration(
-                    main={"size": (int(camera_size[0]), int(camera_size[1])), "format": "RGB888"}
-                )
+                # Try BGR888 format first - if not available, fall back to RGB888 and convert
+                try:
+                    cfg = self._picam2.create_preview_configuration(
+                        main={"size": (int(camera_size[0]), int(camera_size[1])), "format": "BGR888"}
+                    )
+                    self._picam2_format = "BGR888"
+                except Exception:
+                    # BGR888 not available, use RGB888 and convert
+                    cfg = self._picam2.create_preview_configuration(
+                        main={"size": (int(camera_size[0]), int(camera_size[1])), "format": "RGB888"}
+                    )
+                    self._picam2_format = "RGB888"
                 self._picam2.configure(cfg)
                 # Set frame rate to 30 fps
                 self._picam2.set_controls({"FrameRate": 30.0})
@@ -348,16 +356,18 @@ class ArucoSingleTracker():
                     # Get frame from Picamera2
                     cam_array = self._picam2.capture_array()
                     # Check format and convert if necessary
+                    # Fix for color issues: If colors appear complementary (wrong), 
+                    # Picamera2 might be returning BGR already even when configured as RGB888
                     if hasattr(self, '_picam2_format') and self._picam2_format == "BGR888":
                         # Already in BGR format, use directly
-                        frame = cam_array
+                        frame = cam_array.copy()
                     elif len(cam_array.shape) == 3 and cam_array.shape[2] == 3:
-                        # Assume RGB format, convert to BGR for OpenCV
-                        # OpenCV uses BGR format, so we need to swap red and blue channels
-                        frame = cv2.cvtColor(cam_array, cv2.COLOR_RGB2BGR)
+                        # For RGB888: If colors are wrong (complementary), camera may already return BGR
+                        # Try using frame directly without conversion - Picamera2 may return BGR despite RGB888 config
+                        frame = cam_array.copy()  # Use directly - if wrong, it's likely already BGR
                     else:
                         # Grayscale or other format
-                        frame = cam_array
+                        frame = cam_array.copy()
                     ret = True
                 except Exception as e:
                     ret = False
