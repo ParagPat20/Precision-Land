@@ -214,20 +214,54 @@ class ArucoSingleTracker():
     def _initialize_tracker(self, frame, bbox):
         """Initialize OpenCV tracker with bounding box from ArUco detection"""
         try:
-            # Try CSRT tracker first (more accurate, slower), fallback to KCF (faster)
-            try:
-                self._tracker = cv2.TrackerCSRT_create()
-            except AttributeError:
-                # OpenCV 4.5+ uses different API
-                try:
-                    self._tracker = cv2.legacy.TrackerCSRT_create()
-                except:
-                    self._tracker = cv2.legacy.TrackerKCF_create()
+            # Try different tracker APIs based on OpenCV version
+            # First try newer API (OpenCV 4.5.1+)
+            tracker_created = False
             
+            # Try TrackerCSRT_create (OpenCV 3.x and early 4.x)
+            if not tracker_created:
+                try:
+                    self._tracker = cv2.TrackerCSRT_create()
+                    tracker_created = True
+                except (AttributeError, cv2.error):
+                    pass
+            
+            # Try Tracker.create with string (OpenCV 4.5.4+)
+            if not tracker_created:
+                try:
+                    self._tracker = cv2.Tracker.create("CSRT")
+                    tracker_created = True
+                except (AttributeError, cv2.error):
+                    pass
+            
+            # Try KCF as fallback (faster, less accurate)
+            if not tracker_created:
+                try:
+                    self._tracker = cv2.TrackerKCF_create()
+                    tracker_created = True
+                except (AttributeError, cv2.error):
+                    pass
+            
+            # Try KCF with new API
+            if not tracker_created:
+                try:
+                    self._tracker = cv2.Tracker.create("KCF")
+                    tracker_created = True
+                except (AttributeError, cv2.error):
+                    pass
+            
+            if not tracker_created:
+                print("No compatible tracker found in OpenCV")
+                self._tracker = None
+                self._tracker_active = False
+                return False
+            
+            # Initialize the tracker with the frame and bounding box
             self._tracker.init(frame, bbox)
             self._tracker_active = True
             self._tracked_bbox = bbox
             return True
+            
         except Exception as e:
             print(f"Tracker initialization failed: {e}")
             self._tracker = None
