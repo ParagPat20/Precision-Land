@@ -162,5 +162,8 @@ while True:
             print("Marker found [%s] x = %5.0f cm  y = %5.0f cm -> angle_x = %5f  angle_y = %5f" % 
                   (status, x_cm, y_cm, angle_x, angle_y))
             # send_land_message(x_m=x_cm*0.01, y_m=y_cm*0.01, z_m=z_cm*0.01)
+            # Send landing target data to drone via MAVLink
             send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
+            # Update tracker with drone send status for display
+            aruco_tracker.update_drone_send_status(x_cm, y_cm, z_cm, angle_x, angle_y, z_cm*0.01)
       

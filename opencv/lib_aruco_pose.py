@@ -110,6 +110,7 @@ class ArucoSingleTracker():
             try:
                 self._picam2 = Picamera2()
                 # Configure for imx708_wide_noir camera at 4608x2592 resolution, 30fps
+                # Use RGB888 format - Picamera2 returns RGB, we'll convert to BGR for OpenCV
                 cfg = self._picam2.create_preview_configuration(
                     main={"size": (int(camera_size[0]), int(camera_size[1])), "format": "RGB888"}
                 )
@@ -133,6 +134,13 @@ class ArucoSingleTracker():
 
         #-- Font for the text in the image
         self.font = cv2.FONT_HERSHEY_PLAIN
+        # Calculate font scale and thickness based on camera resolution for readability
+        # Base scale for 640x480 resolution, scale up for larger resolutions
+        base_resolution = 640
+        resolution_factor = max(camera_size[0], camera_size[1]) / base_resolution
+        self.font_scale = max(2.0, min(6.0, resolution_factor * 0.8))  # Scale between 2-6
+        self.font_thickness = max(2, int(resolution_factor * 0.6))  # Thickness scales with resolution
+        self.line_spacing = int(40 * resolution_factor * 0.8)  # Spacing between text lines
 
         self._t_read      = time.time()
         self._t_detect    = self._t_read
@@ -149,7 +157,13 @@ class ArucoSingleTracker():
         self._aruco_update_interval = 1.5  # Update tracker with ArUco every 1.5 seconds
         self._tracked_bbox = None  # Current tracked bounding box (x, y, w, h)
         self._last_known_tvec = None  # Last known position from ArUco detection (for interpolation)
-        self._last_known_rvec = None  # Last known rotation from ArUco detection    
+        self._last_known_rvec = None  # Last known rotation from ArUco detection
+        
+        # Drone communication tracking variables
+        self._last_drone_send_time = 0  # Timestamp of last successful send to drone
+        self._drone_send_count = 0  # Total count of messages sent to drone
+        self._last_drone_send_data = None  # Last data sent: (x_cm, y_cm, z_cm, angle_x, angle_y, dist_m)
+        self._drone_send_enabled = True  # Whether drone sending is enabled    
 
     def _rotationMatrixToEulerAngles(self,R):
     # Calculates rotation matrix to euler angles
@@ -188,6 +202,14 @@ class ArucoSingleTracker():
         t           = time.time()
         self.fps_detect  = 1.0/(t - self._t_detect)
         self._t_detect      = t
+    
+    def update_drone_send_status(self, x_cm, y_cm, z_cm, angle_x, angle_y, dist_m):
+        """Update drone send status when data is sent to drone
+        Called from main.py after successfully sending MAVLink message
+        """
+        self._last_drone_send_time = time.time()
+        self._drone_send_count += 1
+        self._last_drone_send_data = (x_cm, y_cm, z_cm, angle_x, angle_y, dist_m)
     
     def _initialize_tracker(self, frame, bbox):
         """Initialize OpenCV tracker with bounding box from ArUco detection"""
@@ -323,13 +345,27 @@ class ArucoSingleTracker():
             #-- Read the camera frame (Picamera2 or OpenCV)
             if self._use_picamera:
                 try:
-                    rgb = self._picam2.capture_array()
-                    frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                    # Get frame from Picamera2
+                    cam_array = self._picam2.capture_array()
+                    # Check format and convert if necessary
+                    if hasattr(self, '_picam2_format') and self._picam2_format == "BGR888":
+                        # Already in BGR format, use directly
+                        frame = cam_array
+                    elif len(cam_array.shape) == 3 and cam_array.shape[2] == 3:
+                        # Assume RGB format, convert to BGR for OpenCV
+                        # OpenCV uses BGR format, so we need to swap red and blue channels
+                        frame = cv2.cvtColor(cam_array, cv2.COLOR_RGB2BGR)
+                    else:
+                        # Grayscale or other format
+                        frame = cam_array
                     ret = True
-                except Exception:
+                except Exception as e:
                     ret = False
                     frame = None
+                    if verbose:
+                        print(f"Frame capture error: {e}")
             else:
+                # OpenCV VideoCapture already returns BGR format
                 ret, frame = self._cap.read()
             
             if not ret or frame is None:
@@ -470,29 +506,96 @@ class ArucoSingleTracker():
                     print("Marker X = %.1f  Y = %.1f  Z = %.1f  - fps = %.0f" % (tvec[0], tvec[1], tvec[2], self.fps_detect))
 
                 if show_video:
-
+                    # Calculate y position for text lines with proper spacing
+                    y_pos = self.line_spacing
+                    
                     #-- Print the tag position in camera frame
                     str_position = "MARKER Position x=%4.0f  y=%4.0f  z=%4.0f"%(tvec[0], tvec[1], tvec[2])
-                    cv2.putText(frame, str_position, (0, 100), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)        
+                    cv2.putText(frame, str_position, (0, y_pos), self.font, self.font_scale, (0, 255, 0), self.font_thickness, cv2.LINE_AA)
+                    y_pos += self.line_spacing
                     
                     #-- Print the marker's attitude respect to camera frame
                     str_attitude = "MARKER Attitude r=%4.0f  p=%4.0f  y=%4.0f"%(math.degrees(roll_marker),math.degrees(pitch_marker),
                                         math.degrees(yaw_marker))
-                    cv2.putText(frame, str_attitude, (0, 150), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)
+                    cv2.putText(frame, str_attitude, (0, y_pos), self.font, self.font_scale, (0, 255, 0), self.font_thickness, cv2.LINE_AA)
+                    y_pos += self.line_spacing
 
                     str_position = "CAMERA Position x=%4.0f  y=%4.0f  z=%4.0f"%(pos_camera[0], pos_camera[1], pos_camera[2])
-                    cv2.putText(frame, str_position, (0, 200), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)
+                    cv2.putText(frame, str_position, (0, y_pos), self.font, self.font_scale, (0, 255, 0), self.font_thickness, cv2.LINE_AA)
+                    y_pos += self.line_spacing
 
                     #-- Get the attitude of the camera respect to the frame
                     roll_camera, pitch_camera, yaw_camera = self._rotationMatrixToEulerAngles(self._R_flip*R_tc)
                     str_attitude = "CAMERA Attitude r=%4.0f  p=%4.0f  y=%4.0f"%(math.degrees(roll_camera),math.degrees(pitch_camera),
                                         math.degrees(yaw_camera))
-                    cv2.putText(frame, str_attitude, (0, 250), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)
+                    cv2.putText(frame, str_attitude, (0, y_pos), self.font, self.font_scale, (0, 255, 0), self.font_thickness, cv2.LINE_AA)
+                    y_pos += self.line_spacing
                     
-                    # Draw tracker status
+                    #-- Display tracking status with confidence level
+                    if tracking_confidence >= 1.0:
+                        status_text = "TRACKING STATUS: ArUco Detection (100%% confidence)"
+                        status_color = (0, 255, 0)  # Green
+                    elif tracking_confidence >= 0.7:
+                        status_text = "TRACKING STATUS: Visual Tracker (70%% confidence)"
+                        status_color = (255, 165, 0)  # Orange
+                    else:
+                        status_text = "TRACKING STATUS: No Tracking (0%% confidence)"
+                        status_color = (0, 0, 255)  # Red
+                    cv2.putText(frame, status_text, (0, y_pos), self.font, self.font_scale, status_color, self.font_thickness, cv2.LINE_AA)
+                    y_pos += self.line_spacing
+                    
+                    #-- Display tracker expiration time status
                     if self._tracker_active:
-                        status_text = "TRACKER: Active (ArUco)"
-                        cv2.putText(frame, status_text, (0, 300), self.font, 1, (0, 255, 255), 2, cv2.LINE_AA)
+                        time_since_aruco = current_time - self._last_aruco_detection_time
+                        time_remaining = self._tracker_expiry_time - time_since_aruco
+                        if time_remaining > 0:
+                            expiry_text = "TRACKER EXPIRY: %.1f seconds remaining" % time_remaining
+                            # Color changes from green to red as time runs out
+                            if time_remaining > 2.0:
+                                expiry_color = (0, 255, 0)  # Green
+                            elif time_remaining > 1.0:
+                                expiry_color = (0, 255, 255)  # Yellow
+                            else:
+                                expiry_color = (0, 0, 255)  # Red
+                        else:
+                            expiry_text = "TRACKER EXPIRY: Expired"
+                            expiry_color = (0, 0, 255)  # Red
+                        cv2.putText(frame, expiry_text, (0, y_pos), self.font, self.font_scale, expiry_color, self.font_thickness, cv2.LINE_AA)
+                        y_pos += self.line_spacing
+                    else:
+                        expiry_text = "TRACKER EXPIRY: Not active"
+                        cv2.putText(frame, expiry_text, (0, y_pos), self.font, self.font_scale, (128, 128, 128), self.font_thickness, cv2.LINE_AA)
+                        y_pos += self.line_spacing
+                    
+                    #-- Display current time status
+                    time_text = "TIME: %.3f seconds" % current_time
+                    cv2.putText(frame, time_text, (0, y_pos), self.font, self.font_scale, (255, 255, 255), self.font_thickness, cv2.LINE_AA)
+                    y_pos += self.line_spacing
+                    
+                    #-- Display drone communication status
+                    if self._last_drone_send_time > 0:
+                        time_since_send = current_time - self._last_drone_send_time
+                        if time_since_send < 0.5:  # Recently sent (within 0.5 seconds)
+                            drone_status = "DRONE COMM: Sending data (Count: %d)" % self._drone_send_count
+                            drone_color = (0, 255, 0)  # Green
+                        elif time_since_send < 2.0:  # Sent recently (within 2 seconds)
+                            drone_status = "DRONE COMM: Last send %.1fs ago (Count: %d)" % (time_since_send, self._drone_send_count)
+                            drone_color = (0, 255, 255)  # Yellow
+                        else:  # Not sending
+                            drone_status = "DRONE COMM: Not sending (%.1fs ago, Count: %d)" % (time_since_send, self._drone_send_count)
+                            drone_color = (128, 128, 128)  # Gray
+                    else:
+                        drone_status = "DRONE COMM: No data sent yet"
+                        drone_color = (128, 128, 128)  # Gray
+                    cv2.putText(frame, drone_status, (0, y_pos), self.font, self.font_scale, drone_color, self.font_thickness, cv2.LINE_AA)
+                    y_pos += self.line_spacing
+                    
+                    #-- Display last sent data to drone
+                    if self._last_drone_send_data is not None:
+                        x_sent, y_sent, z_sent, angle_x_sent, angle_y_sent, dist_sent = self._last_drone_send_data
+                        sent_data_text = "LAST SENT: x=%.0fcm y=%.0fcm z=%.0fcm | angles(%.3f,%.3f) | dist=%.2fm" % (
+                            x_sent, y_sent, z_sent, angle_x_sent, angle_y_sent, dist_sent)
+                        cv2.putText(frame, sent_data_text, (0, y_pos), self.font, self.font_scale * 0.8, (200, 200, 200), self.font_thickness, cv2.LINE_AA)
 
             else:
                 # ArUco not detected - try using tracker if active
@@ -510,14 +613,72 @@ class ArucoSingleTracker():
                                 print("Tracking (no ArUco): x=%.1f y=%.1f z=%.1f" % (x, y, z))
                             
                             if show_video:
-                                # Draw tracked bounding box
+                                # Draw tracked bounding box with thicker lines for high resolution
                                 x_bbox, y_bbox, w_bbox, h_bbox = self._tracked_bbox
+                                box_thickness = max(2, int(self.font_thickness * 0.5))
                                 cv2.rectangle(frame, (int(x_bbox), int(y_bbox)), 
-                                            (int(x_bbox + w_bbox), int(y_bbox + h_bbox)), (255, 165, 0), 2)
-                                status_text = "TRACKER: Active (Visual) - Confidence: 70%%"
-                                cv2.putText(frame, status_text, (0, 100), self.font, 1, (255, 165, 0), 2, cv2.LINE_AA)
+                                            (int(x_bbox + w_bbox), int(y_bbox + h_bbox)), (255, 165, 0), box_thickness)
+                                
+                                # Calculate y position for text lines with proper spacing
+                                y_pos = self.line_spacing
+                                
+                                # Display tracking status
+                                status_text = "TRACKING STATUS: Visual Tracker (70%% confidence)"
+                                cv2.putText(frame, status_text, (0, y_pos), self.font, self.font_scale, (255, 165, 0), self.font_thickness, cv2.LINE_AA)
+                                y_pos += self.line_spacing
+                                
+                                # Display tracked position
                                 pos_text = "TRACKED Position x=%4.0f  y=%4.0f  z=%4.0f" % (x, y, z)
-                                cv2.putText(frame, pos_text, (0, 130), self.font, 1, (255, 165, 0), 2, cv2.LINE_AA)
+                                cv2.putText(frame, pos_text, (0, y_pos), self.font, self.font_scale, (255, 165, 0), self.font_thickness, cv2.LINE_AA)
+                                y_pos += self.line_spacing
+                                
+                                # Display tracker expiration time status
+                                time_since_aruco = current_time - self._last_aruco_detection_time
+                                time_remaining = self._tracker_expiry_time - time_since_aruco
+                                if time_remaining > 0:
+                                    expiry_text = "TRACKER EXPIRY: %.1f seconds remaining" % time_remaining
+                                    # Color changes from green to red as time runs out
+                                    if time_remaining > 2.0:
+                                        expiry_color = (0, 255, 0)  # Green
+                                    elif time_remaining > 1.0:
+                                        expiry_color = (0, 255, 255)  # Yellow
+                                    else:
+                                        expiry_color = (0, 0, 255)  # Red
+                                else:
+                                    expiry_text = "TRACKER EXPIRY: Expired"
+                                    expiry_color = (0, 0, 255)  # Red
+                                cv2.putText(frame, expiry_text, (0, y_pos), self.font, self.font_scale, expiry_color, self.font_thickness, cv2.LINE_AA)
+                                y_pos += self.line_spacing
+                                
+                                # Display current time status
+                                time_text = "TIME: %.3f seconds" % current_time
+                                cv2.putText(frame, time_text, (0, y_pos), self.font, self.font_scale, (255, 255, 255), self.font_thickness, cv2.LINE_AA)
+                                y_pos += self.line_spacing
+                                
+                                #-- Display drone communication status
+                                if self._last_drone_send_time > 0:
+                                    time_since_send = current_time - self._last_drone_send_time
+                                    if time_since_send < 0.5:  # Recently sent (within 0.5 seconds)
+                                        drone_status = "DRONE COMM: Sending data (Count: %d)" % self._drone_send_count
+                                        drone_color = (0, 255, 0)  # Green
+                                    elif time_since_send < 2.0:  # Sent recently (within 2 seconds)
+                                        drone_status = "DRONE COMM: Last send %.1fs ago (Count: %d)" % (time_since_send, self._drone_send_count)
+                                        drone_color = (0, 255, 255)  # Yellow
+                                    else:  # Not sending
+                                        drone_status = "DRONE COMM: Not sending (%.1fs ago, Count: %d)" % (time_since_send, self._drone_send_count)
+                                        drone_color = (128, 128, 128)  # Gray
+                                else:
+                                    drone_status = "DRONE COMM: No data sent yet"
+                                    drone_color = (128, 128, 128)  # Gray
+                                cv2.putText(frame, drone_status, (0, y_pos), self.font, self.font_scale, drone_color, self.font_thickness, cv2.LINE_AA)
+                                y_pos += self.line_spacing
+                                
+                                #-- Display last sent data to drone
+                                if self._last_drone_send_data is not None:
+                                    x_sent, y_sent, z_sent, angle_x_sent, angle_y_sent, dist_sent = self._last_drone_send_data
+                                    sent_data_text = "LAST SENT: x=%.0fcm y=%.0fcm z=%.0fcm | angles(%.3f,%.3f) | dist=%.2fm" % (
+                                        x_sent, y_sent, z_sent, angle_x_sent, angle_y_sent, dist_sent)
+                                    cv2.putText(frame, sent_data_text, (0, y_pos), self.font, self.font_scale * 0.8, (200, 200, 200), self.font_thickness, cv2.LINE_AA)
                     else:
                         # Tracker lost the target
                         self._tracker_active = False
@@ -531,6 +692,44 @@ class ArucoSingleTracker():
                     tracking_confidence = 0.0
                     if verbose:
                         print("Nothing detected - fps = %.0f" % self.fps_read)
+                    
+                    # Display status when nothing is detected
+                    if show_video:
+                        y_pos = self.line_spacing
+                        status_text = "TRACKING STATUS: No Detection (0%% confidence)"
+                        cv2.putText(frame, status_text, (0, y_pos), self.font, self.font_scale, (0, 0, 255), self.font_thickness, cv2.LINE_AA)
+                        y_pos += self.line_spacing
+                        expiry_text = "TRACKER EXPIRY: Not active"
+                        cv2.putText(frame, expiry_text, (0, y_pos), self.font, self.font_scale, (128, 128, 128), self.font_thickness, cv2.LINE_AA)
+                        y_pos += self.line_spacing
+                        time_text = "TIME: %.3f seconds" % current_time
+                        cv2.putText(frame, time_text, (0, y_pos), self.font, self.font_scale, (255, 255, 255), self.font_thickness, cv2.LINE_AA)
+                        y_pos += self.line_spacing
+                        
+                        #-- Display drone communication status
+                        if self._last_drone_send_time > 0:
+                            time_since_send = current_time - self._last_drone_send_time
+                            if time_since_send < 0.5:  # Recently sent (within 0.5 seconds)
+                                drone_status = "DRONE COMM: Sending data (Count: %d)" % self._drone_send_count
+                                drone_color = (0, 255, 0)  # Green
+                            elif time_since_send < 2.0:  # Sent recently (within 2 seconds)
+                                drone_status = "DRONE COMM: Last send %.1fs ago (Count: %d)" % (time_since_send, self._drone_send_count)
+                                drone_color = (0, 255, 255)  # Yellow
+                            else:  # Not sending
+                                drone_status = "DRONE COMM: Not sending (%.1fs ago, Count: %d)" % (time_since_send, self._drone_send_count)
+                                drone_color = (128, 128, 128)  # Gray
+                        else:
+                            drone_status = "DRONE COMM: No data sent yet"
+                            drone_color = (128, 128, 128)  # Gray
+                        cv2.putText(frame, drone_status, (0, y_pos), self.font, self.font_scale, drone_color, self.font_thickness, cv2.LINE_AA)
+                        y_pos += self.line_spacing
+                        
+                        #-- Display last sent data to drone
+                        if self._last_drone_send_data is not None:
+                            x_sent, y_sent, z_sent, angle_x_sent, angle_y_sent, dist_sent = self._last_drone_send_data
+                            sent_data_text = "LAST SENT: x=%.0fcm y=%.0fcm z=%.0fcm | angles(%.3f,%.3f) | dist=%.2fm" % (
+                                x_sent, y_sent, z_sent, angle_x_sent, angle_y_sent, dist_sent)
+                            cv2.putText(frame, sent_data_text, (0, y_pos), self.font, self.font_scale * 0.8, (200, 200, 200), self.font_thickness, cv2.LINE_AA)
             
 
             if show_video:
