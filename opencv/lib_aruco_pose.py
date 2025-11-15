@@ -153,8 +153,8 @@ class ArucoSingleTracker():
         self._tracker_active = False  # Whether tracker is currently active
         self._last_aruco_detection_time = 0  # Timestamp of last ArUco detection
         self._last_aruco_update_time = 0  # Timestamp of last ArUco update to tracker
-        self._tracker_expiry_time = 3.0  # Tracker expires after 3 seconds without ArUco detection
-        self._aruco_update_interval = 1.5  # Update tracker with ArUco every 1.5 seconds
+        self._tracker_expiry_time = 4.0  # Tracker expires after 10 seconds without ArUco detection (increased from 3s)
+        self._aruco_update_interval = 1.5  # Update tracker with ArUco every 0.5 seconds (reduced from 1.5s for more frequent updates)
         self._tracked_bbox = None  # Current tracked bounding box (x, y, w, h)
         self._last_known_tvec = None  # Last known position from ArUco detection (for interpolation)
         self._last_known_rvec = None  # Last known rotation from ArUco detection
@@ -304,12 +304,17 @@ class ArucoSingleTracker():
         x_max = int(np.max(x_coords))
         y_max = int(np.max(y_coords))
         
-        # Add padding (10% on each side)
-        padding = int(min(x_max - x_min, y_max - y_min) * 0.1)
-        x_min = max(0, x_min - padding)
-        y_min = max(0, y_min - padding)
-        x_max = min(frame_shape[1], x_max + padding)
-        y_max = min(frame_shape[0], y_max + padding)
+        # Add large padding to track the entire page/object, not just the marker
+        # Use 150% padding (1.5x marker size on each side) to capture the whole page
+        marker_width = x_max - x_min
+        marker_height = y_max - y_min
+        padding_x = int(marker_width * 1.5)  # 150% horizontal padding
+        padding_y = int(marker_height * 1.5)  # 150% vertical padding
+        
+        x_min = max(0, x_min - padding_x)
+        y_min = max(0, y_min - padding_y)
+        x_max = min(frame_shape[1], x_max + padding_x)
+        y_max = min(frame_shape[0], y_max + padding_y)
         
         width = x_max - x_min
         height = y_max - y_min
@@ -369,15 +374,15 @@ class ArucoSingleTracker():
             #-- Convert in gray scale for ArUco detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            #-- Check if tracker has expired (3 seconds without ArUco detection)
+            #-- Check if tracker has expired (10 seconds without ArUco detection)
             if self._tracker_active and (current_time - self._last_aruco_detection_time) > self._tracker_expiry_time:
                 self._tracker_active = False
                 self._tracker = None
                 if verbose:
-                    print("Tracker expired after 3 seconds without ArUco detection")
+                    print(f"Tracker expired after {self._tracker_expiry_time:.0f} seconds without ArUco detection")
 
             #-- Find all the aruco markers in the image
-            # Only detect ArUco if: not tracking, or it's time for update (every 1.5s), or tracker expired
+            # Only detect ArUco if: not tracking, or it's time for update (every 0.5s), or tracker expired
             should_detect_aruco = (not self._tracker_active or 
                                  (current_time - self._last_aruco_update_time) >= self._aruco_update_interval)
             
@@ -444,7 +449,7 @@ class ArucoSingleTracker():
                             print("Tracker initialized with ArUco detection")
                         self._last_aruco_update_time = current_time
                 elif (current_time - self._last_aruco_update_time) >= self._aruco_update_interval:
-                    # Update tracker with new ArUco detection (every 1.5s)
+                    # Update tracker with new ArUco detection (every 0.5s for more frequent updates)
                     try:
                         # Reinitialize tracker with new bbox to keep it accurate
                         self._tracker = None
@@ -542,10 +547,10 @@ class ArucoSingleTracker():
                         time_remaining = self._tracker_expiry_time - time_since_aruco
                         if time_remaining > 0:
                             expiry_text = "TRACKER EXPIRY: %.1f seconds remaining" % time_remaining
-                            # Color changes from green to red as time runs out
-                            if time_remaining > 2.0:
+                            # Color changes from green to red as time runs out (now 10s total)
+                            if time_remaining > 5.0:
                                 expiry_color = (0, 255, 0)  # Green
-                            elif time_remaining > 1.0:
+                            elif time_remaining > 2.0:
                                 expiry_color = (0, 255, 255)  # Yellow
                             else:
                                 expiry_color = (0, 0, 255)  # Red
@@ -629,10 +634,10 @@ class ArucoSingleTracker():
                                 time_remaining = self._tracker_expiry_time - time_since_aruco
                                 if time_remaining > 0:
                                     expiry_text = "TRACKER EXPIRY: %.1f seconds remaining" % time_remaining
-                                    # Color changes from green to red as time runs out
-                                    if time_remaining > 2.0:
+                                    # Color changes from green to red as time runs out (now 10s total)
+                                    if time_remaining > 5.0:
                                         expiry_color = (0, 255, 0)  # Green
-                                    elif time_remaining > 1.0:
+                                    elif time_remaining > 2.0:
                                         expiry_color = (0, 255, 255)  # Yellow
                                     else:
                                         expiry_color = (0, 0, 255)  # Red
