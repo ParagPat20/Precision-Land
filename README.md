@@ -14,10 +14,16 @@ This system combines:
 
 ### Hardware Requirements
 - **Flight Controller**: ArduPilot-compatible (Pixhawk, Cube, etc.)
-- **Camera**: USB webcam or Raspberry Pi camera module
-- **ArUco Marker**: Printed marker (ID: 72, size: 10cm recommended)
+- **Camera**: Raspberry Pi Module 3 NoIR Wide (2304x1296, 120° FOV) or USB webcam
+- **ArUco Marker**: Printed marker (ID: 72, size: 29.7cm A4 paper)
 - **Computer**: Raspberry Pi 4+ or laptop with USB camera
 - **GPS**: For initial positioning and RTL functionality
+
+**Recommended Camera**: Raspberry Pi Module 3 NoIR Wide
+- Native Resolution: 2304x1296 (16:9)
+- Field of View: 120° (ultra-wide)
+- Processing Resolution: 640x360 (preserves wide FOV, faster)
+- See `opencv/CAMERA_SETUP.md` for detailed configuration
 
 ### Software Requirements
 - Python 3.9 (tested on Raspberry Pi 5)
@@ -121,24 +127,27 @@ sudo python setup.py install
 
 ## Camera Calibration
 
+**For detailed camera setup, see `opencv/CAMERA_SETUP.md`**
+
 ### 1. Prepare Calibration Target
 - Print `opencv/ChessBoard_9x6.jpg` without scaling
 - Measure the actual printed square size accurately
 - Mount on a rigid, flat surface
 
-### 2. Capture Calibration Images
+### 2. Capture Calibration Images at 640x360 (Recommended)
 ```bash
-# Use the provided script to capture images (auto-detects PiCamera on Pi)
-python opencv/save_snapshots.py --folder opencv/snaps --name snapshot
-# Force PiCamera or OpenCV if needed
-# python opencv/save_snapshots.py --raspi
-# python opencv/save_snapshots.py --no-raspi
+# Raspberry Pi Module 3 NoIR Wide - capture at 640x360 (preserves 120° FOV)
+python opencv/save_snapshots.py --folder opencv/snaps --name snapshot --dwidth 640 --dheight 360
+
+# OR use native resolution 2304x1296 (slower but more accurate)
+# python opencv/save_snapshots.py --folder opencv/snaps --name snapshot --dwidth 2304 --dheight 1296
 ```
 
-Take **at least 20 images** with:
+Take **at least 20-25 images** with:
 - Different angles and distances
 - Good lighting conditions
 - Full chessboard visible in frame
+- Utilize the full 120° wide field of view
 
 ### 3. Run Calibration
 ```bash
@@ -160,9 +169,10 @@ python opencv/cameracalib.py calibration_images jpg 9 6 25
 
 ### 1. Generate ArUco Marker
 - Use ArUco ID: **72** (as configured in the system)
-- Print marker size: **10cm x 10cm** (adjustable in code)
+- Print marker size: **29.7cm x 21cm** (A4 paper size with marker centered)
 - Use high-contrast black and white printing
-- Mount on flat, rigid surface
+- Mount on flat, rigid white surface (A4 paper)
+- The wide 120° FOV camera can detect markers from greater distances
 
 ### 2. Marker Placement
 - Place marker in clear, unobstructed area

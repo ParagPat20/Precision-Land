@@ -124,10 +124,14 @@ freq_send       = 10 #- Hz
 # Find full directory path of this script, used for loading config and other files
 cwd                 = path.dirname(path.abspath(__file__))
 calib_path          = cwd+"/../opencv/"
+# Raspberry Pi Module 3 NoIR Wide camera resolution
+# Native: 2304x1296 (16:9, 120° FOV)
+# Recommended for processing: 640x360 (preserves 16:9 aspect ratio, faster computation)
+camera_resolution   = [640, 360]  # 16:9 aspect ratio for wide FOV
 camera_matrix       = np.loadtxt(calib_path+'cameraMatrix_webcam.txt', delimiter=',')
 camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_webcam.txt', delimiter=',')                                      
 aruco_tracker       = ArucoSingleTracker(id_to_find=id_to_find, marker_size=marker_size, show_video=True, axis_scale=0.01,
-                camera_matrix=camera_matrix, camera_distortion=camera_distortion)
+                camera_matrix=camera_matrix, camera_distortion=camera_distortion, camera_size=camera_resolution)
                 
                 
 time_0 = time.time()

@@ -54,7 +54,7 @@ class ArucoSingleTracker():
                 marker_size,
                 camera_matrix,
                 camera_distortion,
-                camera_size=[640,480],
+                camera_size=[640,360],  # Default: 640x360 for 16:9 wide FOV (120°), native: 2304x1296
                 show_video=False,
                 axis_scale=0.03,
                 use_picamera=None
@@ -354,28 +354,4 @@ if __name__ == "__main__":
     aruco_tracker = ArucoSingleTracker(id_to_find=72, marker_size=10, show_video=False, camera_matrix=camera_matrix, camera_distortion=camera_distortion)
     
     aruco_tracker.track(verbose=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

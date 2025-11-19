@@ -148,8 +148,12 @@ def main():
     # ---- DEFAULT VALUES ---
     SAVE_FOLDER = "."
     FILE_NAME = "snapshot"
-    FRAME_WIDTH = 0
-    FRAME_HEIGHT = 0
+    # Raspberry Pi Module 3 NoIR Wide camera
+    # Native resolution: 2304x1296 (16:9, 120° FOV, 50fps capable)
+    # Recommended for calibration: 640x360 (16:9 aspect ratio, faster processing)
+    # Set to 0 to use camera default
+    FRAME_WIDTH = 640   # Use 640x360 for calibration (preserves wide FOV)
+    FRAME_HEIGHT = 360  # 16:9 aspect ratio
 
     # ----------- PARSE THE INPUTS -----------------
     parser = argparse.ArgumentParser(

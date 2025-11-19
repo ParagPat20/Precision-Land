@@ -133,9 +133,11 @@ except Exception:
 
 
 #--- Capture the videocamera (this may also be a video or a picture)
-#-- Calibration was done at 640x480.
-CALIB_W, CALIB_H = 640, 480
-REQ_W, REQ_H = 640, 480
+#-- Calibration should be done at the resolution you'll use for detection
+#-- Raspberry Pi Module 3 NoIR Wide: native 2304x1296 (16:9, 120° FOV)
+#-- Recommended: 640x360 for faster processing while preserving wide aspect ratio
+CALIB_W, CALIB_H = 640, 360  # Calibration resolution (should match your calibration images)
+REQ_W, REQ_H = 640, 360      # Requested resolution (640x360 for 16:9 wide FOV)
 
 use_picamera = False
 cap = None
