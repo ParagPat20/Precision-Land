@@ -21,6 +21,7 @@ import time
 import math
 import argparse
 import os
+from collections import deque  # For rolling stability buffer
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
 from pymavlink import mavutil
@@ -139,18 +140,55 @@ time_0 = time.time()
 #--- Check mavlink standard
 mavlink20 = 'MAVLINK20' in os.environ
 
-while True:                
+#--------------------------------------------------
+#-------------- ROLLING STABILITY BUFFER
+#--------------------------------------------------
+# Initialize detection stability buffer with maxlen=7
+# This prevents jerky movements when marker detection drops temporarily
+detection_buffer = deque(maxlen=7)
+last_known_position = None  # Store last known valid position (x_cm, y_cm, z_cm)
+confidence_threshold = 50.0  # Minimum confidence percentage to send position data
 
+print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_threshold}%)")
+
+while True:                
+    # Detect marker in current frame
     marker_found, x_cm, y_cm, z_cm = aruco_tracker.track(loop=False)
+    
+    # Update detection buffer
     if marker_found:
-        x_cm, y_cm          = camera_to_uav(x_cm, y_cm)
-        # ensure positive distance in cm
-        z_cm                = max(1.0, float(z_cm))
-        angle_x, angle_y    = marker_position_to_angle(x_cm, y_cm, z_cm)
+        # Marker detected - append 1 and update last known position
+        detection_buffer.append(1)
+        x_cm, y_cm = camera_to_uav(x_cm, y_cm)
+        z_cm = max(1.0, float(z_cm))
+        last_known_position = (x_cm, y_cm, z_cm)
+    else:
+        # Marker not detected - append 0, keep last known position
+        detection_buffer.append(0)
+    
+    # Calculate confidence score (percentage of successful detections in buffer)
+    if len(detection_buffer) > 0:
+        confidence_score = (sum(detection_buffer) / len(detection_buffer)) * 100.0
+    else:
+        confidence_score = 0.0
+    
+    # Send position data only if confidence exceeds threshold and we have a valid position
+    if confidence_score >= confidence_threshold and last_known_position is not None:
+        x_cm, y_cm, z_cm = last_known_position
+        angle_x, angle_y = marker_position_to_angle(x_cm, y_cm, z_cm)
         
         if time.time() >= time_0 + 1.0/freq_send:
             time_0 = time.time()
-            print("Marker found x = %5.0f cm  y = %5.0f cm -> angle_x = %5f  angle_y = %5f"%(x_cm, y_cm, angle_x, angle_y))
+            status = "DETECTED" if marker_found else "TRACKING"
+            print(f"[{status}] Confidence: {confidence_score:.1f}% | x={x_cm:5.0f}cm y={y_cm:5.0f}cm z={z_cm:5.0f}cm | angles=({angle_x:.3f}, {angle_y:.3f})")
             # send_land_message(x_m=x_cm*0.01, y_m=y_cm*0.01, z_m=z_cm*0.01)
             send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
+    else:
+        # Low confidence or no position data - do not send
+        if time.time() >= time_0 + 1.0/freq_send:
+            time_0 = time.time()
+            if last_known_position is None:
+                print(f"[NO DATA] Confidence: {confidence_score:.1f}% | Waiting for initial marker detection...")
+            else:
+                print(f"[LOW CONFIDENCE] Confidence: {confidence_score:.1f}% | Not sending (threshold: {confidence_threshold}%)")
       
