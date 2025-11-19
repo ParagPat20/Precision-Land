@@ -53,7 +53,7 @@ def send_land_message_v2(x_rad=0.0, y_rad=0.0, dist_m=0.0, x_m=0.0,y_m=0.0,z_m=0
         int(2),                  # type of landing target: 2 = Fiducial marker
         int(0),                  # position_valid boolean
     )
-    print(msg)
+    # print(msg)
     vehicle.send_mavlink(msg)
 
 
