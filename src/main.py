@@ -147,7 +147,7 @@ mavlink20 = 'MAVLINK20' in os.environ
 # This prevents jerky movements when marker detection drops temporarily
 detection_buffer = deque(maxlen=7)
 last_known_position = None  # Store last known valid position (x_cm, y_cm, z_cm)
-confidence_threshold = 50.0  # Minimum confidence percentage to send position data
+confidence_threshold =20.0  # Minimum confidence percentage to send position data
 
 print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_threshold}%)")
 
