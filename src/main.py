@@ -26,6 +26,7 @@ from collections import deque  # For rolling stability buffer
 from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
 from pymavlink import mavutil
 from opencv.lib_aruco_pose import *
+from led_controller import DroneLEDController
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--connect', default = '/dev/ttyACM0')
@@ -97,6 +98,36 @@ while True:
         print(f"Connection failed: {e}. Retrying in 2s...")
         time.sleep(2)
 print(vehicle, "connected!!!")
+
+#--------------------------------------------------
+#-------------- LED CONTROLLER & FAILSAFE LISTENER
+#--------------------------------------------------
+led_controller = DroneLEDController()
+led_controller.start()
+
+battery_failsafe_active = False
+other_failsafe_active = False
+
+@vehicle.on_message('STATUSTEXT')
+def listener(self, name, message):
+    global battery_failsafe_active, other_failsafe_active
+    text = message.text.upper()
+    if "BATTERY" in text and "FAILSAFE" in text:
+        battery_failsafe_active = True
+        print("[LED] Battery Failsafe Detected!")
+    elif "FAILSAFE" in text:
+        other_failsafe_active = True
+        print(f"[LED] Failsafe Detected: {text}")
+
+# Reset flags on arming?
+@vehicle.on_attribute('armed')
+def armed_listener(self, attr_name, value):
+    global battery_failsafe_active, other_failsafe_active
+    if value: # particle armed
+        battery_failsafe_active = False
+        other_failsafe_active = False
+        print("[LED] Armed - Resetting Failsafe Flags")
+
 
 #--------------------------------------------------
 #-------------- PARAMETERS  
@@ -191,4 +222,40 @@ while True:
                 print(f"[NO DATA] Confidence: {confidence_score:.1f}% | Waiting for initial marker detection...")
             else:
                 print(f"[LOW CONFIDENCE] Confidence: {confidence_score:.1f}% | Not sending (threshold: {confidence_threshold}%)")
+    
+    #--------------------------------------------------
+    #-------------- LED CONTROL UPDATE
+    #--------------------------------------------------
+    # Determine the target LED state based on priorities
+    target_led_state = DroneLEDController.STATE_DISARMED # Default
+    
+    # Check for Failsafes first (Highest Priority)
+    if battery_failsafe_active:
+        target_led_state = DroneLEDController.STATE_BAT_FAILSAFE
+    elif other_failsafe_active:
+        target_led_state = DroneLEDController.STATE_FAILSAFE
+    
+    # Check Flight Modes
+    elif vehicle.mode.name == 'LAND':
+        target_led_state = DroneLEDController.STATE_LAND
+    elif vehicle.mode.name == 'RTL':
+        target_led_state = DroneLEDController.STATE_RTL
+        
+    # Check Armed Status
+    elif not vehicle.armed:
+        target_led_state = DroneLEDController.STATE_DISARMED
+    else:
+        # Armed
+        if vehicle.location.global_relative_frame.alt < 0.3: # Below 30cm -> Considered on Ground? Or verify logic
+            # "ARMED and on the ground"
+            # Detecting "on ground" reliably without a sensor can be tricky. 
+            # Using altitude < 0.5m as a proxy or if motors are spinning but not taking off.
+            # Ideally use vehicle.system_status.state or similar if available, 
+            # but altitude is a common simple check.
+            target_led_state = DroneLEDController.STATE_ARMED_GROUND
+        else:
+            target_led_state = DroneLEDController.STATE_FLYING
+            
+    # Update LED Controller
+    led_controller.set_state(target_led_state)
       
