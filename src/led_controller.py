@@ -2,12 +2,11 @@ import time
 import threading
 import board
 import neopixel
-import argparse
 
 # LED strip configuration:
 LED_COUNT      = 12      # Number of LED pixels.
 LED_PIN        = board.D18 # GPIO pin led connects to (18 uses PWM!).
-LED_BRIGHTNESS = 1.0     # Set to 0.0 to 1.0
+LED_BRIGHTNESS = 0.5     # Set to 0.0 to 1.0
 LED_ORDER      = neopixel.GRB # Standard for WS2812B
 
 # Colors (R, G, B) Tuples
@@ -36,13 +35,21 @@ class DroneLEDController(threading.Thread):
         self.lock = threading.Lock()
         
         # Initialize Strip
-        # auto_write=False ensures we manually call show(), better for animations
+        # Using the logic confirmed by user in test_leds.py
         try:
-            self.strip = neopixel.NeoPixel(LED_PIN, LED_COUNT, brightness=LED_BRIGHTNESS, auto_write=False, pixel_order=LED_ORDER)
+            self.strip = neopixel.NeoPixel(
+                LED_PIN, 
+                LED_COUNT, 
+                brightness=LED_BRIGHTNESS, 
+                auto_write=False, 
+                pixel_order=LED_ORDER
+            )
         except Exception as e:
             print(f"[LED] Error initializing NeoPixel: {e}")
             print("[LED] Ensure you are running with root privileges (sudo)")
-            raise e
+            # We don't raise here to prevent crashing main thread, 
+            # but LEDs won't work.
+            self.strip = None
             
         # Segment definitions
         # Left: 0,1,2 (3 LEDs)
@@ -55,9 +62,8 @@ class DroneLEDController(threading.Thread):
     def set_state(self, new_state):
         with self.lock:
             if self.current_state != new_state:
-                print(f"[LED] Switching state: {self.current_state} -> {new_state}")
+                # print(f"[LED] Switching state: {self.current_state} -> {new_state}")
                 self.current_state = new_state
-                # Clear strip immediately on state change for clean transition? 
                 self.clear_strip()
 
     def get_state(self):
@@ -65,22 +71,36 @@ class DroneLEDController(threading.Thread):
             return self.current_state
 
     def clear_strip(self):
-        self.strip.fill(OFF)
-        self.strip.show()
+        if self.strip:
+            self.strip.fill(OFF)
+            self.strip.show()
 
     def set_all(self, color):
-        self.strip.fill(color)
-        self.strip.show()
+        if self.strip:
+            self.strip.fill(color)
+            self.strip.show()
 
     def set_segment(self, indices, color):
-        for i in indices:
-            if i < LED_COUNT:
-                self.strip[i] = color
+        if self.strip:
+            for i in indices:
+                if i < LED_COUNT:
+                    self.strip[i] = color
+
+    def show(self):
+        if self.strip:
+            self.strip.show()
 
     def run(self):
         print("[LED] Controller started")
+        if not self.strip:
+             print("[LED] No strip detected, thread running no-op")
+        
         while not self.stop_event.is_set():
             state = self.get_state()
+            
+            if not self.strip:
+                time.sleep(1)
+                continue
 
             if state == self.STATE_DISARMED:
                 # Solid PURPLE
@@ -110,7 +130,7 @@ class DroneLEDController(threading.Thread):
                 self.set_segment(self.left_indices, RED)
                 self.set_segment(self.right_indices, GREEN)
                 self.set_segment(self.middle_indices, OFF)
-                self.strip.show()
+                self.show()
                 time.sleep(0.5)
                 if self.get_state() != self.STATE_RTL: continue
                 self.set_all(OFF)
@@ -152,13 +172,13 @@ class DroneLEDController(threading.Thread):
                  time.sleep(1.0) 
 
             elif state == self.STATE_FLYING:
-                # Direction Colors: Blinking Left RED and Right GREEN
+                # Direction Colors: Blinking Left RED and Right GREEN in 3-LED segments
                 
                 # ON
                 self.set_segment(self.left_indices, RED)
                 self.set_segment(self.right_indices, GREEN)
                 self.set_segment(self.middle_indices, OFF)
-                self.strip.show()
+                self.show()
                 time.sleep(0.5) # On duration
                 
                 # OFF
