@@ -1,39 +1,22 @@
 import time
 import threading
-from rpi_ws281x import *
+import board
+import neopixel
 import argparse
 
 # LED strip configuration:
 LED_COUNT      = 12      # Number of LED pixels.
-LED_PIN        = 18      # GPIO pin led connects to (18 uses PWM!).
-LED_FREQ_HZ    = 800000  # LED signal frequency in hertz (usually 800khz)
-LED_DMA        = 10      # DMA channel to use for generating signal (try 10)
-LED_BRIGHTNESS = 255     # Set to 0 for darkest and 255 for brightest
-LED_INVERT     = False   # True to invert the signal (when using NPN transistor level shift)
-LED_CHANNEL    = 0       # set to '1' for GPIOs 13, 19, 41, 45 or 53
+LED_PIN        = board.D18 # GPIO pin led connects to (18 uses PWM!).
+LED_BRIGHTNESS = 1.0     # Set to 0.0 to 1.0
+LED_ORDER      = neopixel.GRB # Standard for WS2812B
 
-# Colors
-COLOR_RED    = Color(0, 255, 0) # GRB order for some strips, adjust if needed (usually Green, Red, Blue)
-# Note: rpi_ws281x usually uses GRB or RGB. Let's define R, G, B helpers.
-# Wait, Color(r, g, b) often maps to GRB on the hardware. 
-# Safe bet: Color(red, green, blue) passed to the lib usually handles it, 
-# BUT many strips are physically GRB.
-# Let's assume standard WS2812B GRB format, where the library wrapper Color(r,g,b) produces
-# a 24-bit integer. 
-# If colors are swapped, we can fix later. 
-# Standard assumption: Library takes Color(r,g,b).
-# If strip is GRB: Color(r, g, b) might result in Red->Green on strip.
-# Let's use helper assuming standard RGB int packing.
-
-def make_color(r, g, b):
-    return Color(r, g, b)
-
-RED     = make_color(255, 0, 0)
-GREEN   = make_color(0, 255, 0)
-BLUE    = make_color(0, 0, 255)
-YELLOW  = make_color(255, 255, 0)
-PURPLE  = make_color(128, 0, 128)
-OFF     = make_color(0, 0, 0)
+# Colors (R, G, B) Tuples
+RED     = (255, 0, 0)
+GREEN   = (0, 255, 0)
+BLUE    = (0, 0, 255)
+YELLOW  = (255, 255, 0)
+PURPLE  = (128, 0, 128)
+OFF     = (0, 0, 0)
 
 class DroneLEDController(threading.Thread):
     # States
@@ -53,9 +36,14 @@ class DroneLEDController(threading.Thread):
         self.lock = threading.Lock()
         
         # Initialize Strip
-        self.strip = Adafruit_NeoPixel(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL)
-        self.strip.begin()
-        
+        # auto_write=False ensures we manually call show(), better for animations
+        try:
+            self.strip = neopixel.NeoPixel(LED_PIN, LED_COUNT, brightness=LED_BRIGHTNESS, auto_write=False, pixel_order=LED_ORDER)
+        except Exception as e:
+            print(f"[LED] Error initializing NeoPixel: {e}")
+            print("[LED] Ensure you are running with root privileges (sudo)")
+            raise e
+            
         # Segment definitions
         # Left: 0,1,2 (3 LEDs)
         # Middle: 3,4,5,6,7,8 (6 LEDs)
@@ -70,7 +58,6 @@ class DroneLEDController(threading.Thread):
                 print(f"[LED] Switching state: {self.current_state} -> {new_state}")
                 self.current_state = new_state
                 # Clear strip immediately on state change for clean transition? 
-                # Or let next loop handle it. Let's clear to be safe.
                 self.clear_strip()
 
     def get_state(self):
@@ -78,18 +65,17 @@ class DroneLEDController(threading.Thread):
             return self.current_state
 
     def clear_strip(self):
-        for i in range(self.strip.numPixels()):
-            self.strip.setPixelColor(i, OFF)
+        self.strip.fill(OFF)
         self.strip.show()
 
     def set_all(self, color):
-        for i in range(self.strip.numPixels()):
-            self.strip.setPixelColor(i, color)
+        self.strip.fill(color)
         self.strip.show()
 
     def set_segment(self, indices, color):
         for i in indices:
-            self.strip.setPixelColor(i, color)
+            if i < LED_COUNT:
+                self.strip[i] = color
 
     def run(self):
         print("[LED] Controller started")
@@ -120,9 +106,7 @@ class DroneLEDController(threading.Thread):
                 self.set_all(OFF)
                 time.sleep(0.1)
                 
-                # Step 2: Direction Colors (Left Red, Right Green) - Blink once? 
-                # "Blinking Left RED and Right Green"
-                # Let's do a quick blink of direction colors
+                # Step 2: Direction Colors (Left Red, Right Green)
                 self.set_segment(self.left_indices, RED)
                 self.set_segment(self.right_indices, GREEN)
                 self.set_segment(self.middle_indices, OFF)
@@ -157,7 +141,6 @@ class DroneLEDController(threading.Thread):
 
             elif state == self.STATE_FAILSAFE:
                  # Blink 2 times red in mid intervals
-                 # mid interval -> assume standard blink speed?
                  for _ in range(2):
                      if self.get_state() != self.STATE_FAILSAFE: break
                      self.set_all(RED)
@@ -165,15 +148,11 @@ class DroneLEDController(threading.Thread):
                      self.set_all(OFF)
                      time.sleep(0.3)
                  
-                 # pause a bit to make it "sometimes only" or just regular?
-                 # "mid intervals sometimes only" -> Implies a pause between the double blinks
+                 # pause
                  time.sleep(1.0) 
 
             elif state == self.STATE_FLYING:
                 # Direction Colors: Blinking Left RED and Right GREEN
-                # "Blinking Left RED and Right Green just like airplane"
-                # Usually airplanes have solid nav lights and blinking strobes. 
-                # User asked for "Blinking Left RED and Right Green".
                 
                 # ON
                 self.set_segment(self.left_indices, RED)
@@ -192,50 +171,53 @@ class DroneLEDController(threading.Thread):
                 time.sleep(0.1)
                 
     def stop(self):
-        self.stop_event.set_()
+        self.stop_event.set()
         self.join()
         self.clear_strip()
 
 def run_test():
     # Helper to test the class independently
-    print("Testing LED Controller...")
-    led = DroneLEDController()
-    led.start()
-    
+    print("Testing LED Controller (Adafruit NeoPixel)...")
     try:
-        print("Test: DISARMED (Purple)")
-        led.set_state(DroneLEDController.STATE_DISARMED)
-        time.sleep(3)
+        led = DroneLEDController()
+        led.start()
         
-        print("Test: ARMED_GROUND (Green)")
-        led.set_state(DroneLEDController.STATE_ARMED_GROUND)
-        time.sleep(3)
-        
-        print("Test: FLYING (Left Red, Right Green Blink)")
-        led.set_state(DroneLEDController.STATE_FLYING)
-        time.sleep(5)
-        
-        print("Test: LAND (Solid Red)")
-        led.set_state(DroneLEDController.STATE_LAND)
-        time.sleep(3)
-        
-        print("Test: RTL (Yellow -> Direction -> Yellow)")
-        led.set_state(DroneLEDController.STATE_RTL)
-        time.sleep(6)
-        
-        print("Test: BAT_FAILSAFE (3x Red, 1x Blue, Pause)")
-        led.set_state(DroneLEDController.STATE_BAT_FAILSAFE)
-        time.sleep(8)
-        
-        print("Test: FAILSAFE (2x Red)")
-        led.set_state(DroneLEDController.STATE_FAILSAFE)
-        time.sleep(5)
-        
-    except KeyboardInterrupt:
-        print("Interrupted")
-    finally:
-        led.stop()
-        print("Done")
+        try:
+            print("Test: DISARMED (Purple)")
+            led.set_state(DroneLEDController.STATE_DISARMED)
+            time.sleep(3)
+            
+            print("Test: ARMED_GROUND (Green)")
+            led.set_state(DroneLEDController.STATE_ARMED_GROUND)
+            time.sleep(3)
+            
+            print("Test: FLYING (Left Red, Right Green Blink)")
+            led.set_state(DroneLEDController.STATE_FLYING)
+            time.sleep(5)
+            
+            print("Test: LAND (Solid Red)")
+            led.set_state(DroneLEDController.STATE_LAND)
+            time.sleep(3)
+            
+            print("Test: RTL (Yellow -> Direction -> Yellow)")
+            led.set_state(DroneLEDController.STATE_RTL)
+            time.sleep(6)
+            
+            print("Test: BAT_FAILSAFE (3x Red, 1x Blue, Pause)")
+            led.set_state(DroneLEDController.STATE_BAT_FAILSAFE)
+            time.sleep(8)
+            
+            print("Test: FAILSAFE (2x Red)")
+            led.set_state(DroneLEDController.STATE_FAILSAFE)
+            time.sleep(5)
+            
+        except KeyboardInterrupt:
+            print("Interrupted")
+        finally:
+            led.stop()
+            print("Done")
+    except Exception as e:
+        print(f"Test Failed: {e}")
 
 if __name__ == "__main__":
     # If run directly, perform a test sequence

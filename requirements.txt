@@ -18,3 +18,8 @@ DroneKit==2.9.2
 lxml==4.9.2
 future==0.18.3
 monotonic==1.6
+
+# LED Control (Adafruit CircuitPython)
+adafruit-circuitpython-neopixel
+adafruit-blinka
+rpi_ws281x; platform_machine != "aarch64" # Fallback/Legacy if needed, but likely removing pure rpi_ws281x usage
