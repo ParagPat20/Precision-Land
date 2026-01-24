@@ -3,8 +3,6 @@
 #   sudo apt-get update && sudo apt-get install -y python3-picamera
 # If using the newer libcamera stack, consider picamera2 (not required here).
 
-# Core numerical (Python 3.7 compatible)
-numpy==1.21.6
 
 # OpenCV (Python 3.7 compatible)
 opencv-python==4.5.5.64
@@ -13,11 +11,6 @@ opencv-contrib-python==4.5.5.64
 # MAVLink / DroneKit stack
 pymavlink==2.4.40
 DroneKit==2.9.2
-
-# Utilities
-lxml==4.9.2
-future==0.18.3
-monotonic==1.6
 
 # LED Control (Adafruit CircuitPython)
 adafruit-circuitpython-neopixel
