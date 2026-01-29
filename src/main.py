@@ -595,15 +595,8 @@ while True:
             send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
     else:
         # Low confidence or no position data - do not send
-        # Only print occasionally to avoid spam (every 5 seconds)
-        if time.time() >= time_0 + 1.0/freq_send:
-            time_0 = time.time()
-            # Print only every 5 seconds (5 * freq_send iterations)
-            if int(time.time()) % 5 == 0:
-                if last_known_position is None:
-                    print(f"[NO DATA] Waiting for initial marker detection...")
-                elif confidence_score < confidence_threshold:
-                    print(f"[LOW CONFIDENCE] {confidence_score:.1f}% (threshold: {confidence_threshold}%)")
+        # No print statements to avoid log spam
+        pass
     
     #--------------------------------------------------
     #-------------- LED CONTROL UPDATE
