@@ -27,6 +27,120 @@ from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, Loca
 from pymavlink import mavutil
 from opencv.lib_aruco_pose import *
 from led_controller import DroneLEDController
+import threading
+import firebase_admin
+from firebase_admin import credentials, db
+from core.mission_generator import DeliveryTemplate, LatLng
+
+# --- Configuration ---
+DRONE_ID = "Victoris"
+# Path to serviceAccountKey.json (Assuming it's in the same folder as this script or adjusted path)
+# Since this script is in rpi_mission_manager/Precision-Land/src/, and key is in rpi_mission_manager/
+# We need to point up two levels.
+CREDENTIALS_PATH = os.path.join(path.dirname(path.dirname(path.dirname(path.abspath(__file__)))), "serviceAccountKey.json")
+DATABASE_URL = "https://jech-flyt-default-rtdb.asia-southeast1.firebasedatabase.app"
+
+# --- Firebase & Mission Logic ---
+def execute_mission_logic(mission_items):
+    print("Uploading mission via DroneKit...")
+    try:
+        cmds = vehicle.commands
+        cmds.clear()
+        
+        for item in mission_items:
+            # Create DroneKit Command
+            # Note: DroneKit uses floats for lat/lon, so we use item.x/y directly (assuming valid floats)
+            cmd = Command(
+                0, 0, 0, 
+                item.frame,
+                item.command_id,
+                item.current, item.autocontinue,
+                item.param1, item.param2, item.param3, item.param4,
+                item.x, item.y, item.z
+            )
+            cmds.add(cmd)
+            
+        cmds.upload()
+        print(f"Mission of {len(mission_items)} items Uploaded!")
+        
+        print("Setting Mode to AUTO...")
+        vehicle.mode = VehicleMode("AUTO")
+        
+        print("Arming...")
+        vehicle.armed = True
+        
+        # We don't block heavily here waiting for arming in the thread, 
+        # or we could wait a bit. The main loop monitors state too.
+        # But for valid dispatch flow, we should ensure it proceeds.
+        # Wait up to 5s for arming
+        for _ in range(5):
+            if vehicle.armed:
+                break
+            time.sleep(1)
+            
+        print(f"ARMED Status: {vehicle.armed}")
+        return True
+    except Exception as e:
+        print(f"Mission Execution Error: {e}")
+        return False
+
+def run_mission_thread(command):
+    cmd_id = command.get('id')
+    print(f"[{threading.current_thread().name}] Processing Mission {cmd_id}")
+    payload = command.get('payload', {})
+    
+    target_lat = payload.get('target_lat')
+    target_lng = payload.get('target_lng')
+    
+    if target_lat is None or target_lng is None:
+        print("Invalid Target Location")
+        return
+
+    # Generate Mission
+    print("Generating Mission...")
+    template = DeliveryTemplate.get_default_template()
+    # TODO: Get actual home location
+    home_loc = LatLng(0.0, 0.0) 
+    target_loc = LatLng(target_lat, target_lng)
+    
+    mission_items = template.generate_mission(
+        home_location=home_loc,
+        delivery_location=target_loc,
+        override_values=payload
+    )
+    
+    success = execute_mission_logic(mission_items)
+
+    ref = db.reference(f'missions/{DRONE_ID}/active_command')
+    if success:
+        ref.update({'status': 'IN_PROGRESS', 'started_at': int(time.time() * 1000)})
+    else:
+        ref.update({'status': 'FAILED'})
+
+def check_mission(command):
+    if not command or not isinstance(command, dict): return
+    if command.get('status') == 'PENDING':
+        sender = command.get('sender_email', 'Unknown')
+        print(f"Received PENDING Mission from {sender}")
+        t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread")
+        t.start()
+
+def init_firebase_listener():
+    try:
+        cred = credentials.Certificate(CREDENTIALS_PATH)
+        firebase_admin.initialize_app(cred, {'databaseURL': DATABASE_URL})
+        print("Firebase Initialized")
+        
+        ref = db.reference(f'missions/{DRONE_ID}/active_command')
+        # Initial check
+        check_mission(ref.get())
+        # Listen
+        ref.listen(lambda event: check_mission(event.data))
+        print("Firebase Listener Started")
+    except Exception as e:
+        print(f"Firebase Init Error (Check credentials path): {e}")
+
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--connect', default = '/dev/ttyACM0')
@@ -142,6 +256,9 @@ vehicle.parameters['PLND_TYPE']          = 1 # Mavlink landing backend
 # vehicle.parameters['RNGFND_MIN_CM']     = 1
 # vehicle.parameters['RNGFND_MAX_CM']     = 10000
 # vehicle.parameters['RNGFND_GNDCLEAR']   = 5     
+
+# --- Start Firebase Listener ---
+init_firebase_listener()
 
 #--------------------------------------------------
 #-------------- LANDING MARKER  

@@ -17,3 +17,5 @@ venv*/
 # Local data/output
 opencv/snaps/
 *.log
+
+serviceAccountKey.json
