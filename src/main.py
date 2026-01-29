@@ -74,24 +74,30 @@ mission_active = False  # Track if a mission is currently active (IN_PROGRESS)
 
 def telemetry_loop(cmd_ref):
     """
-    Sends telemetry updates to Firebase while mission is active and drone is armed.
+    Sends telemetry updates to Firebase while mission is active.
     Also listens for ABORT signals.
     Only sends GPS/telemetry data when mission status is IN_PROGRESS.
+    Runs regardless of arming status once mission is uploaded.
     """
     global abort_requested, mission_active
     print("Starting Telemetry Loop...")
     mission_active = True  # Mark mission as active when telemetry loop starts
     
-    while vehicle.armed and not abort_requested:
+    # Continue sending telemetry while mission is active (not just when armed)
+    while mission_active and not abort_requested:
         # 1. Check for Abort (check both global flag and Firebase status)
         try:
             current_status = cmd_ref.child('status').get()
             if current_status == 'ABORT_REQUESTED' or abort_requested:
                 print("[ABORT] Received Abort Request! Stopping Mission...")
                 abort_requested = True
-                mission_active = False
+                mission_active = False  # Stop telemetry immediately
                 # Switch to RTL mode for safe return
-                vehicle.mode = VehicleMode("RTL")
+                try:
+                    vehicle.mode = VehicleMode("RTL")
+                    print("[ABORT] Vehicle mode set to RTL")
+                except Exception as e:
+                    print(f"[ABORT] Error setting RTL mode: {e}")
                 cmd_ref.update({
                     'status': 'ABORTED',
                     'aborted_at': int(time.time() * 1000)
@@ -122,6 +128,7 @@ def telemetry_loop(cmd_ref):
                         'updated_at': int(time.time() * 1000)
                     }
                     cmd_ref.child('telemetry').update(telemetry)
+                    print(f"[TELEMETRY] Sent to Firebase: lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, heading={vehicle.heading}°, mode={vehicle.mode.name}")
             except Exception as e:
                 print(f"Telemetry Error: {e}")
             
@@ -162,6 +169,12 @@ def execute_mission_logic(mission_items, cmd_ref):
         cmds.upload()
         print(f"Mission of {len(mission_items)} items Uploaded!")
         
+        # Start telemetry loop immediately after mission upload (regardless of arming status)
+        # This allows tracking mission progress even before arming
+        print("Starting telemetry transmission to Firebase...")
+        telemetry_thread = threading.Thread(target=telemetry_loop, args=(cmd_ref,), name="TelemetryThread", daemon=True)
+        telemetry_thread.start()
+        
         # Check for abort before setting mode
         if abort_requested:
             print("[ABORT] Abort requested after mission upload. Cancelling...")
@@ -181,8 +194,12 @@ def execute_mission_logic(mission_items, cmd_ref):
         # Wait up to 5s for arming, checking for abort during wait
         for _ in range(5):
             if abort_requested:
-                print("[ABORT] Abort requested during arming wait. Disarming...")
-                vehicle.armed = False
+                print("[ABORT] Abort requested during arming wait. Switching to RTL...")
+                try:
+                    vehicle.mode = VehicleMode("RTL")
+                    print("[ABORT] Vehicle mode set to RTL")
+                except Exception as e:
+                    print(f"[ABORT] Error setting RTL mode: {e}")
                 return False
             if vehicle.armed:
                 break
@@ -190,12 +207,14 @@ def execute_mission_logic(mission_items, cmd_ref):
             
         print(f"ARMED Status: {vehicle.armed}")
         
-        if vehicle.armed and not abort_requested:
-            # Start Telemetry & Monitoring Loop
-            telemetry_loop(cmd_ref)
-        elif abort_requested:
-            print("[ABORT] Abort requested, disarming...")
-            vehicle.armed = False
+        # Final check for abort after arming wait
+        if abort_requested:
+            print("[ABORT] Abort requested. Switching to RTL...")
+            try:
+                vehicle.mode = VehicleMode("RTL")
+                print("[ABORT] Vehicle mode set to RTL")
+            except Exception as e:
+                print(f"[ABORT] Error setting RTL mode: {e}")
             return False
             
         return True
@@ -322,7 +341,7 @@ def check_mission(command):
     if status == 'ABORT_REQUESTED':
         print("[ABORT] Abort request received from Firebase!")
         abort_requested = True
-        mission_active = False  # Stop sending telemetry
+        mission_active = False  # Stop sending telemetry immediately
         
         # If there's an active mission, update its status
         if active_mission_ref:
@@ -334,13 +353,13 @@ def check_mission(command):
             except Exception as e:
                 print(f"Error updating abort status: {e}")
         
-        # If vehicle is armed, switch to RTL
-        if vehicle.armed:
-            try:
-                print("[ABORT] Vehicle is armed, switching to RTL mode...")
-                vehicle.mode = VehicleMode("RTL")
-            except Exception as e:
-                print(f"Error switching to RTL: {e}")
+        # Always try to switch to RTL mode (regardless of armed status)
+        try:
+            print("[ABORT] Switching vehicle to RTL mode...")
+            vehicle.mode = VehicleMode("RTL")
+            print("[ABORT] Vehicle mode set to RTL")
+        except Exception as e:
+            print(f"Error switching to RTL: {e}")
         
         return
     
