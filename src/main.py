@@ -70,14 +70,18 @@ DATABASE_URL = "https://jech-flyt-default-rtdb.asia-southeast1.firebasedatabase.
 firebase_initialized = False
 abort_requested = False  # Global abort flag to stop mission execution
 active_mission_ref = None  # Reference to current mission command in Firebase
+mission_active = False  # Track if a mission is currently active (IN_PROGRESS)
 
 def telemetry_loop(cmd_ref):
     """
-    Sends telemetry updates to Firebase while the drone is armed.
+    Sends telemetry updates to Firebase while mission is active and drone is armed.
     Also listens for ABORT signals.
+    Only sends GPS/telemetry data when mission status is IN_PROGRESS.
     """
-    global abort_requested
+    global abort_requested, mission_active
     print("Starting Telemetry Loop...")
+    mission_active = True  # Mark mission as active when telemetry loop starts
+    
     while vehicle.armed and not abort_requested:
         # 1. Check for Abort (check both global flag and Firebase status)
         try:
@@ -85,6 +89,7 @@ def telemetry_loop(cmd_ref):
             if current_status == 'ABORT_REQUESTED' or abort_requested:
                 print("[ABORT] Received Abort Request! Stopping Mission...")
                 abort_requested = True
+                mission_active = False
                 # Switch to RTL mode for safe return
                 vehicle.mode = VehicleMode("RTL")
                 cmd_ref.update({
@@ -93,25 +98,36 @@ def telemetry_loop(cmd_ref):
                 })
                 print("[ABORT] Mission aborted, returning to launch...")
                 return
+            
+            # Only send telemetry if mission is IN_PROGRESS
+            if current_status != 'IN_PROGRESS':
+                mission_active = False
+                time.sleep(2)
+                continue
+                
         except Exception as e:
             print(f"Abort Check Error: {e}")
 
-        # 2. Send Telemetry
-        try:
-            loc = vehicle.location.global_relative_frame
-            telemetry = {
-                'lat': loc.lat,
-                'lng': loc.lon,
-                'alt': loc.alt,
-                'heading': vehicle.heading,
-                'mode': vehicle.mode.name,
-                'updated_at': int(time.time() * 1000)
-            }
-            cmd_ref.child('telemetry').update(telemetry)
-        except Exception as e:
-            print(f"Telemetry Error: {e}")
+        # 2. Send Telemetry (only when mission is active)
+        if mission_active:
+            try:
+                loc = vehicle.location.global_relative_frame
+                if loc is not None and loc.lat is not None and loc.lon is not None:
+                    telemetry = {
+                        'lat': loc.lat,
+                        'lng': loc.lon,
+                        'alt': loc.alt,
+                        'heading': vehicle.heading,
+                        'mode': vehicle.mode.name,
+                        'updated_at': int(time.time() * 1000)
+                    }
+                    cmd_ref.child('telemetry').update(telemetry)
+            except Exception as e:
+                print(f"Telemetry Error: {e}")
             
         time.sleep(2) # 0.5Hz
+    
+    mission_active = False  # Mark mission as inactive when loop exits
 
 def execute_mission_logic(mission_items, cmd_ref):
     """
@@ -191,17 +207,19 @@ def run_mission_thread(command):
     """
     Runs a mission in a separate thread. Handles mission execution and status updates.
     """
-    global abort_requested, active_mission_ref
+    global abort_requested, active_mission_ref, mission_active
     cmd_id = command.get('id')
     timestamp = command.get('timestamp', 0)
     current_time = int(time.time() * 1000)
     
     ref = db.reference(f'missions/{DRONE_ID}/active_command')
     active_mission_ref = ref
+    mission_active = False  # Reset mission active flag
     
     # 1. Stale Command Check (45 seconds = 45000 ms)
     if current_time - timestamp > 45000:
         print(f"[REJECT] Mission {cmd_id} is STALE ({(current_time - timestamp)/1000:.1f}s old). Ignoring.")
+        mission_active = False
         ref.update({'status': 'EXPIRED_STALE'})
         active_mission_ref = None
         return
@@ -211,6 +229,7 @@ def run_mission_thread(command):
         current_status = ref.child('status').get()
         if current_status == 'ABORT_REQUESTED':
             print(f"[ABORT] Mission {cmd_id} was aborted before processing.")
+            mission_active = False
             ref.update({'status': 'ABORTED', 'aborted_at': int(time.time() * 1000)})
             active_mission_ref = None
             return
@@ -225,6 +244,7 @@ def run_mission_thread(command):
     
     if target_lat is None or target_lng is None:
         print("Invalid Target Location")
+        mission_active = False
         ref.update({'status': 'FAILED', 'error': 'Invalid target location'})
         active_mission_ref = None
         return
@@ -248,12 +268,14 @@ def run_mission_thread(command):
         )
     except Exception as e:
         print(f"Mission generation error: {e}")
+        mission_active = False
         ref.update({'status': 'FAILED', 'error': str(e)})
         active_mission_ref = None
         return
     
     # Update status to IN_PROGRESS
     ref.update({'status': 'IN_PROGRESS', 'started_at': int(time.time() * 1000)})
+    mission_active = True  # Mark mission as active
     
     # Execute mission (this will check for abort internally)
     success = execute_mission_logic(mission_items, ref)
@@ -263,14 +285,17 @@ def run_mission_thread(command):
         final_status = ref.child('status').get()
         if final_status == 'ABORTED':
             print(f"Mission {cmd_id} ended (ABORTED).")
+            mission_active = False
             active_mission_ref = None
             return
         elif success:
+            mission_active = False  # Stop telemetry when mission completes
             ref.update({
                 'status': 'COMPLETED',
                 'completed_at': int(time.time() * 1000)
             })
         else:
+            mission_active = False  # Stop telemetry when mission fails
             ref.update({
                 'status': 'FAILED',
                 'failed_at': int(time.time() * 1000)
@@ -278,6 +303,7 @@ def run_mission_thread(command):
     except Exception as e:
         print(f"Status update error: {e}")
     finally:
+        mission_active = False
         active_mission_ref = None
 
 def check_mission(command):
@@ -285,7 +311,7 @@ def check_mission(command):
     Checks incoming Firebase commands and handles them appropriately.
     Handles PENDING missions and ABORT_REQUESTED status changes.
     """
-    global abort_requested, active_mission_ref
+    global abort_requested, active_mission_ref, mission_active
     
     if not command or not isinstance(command, dict):
         return
@@ -296,6 +322,7 @@ def check_mission(command):
     if status == 'ABORT_REQUESTED':
         print("[ABORT] Abort request received from Firebase!")
         abort_requested = True
+        mission_active = False  # Stop sending telemetry
         
         # If there's an active mission, update its status
         if active_mission_ref:
@@ -319,8 +346,9 @@ def check_mission(command):
     
     # Handle new PENDING missions
     if status == 'PENDING':
-        # Reset abort flag for new mission
+        # Reset abort flag and mission active flag for new mission
         abort_requested = False
+        mission_active = False
         sender = command.get('sender_email', 'Unknown')
         print(f"Received PENDING Mission from {sender}")
         t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread")
@@ -567,12 +595,15 @@ while True:
             send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
     else:
         # Low confidence or no position data - do not send
+        # Only print occasionally to avoid spam (every 5 seconds)
         if time.time() >= time_0 + 1.0/freq_send:
             time_0 = time.time()
-            if last_known_position is None:
-                print(f"[NO DATA] Confidence: {confidence_score:.1f}% | Waiting for initial marker detection...")
-            else:
-                print(f"[LOW CONFIDENCE] Confidence: {confidence_score:.1f}% | Not sending (threshold: {confidence_threshold}%)")
+            # Print only every 5 seconds (5 * freq_send iterations)
+            if int(time.time()) % 5 == 0:
+                if last_known_position is None:
+                    print(f"[NO DATA] Waiting for initial marker detection...")
+                elif confidence_score < confidence_threshold:
+                    print(f"[LOW CONFIDENCE] {confidence_score:.1f}% (threshold: {confidence_threshold}%)")
     
     #--------------------------------------------------
     #-------------- LED CONTROL UPDATE
