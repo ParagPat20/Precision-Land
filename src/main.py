@@ -1,4 +1,5 @@
 """
+Precision Landing System with Firebase Remote Dispatch Integration
 
 NOTE: Call it with Mavlink 2.0 as follows:
 MAVLINK20=1 python test_.....py
@@ -13,6 +14,30 @@ git pull
 sudo python setup.py build
 sudo python setup.py install
 
+FIREBASE INTEGRATION:
+-------------------
+This system integrates with Firebase Realtime Database for remote mission dispatch and control.
+
+Mission Flow:
+1. Flutter app sends mission command with status 'PENDING' to Firebase
+2. This script listens for PENDING commands and starts mission execution
+3. Status updates: PENDING -> IN_PROGRESS -> COMPLETED/FAILED/ABORTED
+
+Abort Handling:
+- Flutter app can send ABORT_REQUESTED status at any time
+- Firebase listener detects ABORT_REQUESTED in real-time
+- Abort works even before mission starts or during execution
+- On abort: switches to RTL mode and updates status to ABORTED
+
+Status Management:
+- PENDING: New mission received, ready to process
+- IN_PROGRESS: Mission is executing
+- COMPLETED: Mission finished successfully
+- FAILED: Mission execution failed
+- ABORTED: Mission was aborted (either by user or system)
+- ABORT_REQUESTED: User requested abort (transient state)
+- EXPIRED_STALE: Mission command was too old (>45s)
+
 """
 from os import sys, path
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
@@ -25,6 +50,7 @@ from collections import deque  # For rolling stability buffer
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
 from pymavlink import mavutil
+import numpy as np
 from opencv.lib_aruco_pose import *
 from led_controller import DroneLEDController
 import threading
@@ -41,15 +67,72 @@ CREDENTIALS_PATH = os.path.join(path.dirname(path.dirname(path.dirname(path.absp
 DATABASE_URL = "https://jech-flyt-default-rtdb.asia-southeast1.firebasedatabase.app"
 
 # --- Firebase & Mission Logic ---
-def execute_mission_logic(mission_items):
+firebase_initialized = False
+abort_requested = False  # Global abort flag to stop mission execution
+active_mission_ref = None  # Reference to current mission command in Firebase
+
+def telemetry_loop(cmd_ref):
+    """
+    Sends telemetry updates to Firebase while the drone is armed.
+    Also listens for ABORT signals.
+    """
+    global abort_requested
+    print("Starting Telemetry Loop...")
+    while vehicle.armed and not abort_requested:
+        # 1. Check for Abort (check both global flag and Firebase status)
+        try:
+            current_status = cmd_ref.child('status').get()
+            if current_status == 'ABORT_REQUESTED' or abort_requested:
+                print("[ABORT] Received Abort Request! Stopping Mission...")
+                abort_requested = True
+                # Switch to RTL mode for safe return
+                vehicle.mode = VehicleMode("RTL")
+                cmd_ref.update({
+                    'status': 'ABORTED',
+                    'aborted_at': int(time.time() * 1000)
+                })
+                print("[ABORT] Mission aborted, returning to launch...")
+                return
+        except Exception as e:
+            print(f"Abort Check Error: {e}")
+
+        # 2. Send Telemetry
+        try:
+            loc = vehicle.location.global_relative_frame
+            telemetry = {
+                'lat': loc.lat,
+                'lng': loc.lon,
+                'alt': loc.alt,
+                'heading': vehicle.heading,
+                'mode': vehicle.mode.name,
+                'updated_at': int(time.time() * 1000)
+            }
+            cmd_ref.child('telemetry').update(telemetry)
+        except Exception as e:
+            print(f"Telemetry Error: {e}")
+            
+        time.sleep(2) # 0.5Hz
+
+def execute_mission_logic(mission_items, cmd_ref):
+    """
+    Executes the mission logic: uploads mission, sets mode, arms, and starts telemetry.
+    Checks for abort requests throughout the process.
+    """
+    global abort_requested
     print("Uploading mission via DroneKit...")
     try:
+        # Check for abort before starting
+        if abort_requested:
+            print("[ABORT] Abort requested before mission upload. Cancelling...")
+            return False
+            
         cmds = vehicle.commands
         cmds.clear()
         
         for item in mission_items:
-            # Create DroneKit Command
-            # Note: DroneKit uses floats for lat/lon, so we use item.x/y directly (assuming valid floats)
+            if abort_requested:
+                print("[ABORT] Abort requested during mission upload. Cancelling...")
+                return False
             cmd = Command(
                 0, 0, 0, 
                 item.frame,
@@ -63,29 +146,77 @@ def execute_mission_logic(mission_items):
         cmds.upload()
         print(f"Mission of {len(mission_items)} items Uploaded!")
         
+        # Check for abort before setting mode
+        if abort_requested:
+            print("[ABORT] Abort requested after mission upload. Cancelling...")
+            return False
+        
         print("Setting Mode to AUTO...")
         vehicle.mode = VehicleMode("AUTO")
+        
+        # Check for abort before arming
+        if abort_requested:
+            print("[ABORT] Abort requested before arming. Cancelling...")
+            return False
         
         print("Arming...")
         vehicle.armed = True
         
-        # We don't block heavily here waiting for arming in the thread, 
-        # or we could wait a bit. The main loop monitors state too.
-        # But for valid dispatch flow, we should ensure it proceeds.
-        # Wait up to 5s for arming
+        # Wait up to 5s for arming, checking for abort during wait
         for _ in range(5):
+            if abort_requested:
+                print("[ABORT] Abort requested during arming wait. Disarming...")
+                vehicle.armed = False
+                return False
             if vehicle.armed:
                 break
             time.sleep(1)
             
         print(f"ARMED Status: {vehicle.armed}")
+        
+        if vehicle.armed and not abort_requested:
+            # Start Telemetry & Monitoring Loop
+            telemetry_loop(cmd_ref)
+        elif abort_requested:
+            print("[ABORT] Abort requested, disarming...")
+            vehicle.armed = False
+            return False
+            
         return True
     except Exception as e:
         print(f"Mission Execution Error: {e}")
         return False
 
 def run_mission_thread(command):
+    """
+    Runs a mission in a separate thread. Handles mission execution and status updates.
+    """
+    global abort_requested, active_mission_ref
     cmd_id = command.get('id')
+    timestamp = command.get('timestamp', 0)
+    current_time = int(time.time() * 1000)
+    
+    ref = db.reference(f'missions/{DRONE_ID}/active_command')
+    active_mission_ref = ref
+    
+    # 1. Stale Command Check (45 seconds = 45000 ms)
+    if current_time - timestamp > 45000:
+        print(f"[REJECT] Mission {cmd_id} is STALE ({(current_time - timestamp)/1000:.1f}s old). Ignoring.")
+        ref.update({'status': 'EXPIRED_STALE'})
+        active_mission_ref = None
+        return
+
+    # 2. Check for abort before processing
+    try:
+        current_status = ref.child('status').get()
+        if current_status == 'ABORT_REQUESTED':
+            print(f"[ABORT] Mission {cmd_id} was aborted before processing.")
+            ref.update({'status': 'ABORTED', 'aborted_at': int(time.time() * 1000)})
+            active_mission_ref = None
+            return
+    except Exception as e:
+        print(f"Status check error: {e}")
+
     print(f"[{threading.current_thread().name}] Processing Mission {cmd_id}")
     payload = command.get('payload', {})
     
@@ -94,51 +225,154 @@ def run_mission_thread(command):
     
     if target_lat is None or target_lng is None:
         print("Invalid Target Location")
+        ref.update({'status': 'FAILED', 'error': 'Invalid target location'})
+        active_mission_ref = None
         return
 
     # Generate Mission
     print("Generating Mission...")
-    template = DeliveryTemplate.get_default_template()
-    # TODO: Get actual home location
-    home_loc = LatLng(0.0, 0.0) 
-    target_loc = LatLng(target_lat, target_lng)
+    try:
+        template = DeliveryTemplate.get_default_template()
+        # Get actual home location from vehicle
+        if vehicle.location.global_frame.lat is not None:
+            home_loc = LatLng(vehicle.location.global_frame.lat, vehicle.location.global_frame.lon)
+        else:
+            home_loc = LatLng(0.0, 0.0) 
+             
+        target_loc = LatLng(target_lat, target_lng)
+        
+        mission_items = template.generate_mission(
+            home_location=home_loc,
+            delivery_location=target_loc,
+            override_values=payload
+        )
+    except Exception as e:
+        print(f"Mission generation error: {e}")
+        ref.update({'status': 'FAILED', 'error': str(e)})
+        active_mission_ref = None
+        return
     
-    mission_items = template.generate_mission(
-        home_location=home_loc,
-        delivery_location=target_loc,
-        override_values=payload
-    )
+    # Update status to IN_PROGRESS
+    ref.update({'status': 'IN_PROGRESS', 'started_at': int(time.time() * 1000)})
     
-    success = execute_mission_logic(mission_items)
+    # Execute mission (this will check for abort internally)
+    success = execute_mission_logic(mission_items, ref)
 
-    ref = db.reference(f'missions/{DRONE_ID}/active_command')
-    if success:
-        ref.update({'status': 'IN_PROGRESS', 'started_at': int(time.time() * 1000)})
-    else:
-        ref.update({'status': 'FAILED'})
+    # Check final status
+    try:
+        final_status = ref.child('status').get()
+        if final_status == 'ABORTED':
+            print(f"Mission {cmd_id} ended (ABORTED).")
+            active_mission_ref = None
+            return
+        elif success:
+            ref.update({
+                'status': 'COMPLETED',
+                'completed_at': int(time.time() * 1000)
+            })
+        else:
+            ref.update({
+                'status': 'FAILED',
+                'failed_at': int(time.time() * 1000)
+            })
+    except Exception as e:
+        print(f"Status update error: {e}")
+    finally:
+        active_mission_ref = None
 
 def check_mission(command):
-    if not command or not isinstance(command, dict): return
-    if command.get('status') == 'PENDING':
+    """
+    Checks incoming Firebase commands and handles them appropriately.
+    Handles PENDING missions and ABORT_REQUESTED status changes.
+    """
+    global abort_requested, active_mission_ref
+    
+    if not command or not isinstance(command, dict):
+        return
+    
+    status = command.get('status')
+    
+    # Handle abort requests (can come at any time)
+    if status == 'ABORT_REQUESTED':
+        print("[ABORT] Abort request received from Firebase!")
+        abort_requested = True
+        
+        # If there's an active mission, update its status
+        if active_mission_ref:
+            try:
+                active_mission_ref.update({
+                    'status': 'ABORTED',
+                    'aborted_at': int(time.time() * 1000)
+                })
+            except Exception as e:
+                print(f"Error updating abort status: {e}")
+        
+        # If vehicle is armed, switch to RTL
+        if vehicle.armed:
+            try:
+                print("[ABORT] Vehicle is armed, switching to RTL mode...")
+                vehicle.mode = VehicleMode("RTL")
+            except Exception as e:
+                print(f"Error switching to RTL: {e}")
+        
+        return
+    
+    # Handle new PENDING missions
+    if status == 'PENDING':
+        # Reset abort flag for new mission
+        abort_requested = False
         sender = command.get('sender_email', 'Unknown')
         print(f"Received PENDING Mission from {sender}")
         t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread")
         t.start()
 
+def firebase_listener_thread():
+    """
+    Firebase listener thread that connects to Firebase and listens for mission commands.
+    Handles both initial state and real-time updates.
+    """
+    global firebase_initialized
+    print("Attempting to connect to Firebase (Background Thread)...")
+    while not firebase_initialized:
+        try:
+            if not firebase_admin._apps:
+                cred = credentials.Certificate(CREDENTIALS_PATH)
+                firebase_admin.initialize_app(cred, {'databaseURL': DATABASE_URL})
+            
+            print("Firebase Connected!")
+            firebase_initialized = True
+            
+            ref = db.reference(f'missions/{DRONE_ID}/active_command')
+            
+            # Initial check - see if there's already a command
+            initial_command = ref.get()
+            if initial_command:
+                print("Found existing command in Firebase, processing...")
+                check_mission(initial_command)
+            
+            # Listen for real-time updates (including abort requests)
+            def on_firebase_event(event):
+                """Handle Firebase real-time events"""
+                try:
+                    if event.data:
+                        check_mission(event.data)
+                    else:
+                        # Command was deleted/cleared
+                        print("[Firebase] Active command cleared.")
+                except Exception as e:
+                    print(f"Firebase event handler error: {e}")
+            
+            ref.listen(on_firebase_event)
+            print("Firebase Listener Active - Listening for commands and abort requests...")
+            
+        except Exception as e:
+            print(f"Firebase Connection Failed: {e}. Retrying in 10s...")
+            time.sleep(10)
+
 def init_firebase_listener():
-    try:
-        cred = credentials.Certificate(CREDENTIALS_PATH)
-        firebase_admin.initialize_app(cred, {'databaseURL': DATABASE_URL})
-        print("Firebase Initialized")
-        
-        ref = db.reference(f'missions/{DRONE_ID}/active_command')
-        # Initial check
-        check_mission(ref.get())
-        # Listen
-        ref.listen(lambda event: check_mission(event.data))
-        print("Firebase Listener Started")
-    except Exception as e:
-        print(f"Firebase Init Error (Check credentials path): {e}")
+    # Start the connection logic in a separate thread so it NEVER blocks the main script
+    t = threading.Thread(target=firebase_listener_thread, name="FirebaseConnectionThread", daemon=True)
+    t.start()
 
 
 
