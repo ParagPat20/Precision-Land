@@ -5,9 +5,7 @@
         "status": {
           ".read": "auth != null",
           ".write": "auth != null",
-          "online": { ".validate": "newData.isBoolean()" },
-          "last_seen": { ".validate": "newData.isNumber()" },
-          "internet": { ".validate": "newData.isBoolean()" }
+          "last_seen": { ".validate": "newData.isNumber()" }
         },
         "active_command": {
           ".read": "auth != null",

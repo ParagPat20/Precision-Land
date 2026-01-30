@@ -418,8 +418,9 @@ def firebase_listener_thread():
 
 def heartbeat_thread():
     """
-    Writes drone status (online, last_seen, internet) to Firebase so the UI can show
-    "Drone online" and "Drone has internet" remotely. Runs every 15s once Firebase is connected.
+    Writes last_seen to Firebase every 15s when connected. The UI infers "Drone online"
+    from recent last_seen. We only ever write when we have internet, so we never write
+    online=false or internet=false; the app treats "no recent update" as offline.
     """
     while not firebase_initialized:
         time.sleep(2)
@@ -428,9 +429,7 @@ def heartbeat_thread():
     while True:
         try:
             status_ref.update({
-                'online': True,
                 'last_seen': int(time.time() * 1000),
-                'internet': True,  # We have internet if this write succeeds
             })
         except Exception as e:
             print(f"[HEARTBEAT] Write failed (no internet?): {e}")
