@@ -2,6 +2,13 @@
   "rules": {
     "missions": {
       "$droneId": {
+        "status": {
+          ".read": "auth != null",
+          ".write": "auth != null",
+          "online": { ".validate": "newData.isBoolean()" },
+          "last_seen": { ".validate": "newData.isNumber()" },
+          "internet": { ".validate": "newData.isBoolean()" }
+        },
         "active_command": {
           ".read": "auth != null",
           ".write": "auth != null",

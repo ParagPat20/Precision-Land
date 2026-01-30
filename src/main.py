@@ -416,10 +416,34 @@ def firebase_listener_thread():
             print(f"Firebase Connection Failed: {e}. Retrying in 10s...")
             time.sleep(10)
 
+def heartbeat_thread():
+    """
+    Writes drone status (online, last_seen, internet) to Firebase so the UI can show
+    "Drone online" and "Drone has internet" remotely. Runs every 15s once Firebase is connected.
+    """
+    while not firebase_initialized:
+        time.sleep(2)
+    status_ref = db.reference(f'missions/{DRONE_ID}/status')
+    interval_sec = 15
+    while True:
+        try:
+            status_ref.update({
+                'online': True,
+                'last_seen': int(time.time() * 1000),
+                'internet': True,  # We have internet if this write succeeds
+            })
+        except Exception as e:
+            print(f"[HEARTBEAT] Write failed (no internet?): {e}")
+        time.sleep(interval_sec)
+
+
 def init_firebase_listener():
     # Start the connection logic in a separate thread so it NEVER blocks the main script
     t = threading.Thread(target=firebase_listener_thread, name="FirebaseConnectionThread", daemon=True)
     t.start()
+    # Start heartbeat so the app can show "Drone online" and "Drone has internet"
+    h = threading.Thread(target=heartbeat_thread, name="DroneStatusHeartbeat", daemon=True)
+    h.start()
 
 
 
