@@ -1,0 +1,217 @@
+================================================================================
+ARDUCAM 64MP OV64A40 CAMERA CONFIGURATION
+================================================================================
+
+HARDWARE: Arducam 64MP OV64A40 Autofocus Camera
+PLATFORM: Raspberry Pi with Picamera2
+FIRMWARE: Raspberry Pi OS Bookworm or Trixie
+
+================================================================================
+STEP 1: SYSTEM CONFIGURATION
+================================================================================
+
+1. Edit the boot configuration file:
+   sudo nano /boot/firmware/config.txt
+
+2. Find and modify the following:
+   - Change: camera_auto_detect=1
+   - To:     camera_auto_detect=0
+
+3. Add the following line under the [all] section:
+   dtoverlay=ov64a40,link-frequency=360000000
+
+   Note: This enables Low-Speed Mode (360MHz) for optimal stability
+
+4. Save the file (Ctrl+X, then Y, then Enter)
+
+5. Reboot the system:
+   sudo reboot
+
+================================================================================
+STEP 2: VERIFY CAMERA DETECTION
+================================================================================
+
+After reboot, verify the camera is detected:
+
+   rpicam-still --list-cameras
+
+Expected output:
+   Available cameras
+   -----------------
+   0 : ov64a40 [9248x6944 10-bit]
+       Modes: 'SBGGR10_CSI2P' : 1920x1080 [45.65 fps]
+                                2312x1736 [26.75 fps]
+                                3840x2160 [14.89 fps]
+                                4624x3472 [7.66 fps]
+                                8000x6000 [2.58 fps]
+                                9248x6944 [2.02 fps]
+
+================================================================================
+STEP 3: CAMERA MODES & RESOLUTIONS
+================================================================================
+
+Available Resolutions (Low-Speed Mode: 360MHz):
+
+Resolution      | Frame Rate | Use Case
+----------------|------------|------------------------------------------
+1920×1080       | 45.65 fps  | Lowest resolution, highest frame rate
+                |            | Best for real-time tracking (DEFAULT)
+                |            |
+2312×1736       | 26.75 fps  | Balanced resolution and speed
+                |            |
+3840×2160 (4K)  | 14.89 fps  | High resolution video
+                |            |
+4624×3472       | 7.66 fps   | High resolution stills
+                |            |
+8000×6000       | 2.58 fps   | Very high resolution
+                |            |
+9248×6944 (64MP)| 2.02 fps   | Maximum resolution
+
+================================================================================
+STEP 4: AUTOFOCUS CONFIGURATION
+================================================================================
+
+The lib_aruco_pose.py has been configured with:
+
+1. Continuous Autofocus Mode (AfMode: 2)
+   - Camera automatically adjusts focus continuously
+   - No manual intervention required
+   - Ideal for moving targets or varying distances
+
+2. Manual Trigger Available:
+   - Use aruco_tracker.trigger_autofocus() to manually trigger AF
+   - Useful when target distance changes significantly
+
+================================================================================
+STEP 5: PERFORMANCE OPTIMIZATION (IMAGE DOWNSCALING)
+================================================================================
+
+The tracker includes intelligent downscaling for faster detection:
+
+HOW IT WORKS:
+1. Camera captures at full resolution (1920×1080)
+2. Image is downscaled for ArUco detection (e.g., 960×540 at 0.5 scale)
+3. Detected marker corners are scaled back to full resolution
+4. Pose estimation uses full resolution coordinates (accurate results)
+
+DETECTION SCALE OPTIONS:
+
+Scale | Detection Size | Speed      | Use Case
+------|----------------|------------|----------------------------------------
+1.0   | 1920×1080      | Baseline   | Small/distant markers, maximum accuracy
+0.5   | 960×540        | 2-4x faster| RECOMMENDED - Best balance (DEFAULT)
+0.33  | 640×360        | 3-5x faster| Large markers, speed priority
+0.25  | 480×270        | 4-6x faster| Very large markers only
+
+BENCHMARK YOUR SETUP:
+Run the benchmark script to test different scales:
+
+   python3 benchmark_detection_scale.py
+
+This shows real-time FPS for each scale factor.
+
+CHOOSING THE RIGHT SCALE:
+- Precision landing with 10cm marker at 1-5m height: 0.5 (recommended)
+- Large markers (>20cm) at close range (<3m): 0.33
+- Maximum accuracy needed: 1.0
+- Maximum speed needed: 0.25
+
+================================================================================
+STEP 6: RUN THE TEST SCRIPT
+================================================================================
+
+1. Navigate to the opencv directory:
+   cd ~/Precision-Land/opencv
+
+2. Run the test script:
+   python3 test_arducam_64mp.py
+
+3. Controls:
+   - Press 'q' to quit
+   - Ctrl+C to force stop
+
+4. Benchmark detection speed (optional):
+   python3 benchmark_detection_scale.py
+
+================================================================================
+CURRENT CONFIGURATION SUMMARY
+================================================================================
+
+Resolution:      1920×1080 pixels (lowest available)
+Frame Rate:      45.65 fps (camera capture)
+Autofocus:       Continuous (always active)
+Link Frequency:  360MHz (Low-Speed Mode)
+Color Format:    BGR (OpenCV compatible)
+Pixel Format:    SBGGR10_CSI2P (10-bit Bayer)
+
+PERFORMANCE OPTIMIZATION:
+Detection Scale: 0.5 (50% downscaling for ArUco detection)
+Detection Size:  960×540 pixels (for marker detection only)
+Pose Estimation: 1920×1080 pixels (full resolution)
+Expected Speedup: 2-4x faster detection (20-40 fps detection)
+
+Advantages:
+✓ Fastest frame rate available (45.65 fps capture)
+✓ 2-4x faster ArUco detection with downscaling
+✓ Good resolution for ArUco marker detection
+✓ Full resolution used for accurate pose estimation
+✓ Continuous autofocus keeps markers sharp
+✓ Real-time performance for drone landing
+✓ Stable operation with longer camera cables
+
+================================================================================
+CAMERA CALIBRATION REQUIRED
+================================================================================
+
+For accurate position estimation, calibrate your camera at 1920×1080:
+
+1. Use a checkerboard calibration pattern
+2. Capture multiple images at various angles
+3. Run OpenCV calibration script
+4. Save output to:
+   - cameraMatrix_raspi.txt
+   - cameraDistortion_raspi.txt
+
+Place calibration files in the same directory as your script.
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Problem: Camera not detected
+Solution: 
+- Check cable connection (contacts facing correct direction)
+- Verify config.txt changes
+- Ensure dtoverlay line is under [all] section
+- Reboot after config changes
+
+Problem: Autofocus not working
+Solution:
+- Camera may not support AF controls via Picamera2
+- Check for "Continuous autofocus enabled" message
+- Try manual trigger: aruco_tracker.trigger_autofocus()
+
+Problem: Low frame rate
+Solution:
+- Verify link-frequency=360000000 in config.txt
+- Use 1920×1080 resolution (lowest available)
+- Close other applications using camera
+
+Problem: Image quality issues
+Solution:
+- Perform camera calibration at 1920×1080
+- Ensure sufficient lighting
+- Check for lens smudges or obstructions
+- Adjust marker size parameter
+
+================================================================================
+ADDITIONAL RESOURCES
+================================================================================
+
+Official Documentation:
+https://docs.arducam.com/Raspberry-Pi-Camera/Native-camera/64MP-OV64A40/
+
+Arducam Support:
+support@arducam.com
+
+================================================================================

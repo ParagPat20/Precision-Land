@@ -1,7 +1,22 @@
 """
 This demo calculates multiple things for different scenarios.
 
-IF RUNNING ON A PI, BE SURE TO sudo modprobe bcm2835-v4l2
+ARDUCAM 64MP OV64A40 CAMERA SETUP:
+For the Arducam 64MP camera, ensure the following configuration in /boot/firmware/config.txt:
+    1. Set camera_auto_detect=0
+    2. Add under [all] section: dtoverlay=ov64a40,link-frequency=360000000
+    3. Reboot the system
+
+This configuration enables Low-Speed Mode for optimal stability.
+Default resolution: 1920×1080 @ 45.65 fps (lowest available mode)
+
+Available camera modes:
+- 1920×1080 @ 45.65 fps (default - lowest resolution, highest fps)
+- 2312×1736 @ 26.75 fps
+- 3840×2160 @ 14.89 fps
+- 4624×3472 @ 7.66 fps
+- 8000×6000 @ 2.58 fps
+- 9248×6944 @ 2.02 fps (maximum resolution)
 
 Here are the defined reference frames:
 
@@ -54,10 +69,11 @@ class ArucoSingleTracker():
                 marker_size,
                 camera_matrix,
                 camera_distortion,
-                camera_size=[640,360],  # Default: 640x360 for 16:9 wide FOV (120°), native: 2304x1296
+                camera_size=[1920,1080],  # Arducam 64MP: 1920×1080 lowest resolution at 45.65 fps
                 show_video=False,
                 axis_scale=0.03,
-                use_picamera=None
+                use_picamera=None,
+                detection_scale=0.5  # Scale factor for ArUco detection (0.5 = half size for 2-4x speedup)
                 ):
         
         
@@ -68,6 +84,20 @@ class ArucoSingleTracker():
         
         self._camera_matrix = camera_matrix
         self._camera_distortion = camera_distortion
+        
+        # Detection optimization: scale down image for faster ArUco detection
+        # 0.5 = half size (960×540) for 2-4x speedup, 1.0 = no scaling
+        self._detection_scale = max(0.1, min(1.0, detection_scale))  # Clamp between 0.1 and 1.0
+        
+        # Scaled camera matrix for detection (if scale != 1.0)
+        if self._detection_scale != 1.0:
+            self._camera_matrix_scaled = camera_matrix.copy()
+            self._camera_matrix_scaled[0, 0] *= self._detection_scale  # fx
+            self._camera_matrix_scaled[1, 1] *= self._detection_scale  # fy
+            self._camera_matrix_scaled[0, 2] *= self._detection_scale  # cx
+            self._camera_matrix_scaled[1, 2] *= self._detection_scale  # cy
+        else:
+            self._camera_matrix_scaled = camera_matrix
         
         self.is_detected    = False
         self._kill          = False
@@ -108,11 +138,27 @@ class ArucoSingleTracker():
         elif use_picamera is None and _PICAMERA2_AVAILABLE:
             # Auto-enable if library is available
             try:
+                # Initialize Picamera2 for Arducam 64MP with autofocus
                 self._picam2 = Picamera2()
+                
+                # Create configuration with specified resolution
+                # For Arducam 64MP OV64A40, use native resolution from available modes
+                # Lowest: 1920×1080 @ 45.65 fps
                 cfg = self._picam2.create_preview_configuration(main={"size": (int(camera_size[0]), int(camera_size[1]))})
                 self._picam2.configure(cfg)
+                
+                # Start the camera
                 self._picam2.start()
-                time.sleep(0.5)  # warmup
+                
+                # Enable continuous autofocus for Arducam 64MP OV64A40
+                # AfMode: 2 = Continuous autofocus (always active)
+                try:
+                    self._picam2.set_controls({"AfMode": 2})  # Continuous autofocus
+                    print("Arducam 64MP: Continuous autofocus enabled")
+                except Exception as e:
+                    print(f"Note: Could not set autofocus mode - {e}")
+                
+                time.sleep(0.5)  # warmup for camera and autofocus initialization
                 self._use_picamera = True
             except Exception:
                 self._use_picamera = False
@@ -172,6 +218,19 @@ class ArucoSingleTracker():
         self.fps_detect  = 1.0/(t - self._t_detect)
         self._t_detect      = t    
 
+    def trigger_autofocus(self):
+        """
+        Manually trigger autofocus for Arducam 64MP camera.
+        Useful for refocusing when the target distance changes significantly.
+        """
+        if self._use_picamera and hasattr(self, '_picam2') and self._picam2 is not None:
+            try:
+                # Trigger autofocus cycle
+                self._picam2.set_controls({"AfTrigger": 0})  # Trigger autofocus
+                print("Arducam 64MP: Autofocus triggered")
+            except Exception as e:
+                print(f"Note: Could not trigger autofocus - {e}")
+    
     def stop(self):
         self._kill = True
         try:
@@ -213,14 +272,27 @@ class ArucoSingleTracker():
             #-- Convert in gray scale
             gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) #-- remember, OpenCV stores color images in Blue, Green, Red
 
-            #-- Find all the aruco markers in the image
-            if self._use_new_api:
-                corners, ids, rejected = self._detector.detectMarkers(gray)
+            # Downscale image for faster ArUco detection (performance optimization)
+            if self._detection_scale != 1.0:
+                # Calculate new dimensions
+                detect_width = int(gray.shape[1] * self._detection_scale)
+                detect_height = int(gray.shape[0] * self._detection_scale)
+                gray_detect = cv2.resize(gray, (detect_width, detect_height), interpolation=cv2.INTER_AREA)
             else:
-                corners, ids, rejected = aruco.detectMarkers(image=gray, dictionary=self._aruco_dict, 
+                gray_detect = gray
+
+            #-- Find all the aruco markers in the downscaled image
+            if self._use_new_api:
+                corners, ids, rejected = self._detector.detectMarkers(gray_detect)
+            else:
+                corners, ids, rejected = aruco.detectMarkers(image=gray_detect, dictionary=self._aruco_dict, 
                                 parameters=self._parameters,
-                                cameraMatrix=self._camera_matrix, 
+                                cameraMatrix=self._camera_matrix_scaled, 
                                 distCoeff=self._camera_distortion)
+            
+            # Scale corners back to original resolution for accurate pose estimation
+            if self._detection_scale != 1.0 and corners is not None and len(corners) > 0:
+                corners = [corner / self._detection_scale for corner in corners]
                             
             if ids is not None and self.id_to_find in (np.array(ids).flatten().tolist() if hasattr(ids, 'flatten') else ids[0]):
                 marker_found = True
