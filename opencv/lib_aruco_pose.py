@@ -261,11 +261,20 @@ class ArucoSingleTracker():
                     rgb = self._picam2.capture_array()
                     frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                     ret = True
-                except Exception:
+                except Exception as e:
+                    print(f"Picamera2 capture error: {e}")
                     ret = False
                     frame = None
             else:
                 ret, frame = self._cap.read()
+
+            # Check if frame is valid before processing
+            if not ret or frame is None:
+                if verbose:
+                    print("Failed to capture frame")
+                if not loop:
+                    return (False, 0, 0, 0)
+                continue
 
             self._update_fps_read()
             

@@ -585,7 +585,7 @@ camera_matrix       = np.loadtxt(calib_path+'cameraMatrix_raspi.txt', delimiter=
 camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_raspi.txt', delimiter=',')                                      
 aruco_tracker       = ArucoSingleTracker(id_to_find=id_to_find, marker_size=marker_size, show_video=True, axis_scale=0.01,
                 camera_matrix=camera_matrix, camera_distortion=camera_distortion, camera_size=camera_resolution,
-                use_picamera=True, detection_scale=0.5)
+                detection_scale=0.5)
                 
                 
 time_0 = time.time()
