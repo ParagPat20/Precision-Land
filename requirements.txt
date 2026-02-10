@@ -10,10 +10,12 @@ opencv-contrib-python==4.5.5.64
 
 # MAVLink / DroneKit stack
 pymavlink==2.4.40
-DroneKit==2.9.2
+dronekit==2.9.2
 
 # LED Control (Adafruit CircuitPython)
 adafruit-circuitpython-neopixel
 adafruit-blinka
 adafruit-circuitpython-raspberry-pi5-neopixel-write; platform_machine == "aarch64"
 rpi_ws281x; platform_machine != "aarch64"
+firebase-admin>=6.0.0
+
