@@ -577,15 +577,16 @@ freq_send       = 10 #- Hz
 # Find full directory path of this script, used for loading config and other files
 cwd                 = path.dirname(path.abspath(__file__))
 calib_path          = cwd+"/../opencv/"
-# Arducam 64MP OV64A40 Camera configuration
-# Available resolutions: 1920×1080 @ 45.65fps (lowest), up to 9248×6944 @ 2fps (max)
-# Using 1920×1080 for optimal speed/quality balance
-camera_resolution   = [1920, 1080]  # Arducam 64MP lowest resolution mode
-camera_matrix       = np.loadtxt(calib_path+'cameraMatrix_raspi.txt', delimiter=',')
-camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_raspi.txt', delimiter=',')                                      
+# Arducam 64MP OV64A40 camera resolution
+# Native: 9248x6944 (64MP)
+# Available modes: 1920x1080@45fps, 2312x1736@26fps, 3840x2160@14fps, 4624x3472@7fps
+# Using 1920x1080@45fps for optimal balance between resolution and frame rate for precision landing
+# Higher resolution allows marker detection from greater altitudes with continuous autofocus
+camera_resolution   = [1920, 1080]  # 16:9 aspect ratio, 45fps with link-frequency=360000000
+camera_matrix       = np.loadtxt(calib_path+'cameraMatrix_webcam.txt', delimiter=',')
+camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_webcam.txt', delimiter=',')                                      
 aruco_tracker       = ArucoSingleTracker(id_to_find=id_to_find, marker_size=marker_size, show_video=True, axis_scale=0.01,
-                camera_matrix=camera_matrix, camera_distortion=camera_distortion, camera_size=camera_resolution,
-                detection_scale=0.5)
+                camera_matrix=camera_matrix, camera_distortion=camera_distortion, camera_size=camera_resolution)
                 
                 
 time_0 = time.time()
