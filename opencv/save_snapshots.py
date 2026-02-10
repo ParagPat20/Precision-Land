@@ -2,11 +2,18 @@
 Saves a series of snapshots with the current camera as snapshot_<width>_<height>_<nnn>.jpg
 Uses Raspberry Pi camera (Picamera2) if available, falls back to OpenCV for regular cameras.
 
+Configured for Arducam 64MP OV64A40 Camera:
+- Default resolution: 1920×1080 (lowest available mode, 45.65 fps)
+- Autofocus: Continuous mode enabled automatically
+- Use these snapshots for camera calibration at 1920×1080
+
 Arguments:
-    --f <output folder>     default: current folder
-    --n <file name>         default: snapshot
-    --w <width px>          default: none
-    --h <height px>         default: none
+    --folder <output folder>    default: current folder
+    --name <file name>          default: snapshot
+    --dwidth <width px>         default: 1920
+    --dheight <height px>       default: 1080
+    --raspi                     Force Raspberry Pi camera mode
+    --no-raspi                  Force OpenCV camera mode
 
 Buttons:
     q           - quit
@@ -52,6 +59,14 @@ def save_snaps_picamera2(width=0, height=0, name="snapshot", folder="."):
             eff_w, eff_h = config["main"]["size"]
 
         cam.start()
+        
+        # Enable continuous autofocus for Arducam 64MP
+        try:
+            cam.set_controls({"AfMode": 2})  # Continuous autofocus
+            print("Arducam 64MP: Continuous autofocus enabled")
+        except Exception as e:
+            print(f"Note: Could not enable autofocus - {e}")
+        
         time.sleep(0.5)  # brief warmup
 
         nSnap = 0
@@ -148,12 +163,13 @@ def main():
     # ---- DEFAULT VALUES ---
     SAVE_FOLDER = "."
     FILE_NAME = "snapshot"
-    # Raspberry Pi Module 3 NoIR Wide camera
-    # Native resolution: 2304x1296 (16:9, 120° FOV, 50fps capable)
-    # Recommended for calibration: 640x360 (16:9 aspect ratio, faster processing)
+    # Arducam 64MP OV64A40 Camera
+    # Maximum resolution: 9248×6944 (64MP)
+    # Lowest resolution: 1920×1080 @ 45.65 fps
+    # Recommended for calibration: 1920×1080 (native mode, good balance)
     # Set to 0 to use camera default
-    FRAME_WIDTH = 640   # Use 640x360 for calibration (preserves wide FOV)
-    FRAME_HEIGHT = 360  # 16:9 aspect ratio
+    FRAME_WIDTH = 1920   # Arducam 64MP lowest resolution
+    FRAME_HEIGHT = 1080  # 16:9 aspect ratio
 
     # ----------- PARSE THE INPUTS -----------------
     parser = argparse.ArgumentParser(
