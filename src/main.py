@@ -604,6 +604,7 @@ last_known_position = None  # Store last known valid position (x_cm, y_cm, z_cm)
 confidence_threshold =20.0  # Minimum confidence percentage to send position data
 
 print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_threshold}%)")
+print("[DEBUG] Starting main tracking loop...")
 
 while True:                
     # Detect marker in current frame

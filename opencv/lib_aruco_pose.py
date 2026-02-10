@@ -124,6 +124,7 @@ class ArucoSingleTracker():
                 
                 time.sleep(0.5)  # warmup for camera and autofocus to stabilize
                 self._use_picamera = True
+                print(f"[CAMERA] Picamera2 initialized successfully at {camera_size[0]}x{camera_size[1]}")
             except Exception:
                 self._use_picamera = False
 
@@ -204,6 +205,9 @@ class ArucoSingleTracker():
         marker_found = False
         x = y = z = 0
         
+        # Debug: Print tracking configuration on first call
+        print(f"[DEBUG] Starting ArUco tracking - loop={loop}, show_video={show_video}, using_picamera={self._use_picamera}")
+        
         while not self._kill:
             
             #-- Read the camera frame (Picamera2 or OpenCV)
@@ -212,13 +216,27 @@ class ArucoSingleTracker():
                     rgb = self._picam2.capture_array()
                     frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                     ret = True
-                except Exception:
+                except Exception as e:
                     ret = False
                     frame = None
+                    print(f"[DEBUG] Picamera2 capture failed: {e}")
             else:
                 ret, frame = self._cap.read()
+                if not ret:
+                    print("[DEBUG] OpenCV capture failed")
+
+            if not ret or frame is None:
+                print("[DEBUG] Failed to capture frame, skipping iteration")
+                continue
 
             self._update_fps_read()
+            
+            # Debug: Print frame properties (only once per 30 frames to avoid spam)
+            if hasattr(self, '_frame_count'):
+                self._frame_count += 1
+            else:
+                self._frame_count = 0
+                print(f"[DEBUG] Frame captured: shape={frame.shape}, dtype={frame.dtype}, fps_read={self.fps_read:.1f}")
             
             #-- Convert in gray scale
             gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) #-- remember, OpenCV stores color images in Blue, Green, Red
@@ -231,10 +249,18 @@ class ArucoSingleTracker():
                                 parameters=self._parameters,
                                 cameraMatrix=self._camera_matrix, 
                                 distCoeff=self._camera_distortion)
+            
+            # Debug: Print detection results (only when markers are found or occasionally)
+            if ids is not None:
+                detected_ids = np.array(ids).flatten().tolist() if hasattr(ids, 'flatten') else ids[0]
+                print(f"[DEBUG] ArUco markers detected: {detected_ids}, looking for ID {self.id_to_find}")
+            elif self._frame_count % 60 == 0:  # Print every 60 frames when no detection
+                print(f"[DEBUG] No ArUco markers detected (looking for ID {self.id_to_find})")
                             
             if ids is not None and self.id_to_find in (np.array(ids).flatten().tolist() if hasattr(ids, 'flatten') else ids[0]):
                 marker_found = True
                 self._update_fps_detect()
+                print(f"[DEBUG] ✓ Target marker ID {self.id_to_find} FOUND!")
                 # select correct marker index
                 ids_flat = np.array(ids).flatten()
                 idx = int(np.where(ids_flat == self.id_to_find)[0][0]) if hasattr(ids_flat, 'shape') else 0
@@ -323,13 +349,26 @@ class ArucoSingleTracker():
 
 
             else:
+                marker_found = False
                 if verbose:
                     print("Nothing detected - fps = %.0f" % self.fps_read)
             
 
             if show_video:
+                # Debug: First time video window is created
+                if not hasattr(self, '_video_window_created'):
+                    self._video_window_created = True
+                    print(f"[DEBUG] Creating video window 'frame' with size {frame.shape[1]}x{frame.shape[0]}")
+                    print("[DEBUG] NOTE: If running headless (no display), video window will not show. Set show_video=False to disable.")
+                
                 #--- Display the frame
-                cv2.imshow('frame', frame)
+                try:
+                    cv2.imshow('frame', frame)
+                except Exception as e:
+                    if not hasattr(self, '_video_display_error_shown'):
+                        self._video_display_error_shown = True
+                        print(f"[DEBUG] Video display error (headless?): {e}")
+                        print("[DEBUG] Continuing without video display...")
 
                 #--- use 'q' to quit
                 key = cv2.waitKey(1) & 0xFF
@@ -348,7 +387,10 @@ class ArucoSingleTracker():
                     cv2.destroyAllWindows()
                     break
             
-            if not loop: return(marker_found, x, y, z)
+            if not loop:
+                if self._frame_count % 30 == 0:  # Debug every 30 frames
+                    print(f"[DEBUG] Returning from track(): marker_found={marker_found}, x={x:.1f}, y={y:.1f}, z={z:.1f}")
+                return(marker_found, x, y, z)
             
 
 if __name__ == "__main__":
