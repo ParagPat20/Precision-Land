@@ -205,8 +205,10 @@ class ArucoSingleTracker():
         marker_found = False
         x = y = z = 0
         
-        # Debug: Print tracking configuration on first call
-        print(f"[DEBUG] Starting ArUco tracking - loop={loop}, show_video={show_video}, using_picamera={self._use_picamera}")
+        # Debug: Print tracking configuration on first call only
+        if not hasattr(self, '_track_started'):
+            self._track_started = True
+            print(f"[DEBUG] Starting ArUco tracking - loop={loop}, show_video={show_video}, using_picamera={self._use_picamera}")
         
         while not self._kill:
             

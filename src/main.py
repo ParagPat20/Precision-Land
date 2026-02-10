@@ -568,7 +568,8 @@ init_firebase_listener()
 #-------------- LANDING MARKER  
 #--------------------------------------------------    
 #--- Define Tag
-id_to_find      = 72
+# IMPORTANT: Update this ID to match your physical ArUco marker
+id_to_find      = 132  # Changed from 72 to match detected marker
 marker_size     = 29.7 #- [cm]
 freq_send       = 10 #- Hz
 
