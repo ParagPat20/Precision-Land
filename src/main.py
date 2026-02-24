@@ -448,7 +448,14 @@ def firebase_listener_thread():
                 
                 print(f"[FIREBASE DEBUG] [TIMING] Initializing Firebase app with database: {DATABASE_URL}")
                 init_start = time.time()
-                firebase_admin.initialize_app(cred, {'databaseURL': DATABASE_URL})
+                
+                # Set timeout for Firebase operations to fail faster if network is bad
+                # This prevents hanging for too long on bad connections
+                options = {
+                    'databaseURL': DATABASE_URL,
+                    'httpTimeout': 30.0  # 30 second timeout for HTTP operations
+                }
+                firebase_admin.initialize_app(cred, options)
                 print(f"[FIREBASE DEBUG] [TIMING] Firebase app initialized in {time.time() - init_start:.2f}s")
             
             print(f"[FIREBASE DEBUG] [OK] Firebase Connected! (Total time: {time.time() - start_time:.1f}s)")
