@@ -552,8 +552,11 @@ def heartbeat_thread():
 
 def init_firebase_listener():
     # Start the connection logic in a separate thread so it NEVER blocks the main script
+    # Main script (ArUco tracking, vehicle connection) starts immediately
     t = threading.Thread(target=firebase_listener_thread, name="FirebaseConnectionThread", daemon=True)
     t.start()
+    print("[FIREBASE DEBUG] Firebase connection started in background (non-blocking)")
+    print("[FIREBASE DEBUG] Main script will continue while Firebase connects...")
     # Start heartbeat so the app can show "Drone online" and "Drone has internet"
     h = threading.Thread(target=heartbeat_thread, name="DroneStatusHeartbeat", daemon=True)
     h.start()
