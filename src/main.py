@@ -138,7 +138,7 @@ def telemetry_loop(cmd_ref):
                         'updated_at': int(time.time() * 1000)
                     }
                     cmd_ref.child('telemetry').update(telemetry)
-                    print(f"[FIREBASE DEBUG] ✓ Telemetry sent: lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, heading={vehicle.heading}°, mode={vehicle.mode.name}")
+                    print(f"[FIREBASE DEBUG] [OK] Telemetry sent: lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, heading={vehicle.heading}°, mode={vehicle.mode.name}")
                 else:
                     print("[FIREBASE DEBUG] Location data not available, skipping telemetry send")
             except Exception as e:
@@ -424,26 +424,65 @@ def firebase_listener_thread():
     """
     global firebase_initialized
     print("[FIREBASE DEBUG] Attempting to connect to Firebase (Background Thread)...")
+    start_time = time.time()
+    
+    # Pre-flight checks
+    print(f"[FIREBASE DEBUG] [CHECK] Verifying service account key exists: {CREDENTIALS_PATH}")
+    if not os.path.exists(CREDENTIALS_PATH):
+        print(f"[FIREBASE DEBUG] [ERROR] Service account key NOT FOUND at: {CREDENTIALS_PATH}")
+        print("[FIREBASE DEBUG] [ERROR] Cannot initialize Firebase without credentials!")
+        return
+    else:
+        file_size = os.path.getsize(CREDENTIALS_PATH)
+        print(f"[FIREBASE DEBUG] [CHECK] Service account key found ({file_size} bytes)")
+    
     while not firebase_initialized:
         try:
-            if not firebase_admin._apps:
-                cred = credentials.Certificate(CREDENTIALS_PATH)
-                firebase_admin.initialize_app(cred, {'databaseURL': DATABASE_URL})
+            print(f"[FIREBASE DEBUG] [TIMING] Starting Firebase initialization... (elapsed: {time.time() - start_time:.1f}s)")
             
-            print("[FIREBASE DEBUG] ✓ Firebase Connected!")
+            if not firebase_admin._apps:
+                print(f"[FIREBASE DEBUG] [TIMING] Loading credentials from: {CREDENTIALS_PATH}")
+                cred_start = time.time()
+                cred = credentials.Certificate(CREDENTIALS_PATH)
+                print(f"[FIREBASE DEBUG] [TIMING] Credentials loaded in {time.time() - cred_start:.2f}s")
+                
+                print(f"[FIREBASE DEBUG] [TIMING] Initializing Firebase app with database: {DATABASE_URL}")
+                init_start = time.time()
+                firebase_admin.initialize_app(cred, {'databaseURL': DATABASE_URL})
+                print(f"[FIREBASE DEBUG] [TIMING] Firebase app initialized in {time.time() - init_start:.2f}s")
+            
+            print(f"[FIREBASE DEBUG] [OK] Firebase Connected! (Total time: {time.time() - start_time:.1f}s)")
             print(f"[FIREBASE DEBUG] Database URL: {DATABASE_URL}")
             print(f"[FIREBASE DEBUG] Drone ID: {DRONE_ID}")
             firebase_initialized = True
             
+            print(f"[FIREBASE DEBUG] [TIMING] Getting database reference...")
+            ref_start = time.time()
             ref = db.reference(f'missions/{DRONE_ID}/active_command')
+            print(f"[FIREBASE DEBUG] [TIMING] Database reference obtained in {time.time() - ref_start:.2f}s")
             print(f"[FIREBASE DEBUG] Listening to path: missions/{DRONE_ID}/active_command")
             
             # Initial check - see if there's already a command
+            print(f"[FIREBASE DEBUG] [TIMING] Fetching initial command from Firebase...")
+            fetch_start = time.time()
             initial_command = ref.get()
+            print(f"[FIREBASE DEBUG] [TIMING] Initial command fetched in {time.time() - fetch_start:.2f}s")
+            
             if initial_command:
+                initial_status = initial_command.get('status')
                 print("[FIREBASE DEBUG] Found existing command in Firebase:")
-                print(f"[FIREBASE DEBUG] {initial_command}")
-                check_mission(initial_command)
+                print(f"[FIREBASE DEBUG] Command ID: {initial_command.get('id')}")
+                print(f"[FIREBASE DEBUG] Status: {initial_status}")
+                print(f"[FIREBASE DEBUG] Timestamp: {initial_command.get('timestamp')}")
+                
+                # Only process PENDING commands on startup
+                # Skip old FAILED, ABORTED, COMPLETED commands to avoid confusion
+                if initial_status == 'PENDING':
+                    print("[FIREBASE DEBUG] Processing PENDING command...")
+                    check_mission(initial_command)
+                else:
+                    print(f"[FIREBASE DEBUG] Skipping old command with status '{initial_status}' (not PENDING)")
+                    print("[FIREBASE DEBUG] Waiting for new PENDING command...")
             else:
                 print("[FIREBASE DEBUG] No existing command found in Firebase")
             
@@ -464,11 +503,16 @@ def firebase_listener_thread():
                     print(f"[FIREBASE DEBUG] Firebase event handler error: {e}")
                     traceback.print_exc()
             
+            print(f"[FIREBASE DEBUG] [TIMING] Setting up Firebase listener...")
+            listener_start = time.time()
             ref.listen(on_firebase_event)
-            print("[FIREBASE DEBUG] ✓ Firebase Listener Active - Listening for commands and abort requests...")
+            print(f"[FIREBASE DEBUG] [TIMING] Listener setup completed in {time.time() - listener_start:.2f}s")
+            print(f"[FIREBASE DEBUG] [OK] Firebase Listener Active - Listening for commands and abort requests...")
+            print(f"[FIREBASE DEBUG] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
             
         except Exception as e:
             print(f"[FIREBASE DEBUG] Firebase Connection Failed: {e}. Retrying in 10s...")
+            print(f"[FIREBASE DEBUG] [TIMING] Failed at {time.time() - start_time:.1f}s")
             traceback.print_exc()
             time.sleep(10)
 
@@ -482,7 +526,7 @@ def heartbeat_thread():
     while not firebase_initialized:
         time.sleep(2)
     status_ref = db.reference(f'missions/{DRONE_ID}/status')
-    print(f"[FIREBASE DEBUG] ✓ Heartbeat thread started - writing to missions/{DRONE_ID}/status")
+    print(f"[FIREBASE DEBUG] [OK] Heartbeat thread started - writing to missions/{DRONE_ID}/status")
     interval_sec = 15
     while True:
         try:
@@ -491,7 +535,7 @@ def heartbeat_thread():
                 'last_seen': current_time,
             })
             readable_time = format_timestamp(current_time)
-            print(f"[FIREBASE DEBUG] ✓ Heartbeat sent - last_seen: {current_time} ({readable_time})")
+            print(f"[FIREBASE DEBUG] [OK] Heartbeat sent - last_seen: {current_time} ({readable_time})")
         except Exception as e:
             print(f"[FIREBASE DEBUG] [HEARTBEAT] Write failed (no internet?): {e}")
         time.sleep(interval_sec)
