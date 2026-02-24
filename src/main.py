@@ -462,31 +462,7 @@ def firebase_listener_thread():
             print(f"[FIREBASE DEBUG] [TIMING] Database reference obtained in {time.time() - ref_start:.2f}s")
             print(f"[FIREBASE DEBUG] Listening to path: missions/{DRONE_ID}/active_command")
             
-            # Initial check - see if there's already a command
-            print(f"[FIREBASE DEBUG] [TIMING] Fetching initial command from Firebase...")
-            fetch_start = time.time()
-            initial_command = ref.get()
-            print(f"[FIREBASE DEBUG] [TIMING] Initial command fetched in {time.time() - fetch_start:.2f}s")
-            
-            if initial_command:
-                initial_status = initial_command.get('status')
-                print("[FIREBASE DEBUG] Found existing command in Firebase:")
-                print(f"[FIREBASE DEBUG] Command ID: {initial_command.get('id')}")
-                print(f"[FIREBASE DEBUG] Status: {initial_status}")
-                print(f"[FIREBASE DEBUG] Timestamp: {initial_command.get('timestamp')}")
-                
-                # Only process PENDING commands on startup
-                # Skip old FAILED, ABORTED, COMPLETED commands to avoid confusion
-                if initial_status == 'PENDING':
-                    print("[FIREBASE DEBUG] Processing PENDING command...")
-                    check_mission(initial_command)
-                else:
-                    print(f"[FIREBASE DEBUG] Skipping old command with status '{initial_status}' (not PENDING)")
-                    print("[FIREBASE DEBUG] Waiting for new PENDING command...")
-            else:
-                print("[FIREBASE DEBUG] No existing command found in Firebase")
-            
-            # Listen for real-time updates (including abort requests)
+            # Listen for real-time updates FIRST (don't wait for initial fetch)
             def on_firebase_event(event):
                 """Handle Firebase real-time events"""
                 try:
@@ -509,6 +485,39 @@ def firebase_listener_thread():
             print(f"[FIREBASE DEBUG] [TIMING] Listener setup completed in {time.time() - listener_start:.2f}s")
             print(f"[FIREBASE DEBUG] [OK] Firebase Listener Active - Listening for commands and abort requests...")
             print(f"[FIREBASE DEBUG] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
+            
+            # Fetch initial command in background (don't block the main listener)
+            # This way the system is ready to receive new commands immediately
+            def fetch_initial_command():
+                try:
+                    print(f"[FIREBASE DEBUG] [TIMING] Fetching initial command from Firebase (background)...")
+                    fetch_start = time.time()
+                    initial_command = ref.get()
+                    print(f"[FIREBASE DEBUG] [TIMING] Initial command fetched in {time.time() - fetch_start:.2f}s")
+                    
+                    if initial_command:
+                        initial_status = initial_command.get('status')
+                        print("[FIREBASE DEBUG] Found existing command in Firebase:")
+                        print(f"[FIREBASE DEBUG] Command ID: {initial_command.get('id')}")
+                        print(f"[FIREBASE DEBUG] Status: {initial_status}")
+                        print(f"[FIREBASE DEBUG] Timestamp: {initial_command.get('timestamp')}")
+                        
+                        # Only process PENDING commands on startup
+                        if initial_status == 'PENDING':
+                            print("[FIREBASE DEBUG] Processing PENDING command...")
+                            check_mission(initial_command)
+                        else:
+                            print(f"[FIREBASE DEBUG] Skipping old command with status '{initial_status}' (not PENDING)")
+                    else:
+                        print("[FIREBASE DEBUG] No existing command found in Firebase")
+                except Exception as e:
+                    print(f"[FIREBASE DEBUG] Error fetching initial command: {e}")
+                    traceback.print_exc()
+            
+            # Start initial fetch in background thread so it doesn't block
+            initial_fetch_thread = threading.Thread(target=fetch_initial_command, name="InitialFetchThread", daemon=True)
+            initial_fetch_thread.start()
+            print("[FIREBASE DEBUG] Initial command fetch started in background thread")
             
         except Exception as e:
             print(f"[FIREBASE DEBUG] Firebase Connection Failed: {e}. Retrying in 10s...")
