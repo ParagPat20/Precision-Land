@@ -487,10 +487,13 @@ def firebase_listener_thread():
                     traceback.print_exc()
             
             print(f"[FIREBASE DEBUG] [TIMING] Setting up Firebase listener...")
+            print("[FIREBASE DEBUG] This may take 3-5 minutes due to network latency to Singapore...")
+            print("[FIREBASE DEBUG] System is fully operational during this time! ArUco tracking works!")
             listener_start = time.time()
             ref.listen(on_firebase_event)
             print(f"[FIREBASE DEBUG] [TIMING] Listener setup completed in {time.time() - listener_start:.2f}s")
-            print(f"[FIREBASE DEBUG] [OK] Firebase Listener Active - Listening for commands and abort requests...")
+            print("[FIREBASE DEBUG] [OK] Firebase Listener Active - Listening for commands and abort requests...")
+            print("[FIREBASE DEBUG] READY! System can now receive missions from app!")
             print(f"[FIREBASE DEBUG] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
             
             # Fetch initial command in background (don't block the main listener)
