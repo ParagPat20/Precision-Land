@@ -46,7 +46,9 @@ import time
 import math
 import argparse
 import os
+import traceback
 from collections import deque  # For rolling stability buffer
+from datetime import datetime
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
 from pymavlink import mavutil
@@ -57,6 +59,12 @@ import threading
 import firebase_admin
 from firebase_admin import credentials, db
 from core.mission_generator import DeliveryTemplate, LatLng
+
+# Helper function to format timestamp for debugging
+def format_timestamp(timestamp_ms):
+    """Convert milliseconds timestamp to readable format HH:MM:SS DD/MM/YY"""
+    dt = datetime.fromtimestamp(timestamp_ms / 1000.0)
+    return dt.strftime("%H:%M:%S %d/%m/%y")
 
 # --- Configuration ---
 DRONE_ID = "Victoris"
@@ -135,6 +143,7 @@ def telemetry_loop(cmd_ref):
                     print("[FIREBASE DEBUG] Location data not available, skipping telemetry send")
             except Exception as e:
                 print(f"[FIREBASE DEBUG] Telemetry Error: {e}")
+                traceback.print_exc()
             
         time.sleep(2) # 0.5Hz
     
@@ -225,6 +234,7 @@ def execute_mission_logic(mission_items, cmd_ref):
         return True
     except Exception as e:
         print(f"[FIREBASE DEBUG] Mission Execution Error: {e}")
+        traceback.print_exc()
         return False
 
 def run_mission_thread(command):
@@ -238,8 +248,8 @@ def run_mission_thread(command):
     
     print(f"[FIREBASE DEBUG] ========== NEW MISSION RECEIVED ==========")
     print(f"[FIREBASE DEBUG] Mission ID: {cmd_id}")
-    print(f"[FIREBASE DEBUG] Timestamp: {timestamp}")
-    print(f"[FIREBASE DEBUG] Current Time: {current_time}")
+    print(f"[FIREBASE DEBUG] Timestamp: {timestamp} ({format_timestamp(timestamp)})")
+    print(f"[FIREBASE DEBUG] Current Time: {current_time} ({format_timestamp(current_time)})")
     print(f"[FIREBASE DEBUG] Age: {(current_time - timestamp)/1000:.1f} seconds")
     
     ref = db.reference(f'missions/{DRONE_ID}/active_command')
@@ -290,7 +300,7 @@ def run_mission_thread(command):
         # Get actual home location from vehicle
         if vehicle.location.global_frame.lat is not None:
             home_loc = LatLng(vehicle.location.global_frame.lat, vehicle.location.global_frame.lon)
-            print(f"[FIREBASE DEBUG] Home Location: ({home_loc.lat}, {home_loc.lng})")
+            print(f"[FIREBASE DEBUG] Home Location: ({home_loc.latitude}, {home_loc.longitude})")
         else:
             home_loc = LatLng(0.0, 0.0)
             print("[FIREBASE DEBUG] [WARNING] Vehicle location not available, using (0,0)")
@@ -305,6 +315,8 @@ def run_mission_thread(command):
         print(f"[FIREBASE DEBUG] Mission generated with {len(mission_items)} waypoints")
     except Exception as e:
         print(f"[FIREBASE DEBUG] [ERROR] Mission generation error: {e}")
+        import traceback
+        traceback.print_exc()
         mission_active = False
         ref.update({'status': 'FAILED', 'error': str(e)})
         active_mission_ref = None
@@ -344,6 +356,7 @@ def run_mission_thread(command):
             print(f"[FIREBASE DEBUG] Mission {cmd_id} FAILED")
     except Exception as e:
         print(f"[FIREBASE DEBUG] Status update error: {e}")
+        traceback.print_exc()
     finally:
         mission_active = False
         active_mission_ref = None
@@ -449,12 +462,14 @@ def firebase_listener_thread():
                         print("[FIREBASE DEBUG] Active command cleared from Firebase.")
                 except Exception as e:
                     print(f"[FIREBASE DEBUG] Firebase event handler error: {e}")
+                    traceback.print_exc()
             
             ref.listen(on_firebase_event)
             print("[FIREBASE DEBUG] ✓ Firebase Listener Active - Listening for commands and abort requests...")
             
         except Exception as e:
             print(f"[FIREBASE DEBUG] Firebase Connection Failed: {e}. Retrying in 10s...")
+            traceback.print_exc()
             time.sleep(10)
 
 def heartbeat_thread():
@@ -475,7 +490,8 @@ def heartbeat_thread():
             status_ref.update({
                 'last_seen': current_time,
             })
-            print(f"[FIREBASE DEBUG] ✓ Heartbeat sent - last_seen: {current_time}")
+            readable_time = format_timestamp(current_time)
+            print(f"[FIREBASE DEBUG] ✓ Heartbeat sent - last_seen: {current_time} ({readable_time})")
         except Exception as e:
             print(f"[FIREBASE DEBUG] [HEARTBEAT] Write failed (no internet?): {e}")
         time.sleep(interval_sec)
