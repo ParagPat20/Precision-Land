@@ -14,6 +14,7 @@ export XAUTHORITY="/home/jecon2/.Xauthority"
 # Create tmux session if it doesn't exist
 if ! tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
   tmux new-session -d -s "${SESSION_NAME}" -c "${PROJECT_DIR}"
+  tmux set-option -t "${SESSION_NAME}" mouse on
   tmux send-keys -t "${SESSION_NAME}" "${PYTHON_CMD} ${MAIN_PY}" C-m
 fi
 
