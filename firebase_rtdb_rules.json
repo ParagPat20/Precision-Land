@@ -24,6 +24,12 @@
             "mode": {
               ".validate": "newData.isString()"
             },
+            "batteryPercent": {
+              ".validate": "newData.isNumber()"
+            },
+            "current": {
+              ".validate": "newData.isNumber()"
+            },
             "updated_at": {
               ".validate": "newData.isNumber()"
             }
@@ -52,6 +58,12 @@
             },
             "mode": {
               ".validate": "newData.isString()"
+            },
+            "batteryPercent": {
+              ".validate": "newData.isNumber()"
+            },
+            "current": {
+              ".validate": "newData.isNumber()"
             },
             "updated_at": {
               ".validate": "newData.isNumber()"

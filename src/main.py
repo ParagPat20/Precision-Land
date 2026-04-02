@@ -87,12 +87,23 @@ def build_telemetry_payload():
     if loc is None or loc.lat is None or loc.lon is None:
         return None
 
+    # Safe extraction of battery data
+    batt_pct = 0
+    batt_cur = 0.0
+    if vehicle.battery is not None:
+        if vehicle.battery.level is not None:
+            batt_pct = int(vehicle.battery.level)
+        if vehicle.battery.current is not None:
+            batt_cur = float(vehicle.battery.current)
+
     return {
         'lat': loc.lat,
         'lng': loc.lon,
         'alt': float(loc.alt) if loc.alt is not None else 0.0,
         'heading': float(vehicle.heading) if vehicle.heading is not None else 0.0,
         'mode': vehicle.mode.name if vehicle.mode is not None else 'UNKNOWN',
+        'batteryPercent': batt_pct,
+        'current': batt_cur,
         'updated_at': int(time.time() * 1000)
     }
 
