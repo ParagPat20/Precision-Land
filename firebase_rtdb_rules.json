@@ -5,7 +5,29 @@
         "status": {
           ".read": "auth != null",
           ".write": "auth != null",
-          "last_seen": { ".validate": "newData.isNumber()" }
+          "last_seen": { ".validate": "newData.isNumber()" },
+          "telemetry": {
+            ".read": "auth != null",
+            ".write": "auth != null",
+            "lat": {
+              ".validate": "newData.isNumber()"
+            },
+            "lng": {
+              ".validate": "newData.isNumber()"
+            },
+            "alt": {
+              ".validate": "newData.isNumber()"
+            },
+            "heading": {
+              ".validate": "newData.isNumber()"
+            },
+            "mode": {
+              ".validate": "newData.isString()"
+            },
+            "updated_at": {
+              ".validate": "newData.isNumber()"
+            }
+          }
         },
         "active_command": {
           ".read": "auth != null",

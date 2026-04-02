@@ -65,12 +65,28 @@ DRONE_ID = "Victoris"
 # We need to point up two levels.
 CREDENTIALS_PATH = os.path.join(path.dirname(path.dirname(path.dirname(path.abspath(__file__)))), "serviceAccountKey.json")
 DATABASE_URL = "https://jech-flyt-default-rtdb.asia-southeast1.firebasedatabase.app"
+TELEMETRY_INTERVAL_SEC = 5
 
 # --- Firebase & Mission Logic ---
 firebase_initialized = False
 abort_requested = False  # Global abort flag to stop mission execution
 active_mission_ref = None  # Reference to current mission command in Firebase
 mission_active = False  # Track if a mission is currently active (IN_PROGRESS)
+
+def build_telemetry_payload():
+    """Build the latest telemetry snapshot for Firebase consumers."""
+    loc = vehicle.location.global_relative_frame
+    if loc is None or loc.lat is None or loc.lon is None:
+        return None
+
+    return {
+        'lat': loc.lat,
+        'lng': loc.lon,
+        'alt': float(loc.alt) if loc.alt is not None else 0.0,
+        'heading': float(vehicle.heading) if vehicle.heading is not None else 0.0,
+        'mode': vehicle.mode.name if vehicle.mode is not None else 'UNKNOWN',
+        'updated_at': int(time.time() * 1000)
+    }
 
 def telemetry_loop(cmd_ref):
     """
@@ -118,21 +134,14 @@ def telemetry_loop(cmd_ref):
         if mission_active:
             try:
                 loc = vehicle.location.global_relative_frame
-                if loc is not None and loc.lat is not None and loc.lon is not None:
-                    telemetry = {
-                        'lat': loc.lat,
-                        'lng': loc.lon,
-                        'alt': loc.alt,
-                        'heading': vehicle.heading,
-                        'mode': vehicle.mode.name,
-                        'updated_at': int(time.time() * 1000)
-                    }
+                telemetry = build_telemetry_payload()
+                if telemetry is not None:
                     cmd_ref.child('telemetry').update(telemetry)
                     print(f"[TELEMETRY] Sent to Firebase: lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, heading={vehicle.heading}°, mode={vehicle.mode.name}")
             except Exception as e:
                 print(f"Telemetry Error: {e}")
             
-        time.sleep(2) # 0.5Hz
+        time.sleep(TELEMETRY_INTERVAL_SEC)
     
     mission_active = False  # Mark mission as inactive when loop exits
 
@@ -416,32 +425,34 @@ def firebase_listener_thread():
             print(f"Firebase Connection Failed: {e}. Retrying in 10s...")
             time.sleep(10)
 
-def heartbeat_thread():
+def status_publisher_thread():
     """
-    Writes last_seen to Firebase every 15s when connected. The UI infers "Drone online"
-    from recent last_seen. We only ever write when we have internet, so we never write
-    online=false or internet=false; the app treats "no recent update" as offline.
+    Publishes always-on drone state to Firebase every 5s, regardless of mission status.
+    The dashboard uses this for remote map updates even when there is no active mission.
     """
     while not firebase_initialized:
         time.sleep(2)
     status_ref = db.reference(f'missions/{DRONE_ID}/status')
-    interval_sec = 15
     while True:
         try:
-            status_ref.update({
+            status_payload = {
                 'last_seen': int(time.time() * 1000),
-            })
+            }
+            telemetry = build_telemetry_payload()
+            if telemetry is not None:
+                status_payload['telemetry'] = telemetry
+            status_ref.update(status_payload)
         except Exception as e:
-            print(f"[HEARTBEAT] Write failed (no internet?): {e}")
-        time.sleep(interval_sec)
+            print(f"[STATUS] Write failed (no internet?): {e}")
+        time.sleep(TELEMETRY_INTERVAL_SEC)
 
 
 def init_firebase_listener():
     # Start the connection logic in a separate thread so it NEVER blocks the main script
     t = threading.Thread(target=firebase_listener_thread, name="FirebaseConnectionThread", daemon=True)
     t.start()
-    # Start heartbeat so the app can show "Drone online" and "Drone has internet"
-    h = threading.Thread(target=heartbeat_thread, name="DroneStatusHeartbeat", daemon=True)
+    # Start always-on status publishing so the app can keep the map updated remotely.
+    h = threading.Thread(target=status_publisher_thread, name="DroneStatusPublisher", daemon=True)
     h.start()
 
 
