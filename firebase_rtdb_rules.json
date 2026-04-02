@@ -37,6 +37,34 @@
             }
           }
         },
+        "control_command": {
+          ".read": "auth != null",
+          ".write": "auth != null",
+          "type": {
+            ".validate": "newData.isString() && (newData.val() == 'ARM' || newData.val() == 'TAKEOFF' || newData.val() == 'MODE_CHANGE')"
+          },
+          "mode": {
+            ".validate": "newData.isString() && (newData.val() == 'LAND' || newData.val() == 'RTL' || newData.val() == 'AUTO' || newData.val() == 'GUIDED' || newData.val() == 'BRAKE')"
+          },
+          "altitude": {
+            ".validate": "newData.isNumber()"
+          },
+          "status": {
+            ".validate": "newData.isString() && (newData.val() == 'PENDING' || newData.val() == 'EXECUTED' || newData.val() == 'FAILED')"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber()"
+          },
+          "sender_uid": {
+            ".validate": "newData.isString()"
+          },
+          "sender_email": {
+            ".validate": "newData.isString()"
+          },
+          "error": {
+            ".validate": "newData.isString()"
+          }
+        },
         "active_command": {
           ".read": "auth != null",
           ".write": "auth != null",

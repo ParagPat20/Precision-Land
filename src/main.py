@@ -586,6 +586,133 @@ def status_publisher_thread():
         time.sleep(TELEMETRY_INTERVAL_SEC)
 
 
+# --- Control Command Handling (Remote ARM / TAKEOFF / MODE_CHANGE) ---
+
+ALLOWED_MODES = {'LAND', 'RTL', 'AUTO', 'GUIDED', 'BRAKE'}
+
+def handle_control_command(command):
+    """
+    Executes a remote control command received from Firebase.
+    Supported types: ARM, TAKEOFF, MODE_CHANGE
+    """
+    if not command or not isinstance(command, dict):
+        return
+
+    status = command.get('status')
+    cmd_type = command.get('type')
+    timestamp = command.get('timestamp', 0)
+    current_time = int(time.time() * 1000)
+
+    # Only process PENDING commands
+    if status != 'PENDING':
+        return
+
+    # Stale command check (15 seconds)
+    if current_time - timestamp > 15000:
+        print(f"[CONTROL] Stale control command ({(current_time - timestamp)/1000:.1f}s old). Ignoring.")
+        try:
+            ctrl_ref = db.reference(f'missions/{DRONE_ID}/control_command')
+            ctrl_ref.update({'status': 'FAILED', 'error': 'Command expired'})
+        except Exception:
+            pass
+        return
+
+    print(f"[CONTROL] ========== CONTROL COMMAND ==========")
+    print(f"[CONTROL] Type: {cmd_type}")
+    print(f"[CONTROL] Timestamp: {timestamp} ({format_timestamp(timestamp)})")
+
+    ctrl_ref = db.reference(f'missions/{DRONE_ID}/control_command')
+
+    try:
+        if cmd_type == 'ARM':
+            print("[CONTROL] Arming vehicle...")
+            vehicle.armed = True
+            # Wait up to 3s for arming
+            for _ in range(3):
+                if vehicle.armed:
+                    break
+                time.sleep(1)
+            if vehicle.armed:
+                print("[CONTROL] [OK] Vehicle ARMED")
+                ctrl_ref.update({'status': 'EXECUTED'})
+            else:
+                print("[CONTROL] [FAIL] Arming failed")
+                ctrl_ref.update({'status': 'FAILED', 'error': 'Arming timed out'})
+
+        elif cmd_type == 'TAKEOFF':
+            altitude = command.get('altitude', 5.0)
+            print(f"[CONTROL] Takeoff to {altitude}m...")
+            # Set GUIDED mode first
+            vehicle.mode = VehicleMode("GUIDED")
+            time.sleep(0.5)
+            # Arm if not armed
+            if not vehicle.armed:
+                vehicle.armed = True
+                for _ in range(3):
+                    if vehicle.armed:
+                        break
+                    time.sleep(1)
+            if not vehicle.armed:
+                print("[CONTROL] [FAIL] Could not arm for takeoff")
+                ctrl_ref.update({'status': 'FAILED', 'error': 'Could not arm'})
+                return
+            vehicle.simple_takeoff(altitude)
+            print(f"[CONTROL] [OK] Takeoff command sent (alt={altitude}m)")
+            ctrl_ref.update({'status': 'EXECUTED'})
+
+        elif cmd_type == 'MODE_CHANGE':
+            mode = command.get('mode', '')
+            if mode not in ALLOWED_MODES:
+                print(f"[CONTROL] [FAIL] Mode '{mode}' not allowed. Allowed: {ALLOWED_MODES}")
+                ctrl_ref.update({'status': 'FAILED', 'error': f'Mode {mode} not allowed'})
+                return
+            print(f"[CONTROL] Changing mode to {mode}...")
+            vehicle.mode = VehicleMode(mode)
+            time.sleep(0.5)
+            actual_mode = vehicle.mode.name
+            print(f"[CONTROL] [OK] Mode is now: {actual_mode}")
+            ctrl_ref.update({'status': 'EXECUTED'})
+
+        else:
+            print(f"[CONTROL] [FAIL] Unknown command type: {cmd_type}")
+            ctrl_ref.update({'status': 'FAILED', 'error': f'Unknown type: {cmd_type}'})
+
+    except Exception as e:
+        print(f"[CONTROL] [ERROR] {e}")
+        traceback.print_exc()
+        try:
+            ctrl_ref.update({'status': 'FAILED', 'error': str(e)})
+        except Exception:
+            pass
+
+    print(f"[CONTROL] ========== COMMAND END ==========")
+
+
+def control_command_listener_thread():
+    """
+    Listens for remote control commands (ARM, TAKEOFF, MODE_CHANGE) from Firebase.
+    Runs after Firebase is initialized.
+    """
+    print("[CONTROL] Waiting for Firebase initialization...")
+    while not firebase_initialized:
+        time.sleep(2)
+
+    print(f"[CONTROL] Setting up listener on missions/{DRONE_ID}/control_command")
+    ctrl_ref = db.reference(f'missions/{DRONE_ID}/control_command')
+
+    def on_control_event(event):
+        try:
+            print(f"[CONTROL] Firebase event - path: {event.path}, data: {event.data}")
+            if event.data and isinstance(event.data, dict):
+                handle_control_command(event.data)
+        except Exception as e:
+            print(f"[CONTROL] Event handler error: {e}")
+            traceback.print_exc()
+
+    ctrl_ref.listen(on_control_event)
+    print("[CONTROL] [OK] Control command listener active")
+
+
 def init_firebase_listener():
     # Start the connection logic in a separate thread so it NEVER blocks the main script
     # Main script (ArUco tracking, vehicle connection) starts immediately
@@ -596,6 +723,10 @@ def init_firebase_listener():
     # Start always-on status publishing so the app can keep the map updated remotely.
     h = threading.Thread(target=status_publisher_thread, name="DroneStatusPublisher", daemon=True)
     h.start()
+    # Start control command listener for remote ARM/TAKEOFF/MODE_CHANGE
+    c = threading.Thread(target=control_command_listener_thread, name="ControlCommandListener", daemon=True)
+    c.start()
+
 
 
 
