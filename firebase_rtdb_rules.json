@@ -5,7 +5,9 @@
         "status": {
           ".read": "auth != null",
           ".write": "auth != null",
-          "last_seen": { ".validate": "newData.isNumber()" },
+          "last_seen": {
+            ".validate": "newData.isNumber()"
+          },
           "telemetry": {
             ".read": "auth != null",
             ".write": "auth != null",
@@ -24,7 +26,7 @@
             "mode": {
               ".validate": "newData.isString()"
             },
-            "batteryPercent": {
+            "batteryVoltage": {
               ".validate": "newData.isNumber()"
             },
             "current": {
@@ -59,7 +61,7 @@
             "mode": {
               ".validate": "newData.isString()"
             },
-            "batteryPercent": {
+            "batteryVoltage": {
               ".validate": "newData.isNumber()"
             },
             "current": {

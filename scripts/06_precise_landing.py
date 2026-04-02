@@ -159,10 +159,10 @@ while True:
             print "Commanding to   Lat = %.7f  Lon = %.7f"%(location_marker.lat, location_marker.lon)
             
             if vehicle.battery is not None:
-                batt_lvl = vehicle.battery.level if vehicle.battery.level is not None else 0
+                batt_voltage = vehicle.battery.voltage if vehicle.battery.voltage is not None else 0.0
                 batt_cur = vehicle.battery.current if vehicle.battery.current is not None else 0.0
                 heading = vehicle.heading if vehicle.heading is not None else 0.0
-                print "Telemetry       HDG = %.0f  Bat = %d%%  Cur = %.1fA"%(heading, batt_lvl, batt_cur)
+                print "Telemetry       HDG = %.0f  Bat = %.1fV  Cur = %.1fA"%(heading, batt_voltage, batt_cur)
             
         #--- COmmand to land
         if z_cm <= land_alt_cm:
