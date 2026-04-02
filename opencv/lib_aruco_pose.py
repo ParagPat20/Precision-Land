@@ -109,11 +109,22 @@ class ArucoSingleTracker():
             # Auto-enable if library is available
             try:
                 self._picam2 = Picamera2()
+                # Configure camera with specified resolution
                 cfg = self._picam2.create_preview_configuration(main={"size": (int(camera_size[0]), int(camera_size[1]))})
                 self._picam2.configure(cfg)
                 self._picam2.start()
-                time.sleep(0.5)  # warmup
+                
+                # Enable Continuous Autofocus for Arducam 64MP OV64A40
+                # Continuous autofocus keeps adjusting focus as the drone moves
+                try:
+                    self._picam2.set_controls({"AfMode": 2})  # AfMode: 2 = Continuous Autofocus
+                    print("[CAMERA] Autofocus enabled (Continuous mode)")
+                except Exception as af_error:
+                    print(f"[CAMERA] Warning: Could not enable autofocus: {af_error}")
+                
+                time.sleep(0.5)  # warmup for camera and autofocus to stabilize
                 self._use_picamera = True
+                print(f"[CAMERA] Picamera2 initialized successfully at {camera_size[0]}x{camera_size[1]}")
             except Exception:
                 self._use_picamera = False
 
@@ -202,11 +213,15 @@ class ArucoSingleTracker():
                     rgb = self._picam2.capture_array()
                     frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                     ret = True
-                except Exception:
+                except Exception as e:
                     ret = False
                     frame = None
+                    print(f"[CAMERA ERROR] Picamera2 capture failed: {e}")
             else:
                 ret, frame = self._cap.read()
+
+            if not ret or frame is None:
+                continue
 
             self._update_fps_read()
             
@@ -313,13 +328,17 @@ class ArucoSingleTracker():
 
 
             else:
+                marker_found = False
                 if verbose:
                     print("Nothing detected - fps = %.0f" % self.fps_read)
             
 
             if show_video:
                 #--- Display the frame
-                cv2.imshow('frame', frame)
+                try:
+                    cv2.imshow('frame', frame)
+                except Exception:
+                    pass
 
                 #--- use 'q' to quit
                 key = cv2.waitKey(1) & 0xFF

@@ -46,7 +46,9 @@ import time
 import math
 import argparse
 import os
+import traceback
 from collections import deque  # For rolling stability buffer
+from datetime import datetime
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
 from pymavlink import mavutil
@@ -57,6 +59,12 @@ import threading
 import firebase_admin
 from firebase_admin import credentials, db
 from core.mission_generator import DeliveryTemplate, LatLng
+
+# Helper function to format timestamp for debugging
+def format_timestamp(timestamp_ms):
+    """Convert milliseconds timestamp to readable format HH:MM:SS DD/MM/YY"""
+    dt = datetime.fromtimestamp(timestamp_ms / 1000.0)
+    return dt.strftime("%H:%M:%S %d/%m/%y")
 
 # --- Configuration ---
 DRONE_ID = "Victoris"
@@ -96,7 +104,7 @@ def telemetry_loop(cmd_ref):
     Runs regardless of arming status once mission is uploaded.
     """
     global abort_requested, mission_active
-    print("Starting Telemetry Loop...")
+    print("[FIREBASE DEBUG] Starting Telemetry Loop...")
     mission_active = True  # Mark mission as active when telemetry loop starts
     
     # Continue sending telemetry while mission is active (not just when armed)
@@ -104,6 +112,7 @@ def telemetry_loop(cmd_ref):
         # 1. Check for Abort (check both global flag and Firebase status)
         try:
             current_status = cmd_ref.child('status').get()
+            print(f"[FIREBASE DEBUG] Telemetry loop - current status: {current_status}")
             if current_status == 'ABORT_REQUESTED' or abort_requested:
                 print("[ABORT] Received Abort Request! Stopping Mission...")
                 abort_requested = True
@@ -123,12 +132,13 @@ def telemetry_loop(cmd_ref):
             
             # Only send telemetry if mission is IN_PROGRESS
             if current_status != 'IN_PROGRESS':
+                print(f"[FIREBASE DEBUG] Mission status is '{current_status}', not IN_PROGRESS. Stopping telemetry.")
                 mission_active = False
                 time.sleep(2)
                 continue
                 
         except Exception as e:
-            print(f"Abort Check Error: {e}")
+            print(f"[FIREBASE DEBUG] Abort Check Error: {e}")
 
         # 2. Send Telemetry (only when mission is active)
         if mission_active:
@@ -137,13 +147,17 @@ def telemetry_loop(cmd_ref):
                 telemetry = build_telemetry_payload()
                 if telemetry is not None:
                     cmd_ref.child('telemetry').update(telemetry)
-                    print(f"[TELEMETRY] Sent to Firebase: lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, heading={vehicle.heading}°, mode={vehicle.mode.name}")
+                    print(f"[FIREBASE DEBUG] [OK] Telemetry sent: lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, heading={vehicle.heading}°, mode={vehicle.mode.name}")
+                else:
+                    print("[FIREBASE DEBUG] Location data not available, skipping telemetry send")
             except Exception as e:
-                print(f"Telemetry Error: {e}")
+                print(f"[FIREBASE DEBUG] Telemetry Error: {e}")
+                traceback.print_exc()
             
         time.sleep(TELEMETRY_INTERVAL_SEC)
     
     mission_active = False  # Mark mission as inactive when loop exits
+    print("[FIREBASE DEBUG] Telemetry loop ended")
 
 def execute_mission_logic(mission_items, cmd_ref):
     """
@@ -151,11 +165,11 @@ def execute_mission_logic(mission_items, cmd_ref):
     Checks for abort requests throughout the process.
     """
     global abort_requested
-    print("Uploading mission via DroneKit...")
+    print("[FIREBASE DEBUG] Uploading mission via DroneKit...")
     try:
         # Check for abort before starting
         if abort_requested:
-            print("[ABORT] Abort requested before mission upload. Cancelling...")
+            print("[FIREBASE DEBUG] [ABORT] Abort requested before mission upload. Cancelling...")
             return False
             
         cmds = vehicle.commands
@@ -176,34 +190,34 @@ def execute_mission_logic(mission_items, cmd_ref):
             cmds.add(cmd)
             
         cmds.upload()
-        print(f"Mission of {len(mission_items)} items Uploaded!")
+        print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
         
         # Start telemetry loop immediately after mission upload (regardless of arming status)
         # This allows tracking mission progress even before arming
-        print("Starting telemetry transmission to Firebase...")
+        print("[FIREBASE DEBUG] Starting telemetry transmission to Firebase...")
         telemetry_thread = threading.Thread(target=telemetry_loop, args=(cmd_ref,), name="TelemetryThread", daemon=True)
         telemetry_thread.start()
         
         # Check for abort before setting mode
         if abort_requested:
-            print("[ABORT] Abort requested after mission upload. Cancelling...")
+            print("[FIREBASE DEBUG] [ABORT] Abort requested after mission upload. Cancelling...")
             return False
         
-        print("Setting Mode to AUTO...")
+        print("[FIREBASE DEBUG] Setting Mode to AUTO...")
         vehicle.mode = VehicleMode("AUTO")
         
         # Check for abort before arming
         if abort_requested:
-            print("[ABORT] Abort requested before arming. Cancelling...")
+            print("[FIREBASE DEBUG] [ABORT] Abort requested before arming. Cancelling...")
             return False
         
-        print("Arming...")
+        print("[FIREBASE DEBUG] Arming...")
         vehicle.armed = True
         
         # Wait up to 5s for arming, checking for abort during wait
         for _ in range(5):
             if abort_requested:
-                print("[ABORT] Abort requested during arming wait. Switching to RTL...")
+                print("[FIREBASE DEBUG] [ABORT] Abort requested during arming wait. Switching to RTL...")
                 try:
                     vehicle.mode = VehicleMode("RTL")
                     print("[ABORT] Vehicle mode set to RTL")
@@ -214,11 +228,11 @@ def execute_mission_logic(mission_items, cmd_ref):
                 break
             time.sleep(1)
             
-        print(f"ARMED Status: {vehicle.armed}")
+        print(f"[FIREBASE DEBUG] ARMED Status: {vehicle.armed}")
         
         # Final check for abort after arming wait
         if abort_requested:
-            print("[ABORT] Abort requested. Switching to RTL...")
+            print("[FIREBASE DEBUG] [ABORT] Abort requested. Switching to RTL...")
             try:
                 vehicle.mode = VehicleMode("RTL")
                 print("[ABORT] Vehicle mode set to RTL")
@@ -228,7 +242,8 @@ def execute_mission_logic(mission_items, cmd_ref):
             
         return True
     except Exception as e:
-        print(f"Mission Execution Error: {e}")
+        print(f"[FIREBASE DEBUG] Mission Execution Error: {e}")
+        traceback.print_exc()
         return False
 
 def run_mission_thread(command):
@@ -240,13 +255,19 @@ def run_mission_thread(command):
     timestamp = command.get('timestamp', 0)
     current_time = int(time.time() * 1000)
     
+    print(f"[FIREBASE DEBUG] ========== NEW MISSION RECEIVED ==========")
+    print(f"[FIREBASE DEBUG] Mission ID: {cmd_id}")
+    print(f"[FIREBASE DEBUG] Timestamp: {timestamp} ({format_timestamp(timestamp)})")
+    print(f"[FIREBASE DEBUG] Current Time: {current_time} ({format_timestamp(current_time)})")
+    print(f"[FIREBASE DEBUG] Age: {(current_time - timestamp)/1000:.1f} seconds")
+    
     ref = db.reference(f'missions/{DRONE_ID}/active_command')
     active_mission_ref = ref
     mission_active = False  # Reset mission active flag
     
     # 1. Stale Command Check (45 seconds = 45000 ms)
     if current_time - timestamp > 45000:
-        print(f"[REJECT] Mission {cmd_id} is STALE ({(current_time - timestamp)/1000:.1f}s old). Ignoring.")
+        print(f"[FIREBASE DEBUG] [REJECT] Mission {cmd_id} is STALE ({(current_time - timestamp)/1000:.1f}s old). Ignoring.")
         mission_active = False
         ref.update({'status': 'EXPIRED_STALE'})
         active_mission_ref = None
@@ -255,37 +276,43 @@ def run_mission_thread(command):
     # 2. Check for abort before processing
     try:
         current_status = ref.child('status').get()
+        print(f"[FIREBASE DEBUG] Current mission status in Firebase: {current_status}")
         if current_status == 'ABORT_REQUESTED':
-            print(f"[ABORT] Mission {cmd_id} was aborted before processing.")
+            print(f"[FIREBASE DEBUG] [ABORT] Mission {cmd_id} was aborted before processing.")
             mission_active = False
             ref.update({'status': 'ABORTED', 'aborted_at': int(time.time() * 1000)})
             active_mission_ref = None
             return
     except Exception as e:
-        print(f"Status check error: {e}")
+        print(f"[FIREBASE DEBUG] Status check error: {e}")
 
-    print(f"[{threading.current_thread().name}] Processing Mission {cmd_id}")
+    print(f"[FIREBASE DEBUG] [{threading.current_thread().name}] Processing Mission {cmd_id}")
     payload = command.get('payload', {})
+    print(f"[FIREBASE DEBUG] Payload: {payload}")
     
     target_lat = payload.get('target_lat')
     target_lng = payload.get('target_lng')
     
     if target_lat is None or target_lng is None:
-        print("Invalid Target Location")
+        print("[FIREBASE DEBUG] [ERROR] Invalid Target Location - missing lat/lng")
         mission_active = False
         ref.update({'status': 'FAILED', 'error': 'Invalid target location'})
         active_mission_ref = None
         return
 
+    print(f"[FIREBASE DEBUG] Target Location: ({target_lat}, {target_lng})")
+    
     # Generate Mission
-    print("Generating Mission...")
+    print("[FIREBASE DEBUG] Generating Mission...")
     try:
         template = DeliveryTemplate.get_default_template()
         # Get actual home location from vehicle
         if vehicle.location.global_frame.lat is not None:
             home_loc = LatLng(vehicle.location.global_frame.lat, vehicle.location.global_frame.lon)
+            print(f"[FIREBASE DEBUG] Home Location: ({home_loc.latitude}, {home_loc.longitude})")
         else:
-            home_loc = LatLng(0.0, 0.0) 
+            home_loc = LatLng(0.0, 0.0)
+            print("[FIREBASE DEBUG] [WARNING] Vehicle location not available, using (0,0)")
              
         target_loc = LatLng(target_lat, target_lng)
         
@@ -294,16 +321,21 @@ def run_mission_thread(command):
             delivery_location=target_loc,
             override_values=payload
         )
+        print(f"[FIREBASE DEBUG] Mission generated with {len(mission_items)} waypoints")
     except Exception as e:
-        print(f"Mission generation error: {e}")
+        print(f"[FIREBASE DEBUG] [ERROR] Mission generation error: {e}")
+        import traceback
+        traceback.print_exc()
         mission_active = False
         ref.update({'status': 'FAILED', 'error': str(e)})
         active_mission_ref = None
         return
     
     # Update status to IN_PROGRESS
+    print("[FIREBASE DEBUG] Updating Firebase status to IN_PROGRESS...")
     ref.update({'status': 'IN_PROGRESS', 'started_at': int(time.time() * 1000)})
     mission_active = True  # Mark mission as active
+    print("[FIREBASE DEBUG] Status updated to IN_PROGRESS")
     
     # Execute mission (this will check for abort internally)
     success = execute_mission_logic(mission_items, ref)
@@ -311,8 +343,9 @@ def run_mission_thread(command):
     # Check final status
     try:
         final_status = ref.child('status').get()
+        print(f"[FIREBASE DEBUG] Final mission status: {final_status}")
         if final_status == 'ABORTED':
-            print(f"Mission {cmd_id} ended (ABORTED).")
+            print(f"[FIREBASE DEBUG] Mission {cmd_id} ended (ABORTED).")
             mission_active = False
             active_mission_ref = None
             return
@@ -322,17 +355,21 @@ def run_mission_thread(command):
                 'status': 'COMPLETED',
                 'completed_at': int(time.time() * 1000)
             })
+            print(f"[FIREBASE DEBUG] Mission {cmd_id} COMPLETED")
         else:
             mission_active = False  # Stop telemetry when mission fails
             ref.update({
                 'status': 'FAILED',
                 'failed_at': int(time.time() * 1000)
             })
+            print(f"[FIREBASE DEBUG] Mission {cmd_id} FAILED")
     except Exception as e:
-        print(f"Status update error: {e}")
+        print(f"[FIREBASE DEBUG] Status update error: {e}")
+        traceback.print_exc()
     finally:
         mission_active = False
         active_mission_ref = None
+        print("[FIREBASE DEBUG] ========== MISSION ENDED ==========")
 
 def check_mission(command):
     """
@@ -342,13 +379,15 @@ def check_mission(command):
     global abort_requested, active_mission_ref, mission_active
     
     if not command or not isinstance(command, dict):
+        print("[FIREBASE DEBUG] check_mission called with invalid command (None or not dict)")
         return
     
     status = command.get('status')
+    print(f"[FIREBASE DEBUG] check_mission called - Status: {status}")
     
     # Handle abort requests (can come at any time)
     if status == 'ABORT_REQUESTED':
-        print("[ABORT] Abort request received from Firebase!")
+        print("[FIREBASE DEBUG] [ABORT] Abort request received from Firebase!")
         abort_requested = True
         mission_active = False  # Stop sending telemetry immediately
         
@@ -359,16 +398,17 @@ def check_mission(command):
                     'status': 'ABORTED',
                     'aborted_at': int(time.time() * 1000)
                 })
+                print("[FIREBASE DEBUG] Updated active mission status to ABORTED")
             except Exception as e:
-                print(f"Error updating abort status: {e}")
+                print(f"[FIREBASE DEBUG] Error updating abort status: {e}")
         
         # Always try to switch to RTL mode (regardless of armed status)
         try:
-            print("[ABORT] Switching vehicle to RTL mode...")
+            print("[FIREBASE DEBUG] [ABORT] Switching vehicle to RTL mode...")
             vehicle.mode = VehicleMode("RTL")
             print("[ABORT] Vehicle mode set to RTL")
         except Exception as e:
-            print(f"Error switching to RTL: {e}")
+            print(f"[FIREBASE DEBUG] Error switching to RTL: {e}")
         
         return
     
@@ -378,9 +418,13 @@ def check_mission(command):
         abort_requested = False
         mission_active = False
         sender = command.get('sender_email', 'Unknown')
-        print(f"Received PENDING Mission from {sender}")
+        print(f"[FIREBASE DEBUG] ========================================")
+        print(f"[FIREBASE DEBUG] Received PENDING Mission from {sender}")
+        print(f"[FIREBASE DEBUG] Command data: {command}")
+        print(f"[FIREBASE DEBUG] ========================================")
         t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread")
         t.start()
+        print(f"[FIREBASE DEBUG] Mission thread started: {t.name}")
 
 def firebase_listener_thread():
     """
@@ -388,41 +432,116 @@ def firebase_listener_thread():
     Handles both initial state and real-time updates.
     """
     global firebase_initialized
-    print("Attempting to connect to Firebase (Background Thread)...")
+    print("[FIREBASE DEBUG] Attempting to connect to Firebase (Background Thread)...")
+    start_time = time.time()
+    
+    # Pre-flight checks
+    print(f"[FIREBASE DEBUG] [CHECK] Verifying service account key exists: {CREDENTIALS_PATH}")
+    if not os.path.exists(CREDENTIALS_PATH):
+        print(f"[FIREBASE DEBUG] [ERROR] Service account key NOT FOUND at: {CREDENTIALS_PATH}")
+        print("[FIREBASE DEBUG] [ERROR] Cannot initialize Firebase without credentials!")
+        return
+    else:
+        file_size = os.path.getsize(CREDENTIALS_PATH)
+        print(f"[FIREBASE DEBUG] [CHECK] Service account key found ({file_size} bytes)")
+    
     while not firebase_initialized:
         try:
-            if not firebase_admin._apps:
-                cred = credentials.Certificate(CREDENTIALS_PATH)
-                firebase_admin.initialize_app(cred, {'databaseURL': DATABASE_URL})
+            print(f"[FIREBASE DEBUG] [TIMING] Starting Firebase initialization... (elapsed: {time.time() - start_time:.1f}s)")
             
-            print("Firebase Connected!")
+            if not firebase_admin._apps:
+                print(f"[FIREBASE DEBUG] [TIMING] Loading credentials from: {CREDENTIALS_PATH}")
+                cred_start = time.time()
+                cred = credentials.Certificate(CREDENTIALS_PATH)
+                print(f"[FIREBASE DEBUG] [TIMING] Credentials loaded in {time.time() - cred_start:.2f}s")
+                
+                print(f"[FIREBASE DEBUG] [TIMING] Initializing Firebase app with database: {DATABASE_URL}")
+                init_start = time.time()
+                
+                # Set timeout for Firebase operations to fail faster if network is bad
+                # This prevents hanging for too long on bad connections
+                options = {
+                    'databaseURL': DATABASE_URL,
+                    'httpTimeout': 30.0  # 30 second timeout for HTTP operations
+                }
+                firebase_admin.initialize_app(cred, options)
+                print(f"[FIREBASE DEBUG] [TIMING] Firebase app initialized in {time.time() - init_start:.2f}s")
+            
+            print(f"[FIREBASE DEBUG] [OK] Firebase Connected! (Total time: {time.time() - start_time:.1f}s)")
+            print(f"[FIREBASE DEBUG] Database URL: {DATABASE_URL}")
+            print(f"[FIREBASE DEBUG] Drone ID: {DRONE_ID}")
             firebase_initialized = True
             
+            print(f"[FIREBASE DEBUG] [TIMING] Getting database reference...")
+            ref_start = time.time()
             ref = db.reference(f'missions/{DRONE_ID}/active_command')
+            print(f"[FIREBASE DEBUG] [TIMING] Database reference obtained in {time.time() - ref_start:.2f}s")
+            print(f"[FIREBASE DEBUG] Listening to path: missions/{DRONE_ID}/active_command")
             
-            # Initial check - see if there's already a command
-            initial_command = ref.get()
-            if initial_command:
-                print("Found existing command in Firebase, processing...")
-                check_mission(initial_command)
-            
-            # Listen for real-time updates (including abort requests)
+            # Listen for real-time updates FIRST (don't wait for initial fetch)
             def on_firebase_event(event):
                 """Handle Firebase real-time events"""
                 try:
+                    print(f"[FIREBASE DEBUG] ========== FIREBASE EVENT ==========")
+                    print(f"[FIREBASE DEBUG] Event path: {event.path}")
+                    print(f"[FIREBASE DEBUG] Event data: {event.data}")
+                    print(f"[FIREBASE DEBUG] ====================================")
                     if event.data:
                         check_mission(event.data)
                     else:
                         # Command was deleted/cleared
-                        print("[Firebase] Active command cleared.")
+                        print("[FIREBASE DEBUG] Active command cleared from Firebase.")
                 except Exception as e:
-                    print(f"Firebase event handler error: {e}")
+                    print(f"[FIREBASE DEBUG] Firebase event handler error: {e}")
+                    traceback.print_exc()
             
+            print(f"[FIREBASE DEBUG] [TIMING] Setting up Firebase listener...")
+            print("[FIREBASE DEBUG] This may take 3-5 minutes due to network latency to Singapore...")
+            print("[FIREBASE DEBUG] System is fully operational during this time! ArUco tracking works!")
+            listener_start = time.time()
             ref.listen(on_firebase_event)
-            print("Firebase Listener Active - Listening for commands and abort requests...")
+            print(f"[FIREBASE DEBUG] [TIMING] Listener setup completed in {time.time() - listener_start:.2f}s")
+            print("[FIREBASE DEBUG] [OK] Firebase Listener Active - Listening for commands and abort requests...")
+            print("[FIREBASE DEBUG] READY! System can now receive missions from app!")
+            print(f"[FIREBASE DEBUG] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
+            
+            # Fetch initial command in background (don't block the main listener)
+            # This way the system is ready to receive new commands immediately
+            def fetch_initial_command():
+                try:
+                    print(f"[FIREBASE DEBUG] [TIMING] Fetching initial command from Firebase (background)...")
+                    fetch_start = time.time()
+                    initial_command = ref.get()
+                    print(f"[FIREBASE DEBUG] [TIMING] Initial command fetched in {time.time() - fetch_start:.2f}s")
+                    
+                    if initial_command:
+                        initial_status = initial_command.get('status')
+                        print("[FIREBASE DEBUG] Found existing command in Firebase:")
+                        print(f"[FIREBASE DEBUG] Command ID: {initial_command.get('id')}")
+                        print(f"[FIREBASE DEBUG] Status: {initial_status}")
+                        print(f"[FIREBASE DEBUG] Timestamp: {initial_command.get('timestamp')}")
+                        
+                        # Only process PENDING commands on startup
+                        if initial_status == 'PENDING':
+                            print("[FIREBASE DEBUG] Processing PENDING command...")
+                            check_mission(initial_command)
+                        else:
+                            print(f"[FIREBASE DEBUG] Skipping old command with status '{initial_status}' (not PENDING)")
+                    else:
+                        print("[FIREBASE DEBUG] No existing command found in Firebase")
+                except Exception as e:
+                    print(f"[FIREBASE DEBUG] Error fetching initial command: {e}")
+                    traceback.print_exc()
+            
+            # Start initial fetch in background thread so it doesn't block
+            initial_fetch_thread = threading.Thread(target=fetch_initial_command, name="InitialFetchThread", daemon=True)
+            initial_fetch_thread.start()
+            print("[FIREBASE DEBUG] Initial command fetch started in background thread")
             
         except Exception as e:
-            print(f"Firebase Connection Failed: {e}. Retrying in 10s...")
+            print(f"[FIREBASE DEBUG] Firebase Connection Failed: {e}. Retrying in 10s...")
+            print(f"[FIREBASE DEBUG] [TIMING] Failed at {time.time() - start_time:.1f}s")
+            traceback.print_exc()
             time.sleep(10)
 
 def status_publisher_thread():
@@ -430,27 +549,39 @@ def status_publisher_thread():
     Publishes always-on drone state to Firebase every 5s, regardless of mission status.
     The dashboard uses this for remote map updates even when there is no active mission.
     """
+    print("[FIREBASE DEBUG] Waiting for Firebase initialization...")
     while not firebase_initialized:
         time.sleep(2)
     status_ref = db.reference(f'missions/{DRONE_ID}/status')
+    print(f"[FIREBASE DEBUG] [OK] Status publisher started - writing to missions/{DRONE_ID}/status")
     while True:
         try:
+            current_time = int(time.time() * 1000)
             status_payload = {
-                'last_seen': int(time.time() * 1000),
+                'last_seen': current_time,
             }
             telemetry = build_telemetry_payload()
             if telemetry is not None:
                 status_payload['telemetry'] = telemetry
+
             status_ref.update(status_payload)
+            readable_time = format_timestamp(current_time)
+            if telemetry is not None:
+                print(f"[FIREBASE DEBUG] [OK] Status published - last_seen: {current_time} ({readable_time}), lat={telemetry['lat']:.6f}, lng={telemetry['lng']:.6f}, alt={telemetry['alt']:.1f}m")
+            else:
+                print(f"[FIREBASE DEBUG] [OK] Status published - last_seen: {current_time} ({readable_time}), telemetry unavailable")
         except Exception as e:
-            print(f"[STATUS] Write failed (no internet?): {e}")
+            print(f"[FIREBASE DEBUG] [STATUS] Write failed (no internet?): {e}")
         time.sleep(TELEMETRY_INTERVAL_SEC)
 
 
 def init_firebase_listener():
     # Start the connection logic in a separate thread so it NEVER blocks the main script
+    # Main script (ArUco tracking, vehicle connection) starts immediately
     t = threading.Thread(target=firebase_listener_thread, name="FirebaseConnectionThread", daemon=True)
     t.start()
+    print("[FIREBASE DEBUG] Firebase connection started in background (non-blocking)")
+    print("[FIREBASE DEBUG] Main script will continue while Firebase connects...")
     # Start always-on status publishing so the app can keep the map updated remotely.
     h = threading.Thread(target=status_publisher_thread, name="DroneStatusPublisher", daemon=True)
     h.start()
@@ -579,8 +710,9 @@ init_firebase_listener()
 #-------------- LANDING MARKER  
 #--------------------------------------------------    
 #--- Define Tag
-id_to_find      = 72
-marker_size     = 29.7 #- [cm]
+# IMPORTANT: Update this ID to match your physical ArUco marker
+id_to_find      = 132  # Changed from 72 to match detected marker
+marker_size     = 17.8 #- [cm]
 freq_send       = 10 #- Hz
 
 
@@ -588,10 +720,12 @@ freq_send       = 10 #- Hz
 # Find full directory path of this script, used for loading config and other files
 cwd                 = path.dirname(path.abspath(__file__))
 calib_path          = cwd+"/../opencv/"
-# Raspberry Pi Module 3 NoIR Wide camera resolution
-# Native: 2304x1296 (16:9, 120° FOV)
-# Recommended for processing: 640x360 (preserves 16:9 aspect ratio, faster computation)
-camera_resolution   = [640, 360]  # 16:9 aspect ratio for wide FOV
+# Arducam 64MP OV64A40 camera resolution
+# Native: 9248x6944 (64MP)
+# Available modes: 1920x1080@45fps, 2312x1736@26fps, 3840x2160@14fps, 4624x3472@7fps
+# Using 1920x1080@45fps for optimal balance between resolution and frame rate for precision landing
+# Higher resolution allows marker detection from greater altitudes with continuous autofocus
+camera_resolution   = [1920, 1080]  # 16:9 aspect ratio, 45fps with link-frequency=360000000
 camera_matrix       = np.loadtxt(calib_path+'cameraMatrix_webcam.txt', delimiter=',')
 camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_webcam.txt', delimiter=',')                                      
 aruco_tracker       = ArucoSingleTracker(id_to_find=id_to_find, marker_size=marker_size, show_video=True, axis_scale=0.01,
