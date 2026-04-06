@@ -113,8 +113,9 @@ function render_inventory(logs, source) {
         button.textContent = log.cached ? "Load downloaded log" : "Download to RPi"
         button.addEventListener("click", () => {
             loading_call(async () => {
+                const apiBase = new URL(source, window.location.href).toString()
                 if (!log.cached) {
-                    const response = await fetch(new URL(`/api/fc-logs/download/${log.id}`, source))
+                    const response = await fetch(new URL(`/api/fc-logs/download/${log.id}`, apiBase))
                     if (!response.ok) {
                         throw new Error(`Failed to download log ${log.id}: HTTP ${response.status}`)
                     }
@@ -122,7 +123,7 @@ function render_inventory(logs, source) {
                 }
 
                 await load_from_server(document.getElementById("server_url").value.trim())
-                await load_inventory_from_server(source)
+                await load_inventory_from_server(apiBase)
             })
         })
         actionCell.appendChild(button)
@@ -141,14 +142,15 @@ async function load_inventory_from_server(url = null) {
         return
     }
 
-    remoteInventoryUrl = source
-    const response = await fetch(source)
+    const resolvedSource = new URL(source, window.location.href).toString()
+    remoteInventoryUrl = resolvedSource
+    const response = await fetch(resolvedSource)
     if (!response.ok) {
         throw new Error(`Failed to fetch FC log inventory: HTTP ${response.status}`)
     }
 
     const manifest = await response.json()
-    render_inventory(manifest.logs || [], source)
+    render_inventory(manifest.logs || [], resolvedSource)
 }
 
 async function load_from_server(url = null) {
