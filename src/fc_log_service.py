@@ -13,6 +13,7 @@ import re
 
 class FlightControllerLogService:
     CHUNK_SIZE = 90
+    AUTOPILOT_COMPONENT_ID = 1
     FTP_MAX_DATA = 239
     FTP_HEADER_FORMAT = "<HBBBBBBI"
     FTP_HEADER_SIZE = struct.calcsize(FTP_HEADER_FORMAT)
@@ -273,7 +274,7 @@ class FlightControllerLogService:
         master.mav.file_transfer_protocol_send(
             0,
             master.target_system,
-            master.target_component,
+            self.AUTOPILOT_COMPONENT_ID,
             payload,
         )
 
@@ -290,7 +291,9 @@ class FlightControllerLogService:
                 return None
 
             parsed = self._parse_ftp_message(message)
-            if parsed["target_system"] != master.source_system or parsed["target_component"] != master.source_component:
+            if parsed["target_system"] != master.source_system:
+                continue
+            if parsed["target_component"] not in (master.source_component, 0):
                 continue
             if parsed["seq"] != seq or parsed["req_opcode"] != req_opcode:
                 continue
