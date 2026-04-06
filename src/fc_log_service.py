@@ -1,5 +1,7 @@
 import json
 import os
+import queue
+import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,15 +10,25 @@ from urllib.parse import unquote, urlparse
 import mimetypes
 import re
 
-try:
-    from pymavlink import mavftp
-except ImportError:
-    mavftp = None
-
 
 class FlightControllerLogService:
     CHUNK_SIZE = 90
+    FTP_MAX_DATA = 239
+    FTP_HEADER_FORMAT = "<HBBBBBBI"
+    FTP_HEADER_SIZE = struct.calcsize(FTP_HEADER_FORMAT)
     MAVFTP_LOG_DIRS = ("@SYS/logs", "/APM/LOGS", "/APM/LOGS/")
+    FTP_OPCODE_NONE = 0
+    FTP_OPCODE_TERMINATE_SESSION = 1
+    FTP_OPCODE_RESET_SESSIONS = 2
+    FTP_OPCODE_LIST_DIRECTORY = 3
+    FTP_OPCODE_OPEN_FILE_RO = 4
+    FTP_OPCODE_READ_FILE = 5
+    FTP_OPCODE_ACK = 128
+    FTP_OPCODE_NAK = 129
+    FTP_ERROR_NONE = 0
+    FTP_ERROR_FAIL = 1
+    FTP_ERROR_EOF = 6
+    FTP_ERROR_FILE_NOT_FOUND = 10
 
     def __init__(self, vehicle, cache_dir, web_root, host="0.0.0.0", port=8765):
         self.vehicle = vehicle
@@ -25,6 +37,7 @@ class FlightControllerLogService:
         self.web_root = Path(web_root)
         self.host = host
         self.port = port
+        self.enable_mavftp = os.environ.get("JECH_FC_ENABLE_MAVFTP", "1") == "1"
 
         self._download_lock = threading.RLock()
         self._list_lock = threading.Lock()
@@ -33,10 +46,20 @@ class FlightControllerLogService:
         self._chunk_waiters = {}
         self._chunk_lock = threading.Lock()
         self._ftp_lock = threading.Lock()
+        self._ftp_message_queue = queue.Queue()
+        self._ftp_seq = 0
         self._http_thread = None
 
         self.vehicle.add_message_listener("LOG_ENTRY", self._on_log_entry)
         self.vehicle.add_message_listener("LOG_DATA", self._on_log_data)
+        self.vehicle.add_message_listener("FILE_TRANSFER_PROTOCOL", self._on_file_transfer_protocol)
+
+    def _clear_ftp_message_queue(self):
+        while True:
+            try:
+                self._ftp_message_queue.get_nowait()
+            except queue.Empty:
+                return
 
     def start(self):
         if self._http_thread is not None:
@@ -174,6 +197,12 @@ class FlightControllerLogService:
             waiter["data"] = payload
             waiter["event"].set()
 
+    def _on_file_transfer_protocol(self, vehicle, name, message):
+        try:
+            self._ftp_message_queue.put_nowait(message)
+        except queue.Full:
+            pass
+
     def _send_log_request_list(self):
         master = self.vehicle._master
         master.mav.log_request_list_send(master.target_system, master.target_component, 0, 0xFFFF)
@@ -186,16 +215,181 @@ class FlightControllerLogService:
         master = self.vehicle._master
         master.mav.log_request_end_send(master.target_system, master.target_component)
 
-    def _create_ftp_client(self):
-        if mavftp is None:
-            raise RuntimeError("pymavlink.mavftp is not available")
+    def _next_ftp_seq(self):
+        seq = self._ftp_seq
+        self._ftp_seq = (self._ftp_seq + 1) % 65536
+        return seq
 
+    def _pack_ftp_payload(self, seq, session, opcode, size=0, req_opcode=0, burst_complete=0, offset=0, data=b""):
+        data = bytes(data)
+        if len(data) > self.FTP_MAX_DATA:
+            raise ValueError(f"FTP payload too large: {len(data)} bytes")
+        header = struct.pack(
+            self.FTP_HEADER_FORMAT,
+            seq,
+            session,
+            opcode,
+            size,
+            req_opcode,
+            burst_complete,
+            0,
+            offset,
+        )
+        payload = header + data
+        return payload.ljust(self.FTP_HEADER_SIZE + self.FTP_MAX_DATA, b"\x00")
+
+    def _parse_ftp_message(self, message):
+        payload = bytes(message.payload)
+        seq, session, opcode, size, req_opcode, burst_complete, _padding, offset = struct.unpack(
+            self.FTP_HEADER_FORMAT,
+            payload[:self.FTP_HEADER_SIZE],
+        )
+        data = payload[self.FTP_HEADER_SIZE:self.FTP_HEADER_SIZE + size]
+        return {
+            "seq": seq,
+            "session": session,
+            "opcode": opcode,
+            "size": size,
+            "req_opcode": req_opcode,
+            "burst_complete": burst_complete,
+            "offset": offset,
+            "data": data,
+            "target_system": getattr(message, "target_system", None),
+            "target_component": getattr(message, "target_component", None),
+        }
+
+    def _send_ftp_command(self, seq, session, opcode, size=0, offset=0, data=b""):
         master = self.vehicle._master
-        return mavftp.MAVFTP(
-            master,
+        payload = self._pack_ftp_payload(
+            seq=seq,
+            session=session,
+            opcode=opcode,
+            size=size,
+            req_opcode=0,
+            burst_complete=0,
+            offset=offset,
+            data=data,
+        )
+        master.mav.file_transfer_protocol_send(
+            0,
             master.target_system,
             master.target_component,
+            payload,
         )
+
+    def _wait_for_ftp_reply(self, seq, req_opcode, timeout):
+        deadline = time.time() + timeout
+        master = self.vehicle._master
+        while True:
+            remaining = max(0, deadline - time.time())
+            if remaining == 0:
+                return None
+            try:
+                message = self._ftp_message_queue.get(timeout=remaining)
+            except queue.Empty:
+                return None
+
+            parsed = self._parse_ftp_message(message)
+            if parsed["target_system"] != master.source_system or parsed["target_component"] != master.source_component:
+                continue
+            if parsed["seq"] != seq or parsed["req_opcode"] != req_opcode:
+                continue
+            return parsed
+
+    def _ftp_request(self, opcode, session=0, offset=0, data=b"", size=None, timeout=0.05, retries=6):
+        payload_size = len(data) if size is None else size
+        seq = self._next_ftp_seq()
+        for _ in range(retries):
+            self._send_ftp_command(seq, session, opcode, size=payload_size, offset=offset, data=data)
+            reply = self._wait_for_ftp_reply(seq, opcode, timeout)
+            if reply is not None:
+                return reply
+        raise RuntimeError(f"FTP opcode {opcode} timed out after {retries} retries")
+
+    def _ftp_reset_sessions(self):
+        try:
+            self._ftp_request(self.FTP_OPCODE_RESET_SESSIONS, timeout=0.2, retries=2)
+        except Exception:
+            return
+
+    def _ftp_list_directory(self, directory):
+        entries = []
+        offset = 0
+        encoded_dir = directory.encode("utf-8")
+
+        while True:
+            reply = self._ftp_request(
+                self.FTP_OPCODE_LIST_DIRECTORY,
+                offset=offset,
+                data=encoded_dir,
+                timeout=0.2,
+                retries=6,
+            )
+            if reply["opcode"] == self.FTP_OPCODE_NAK:
+                error_code = reply["data"][0] if reply["data"] else self.FTP_ERROR_FAIL
+                if error_code == self.FTP_ERROR_EOF:
+                    return entries
+                if error_code == self.FTP_ERROR_FILE_NOT_FOUND:
+                    return []
+                raise RuntimeError(f"FTP list for {directory} failed with error {error_code}")
+
+            decoded_entries = [item for item in reply["data"].split(b"\x00") if item]
+            for raw_entry in decoded_entries:
+                text = raw_entry.decode("utf-8", errors="ignore")
+                if not text:
+                    continue
+                entries.append(text)
+            offset += len(decoded_entries)
+
+    def _ftp_open_file_ro(self, remote_path):
+        reply = self._ftp_request(
+            self.FTP_OPCODE_OPEN_FILE_RO,
+            data=remote_path.encode("utf-8"),
+            timeout=0.2,
+            retries=6,
+        )
+        if reply["opcode"] == self.FTP_OPCODE_NAK:
+            error_code = reply["data"][0] if reply["data"] else self.FTP_ERROR_FAIL
+            raise RuntimeError(f"FTP open failed for {remote_path} with error {error_code}")
+        file_size = struct.unpack("<I", reply["data"][:4].ljust(4, b"\x00"))[0]
+        return reply["session"], file_size
+
+    def _ftp_read_file(self, session, file_size, file_path):
+        chunk_size = self.FTP_MAX_DATA
+        offset = 0
+        with file_path.open("wb") as output:
+            while offset < file_size:
+                requested = min(chunk_size, file_size - offset)
+                reply = self._ftp_request(
+                    self.FTP_OPCODE_READ_FILE,
+                    session=session,
+                    offset=offset,
+                    size=requested,
+                    timeout=0.05,
+                    retries=6,
+                )
+                if reply["opcode"] == self.FTP_OPCODE_NAK:
+                    error_code = reply["data"][0] if reply["data"] else self.FTP_ERROR_FAIL
+                    if error_code == self.FTP_ERROR_EOF:
+                        break
+                    raise RuntimeError(f"FTP read failed at offset {offset} with error {error_code}")
+
+                data = reply["data"]
+                if not data:
+                    raise RuntimeError(f"FTP read returned empty data at offset {offset}")
+                output.write(data)
+                offset += len(data)
+
+    def _ftp_terminate_session(self, session):
+        try:
+            self._ftp_request(
+                self.FTP_OPCODE_TERMINATE_SESSION,
+                session=session,
+                timeout=0.2,
+                retries=2,
+            )
+        except Exception:
+            return
 
     def _parse_log_id_from_name(self, remote_name):
         stem = Path(remote_name).stem
@@ -205,33 +399,36 @@ class FlightControllerLogService:
         return int(match.group(1))
 
     def _list_logs_via_mavftp(self):
-        if mavftp is None:
+        if not self.enable_mavftp:
             return []
 
         for log_dir in self.MAVFTP_LOG_DIRS:
             try:
                 with self._ftp_lock:
-                    ftp = self._create_ftp_client()
-                    result = ftp.cmd_list([log_dir])
-
-                if result is None or result.error_code != mavftp.FtpError.Success:
-                    print(f"[LOG SERVICE] MAVFTP list failed for {log_dir}: {result}")
-                    continue
+                    self._clear_ftp_message_queue()
+                    self._ftp_reset_sessions()
+                    raw_entries = self._ftp_list_directory(log_dir)
 
                 entries = []
-                for item in ftp.list_result:
-                    if item.is_dir or not item.name.lower().endswith(".bin"):
+                for text in raw_entries:
+                    if not text or text[0] != "F":
+                        continue
+                    try:
+                        name, size_text = text[1:].split("\t", 1)
+                    except ValueError:
+                        continue
+                    if not name.lower().endswith(".bin"):
                         continue
 
-                    log_id = self._parse_log_id_from_name(item.name)
+                    log_id = self._parse_log_id_from_name(name)
                     if log_id is None:
                         continue
 
                     entries.append({
                         "id": log_id,
-                        "ftp_name": item.name,
-                        "ftp_path": f"{log_dir.rstrip('/')}/{item.name}",
-                        "size": int(item.size_b),
+                        "ftp_name": name,
+                        "ftp_path": f"{log_dir.rstrip('/')}/{name}",
+                        "size": int(size_text),
                     })
 
                 if entries:
@@ -275,19 +472,15 @@ class FlightControllerLogService:
         if not mav_entries:
             return []
 
-        ftp_entries = {item["id"]: item for item in self._list_logs_via_mavftp()}
         all_ids = sorted(mav_entries.keys(), reverse=True)
         latest_id = max(all_ids)
         payload = []
         for log_id in all_ids:
-            ftp_entry = ftp_entries.get(log_id, {})
             mav_entry = mav_entries.get(log_id, {})
             entry = {
                 "id": log_id,
-                "size": ftp_entry.get("size", mav_entry.get("size", 0)),
+                "size": mav_entry.get("size", 0),
                 "time_utc": mav_entry.get("time_utc", 0),
-                "ftp_name": ftp_entry.get("ftp_name"),
-                "ftp_path": ftp_entry.get("ftp_path"),
             }
             file_name = self._build_filename(entry)
             cached_path = self.cache_dir / file_name
@@ -298,7 +491,7 @@ class FlightControllerLogService:
                 "is_latest": log_id == latest_id,
                 "cached": cached_path.exists() and (entry["size"] == 0 or cached_path.stat().st_size == entry["size"]),
                 "cached_name": file_name,
-                "transfer_method": "mavftp" if entry["ftp_path"] else "log_request_data",
+                "transfer_method": "mavftp" if self.enable_mavftp else "log_request_data",
             })
         return payload
 
@@ -351,30 +544,24 @@ class FlightControllerLogService:
         return ftp_entry["ftp_path"]
 
     def _download_entry_via_mavftp(self, entry, file_path):
+        if not self.enable_mavftp:
+            raise RuntimeError("MAVFTP is disabled for this process")
         remote_path = entry.get("ftp_path")
         if not remote_path:
             raise RuntimeError(f"No MAVFTP path available for log {entry['id']}")
 
         print(f"[LOG SERVICE] Downloading FC log {entry['id']} via MAVFTP from {remote_path} to {file_path}")
         with self._ftp_lock:
-            ftp = self._create_ftp_client()
-            result = ftp.cmd_get([remote_path, str(file_path)])
-            if result is None or result.error_code != mavftp.FtpError.Success:
-                raise RuntimeError(f"Failed to start MAVFTP download for log {entry['id']}: {result}")
-
-            last_size = 0
-            last_progress_at = time.time()
-            while not ftp.done:
-                reply = ftp.process_ftp_reply("ReadFile", timeout=30)
-                current_size = file_path.stat().st_size if file_path.exists() else 0
-                if current_size > last_size:
-                    last_size = current_size
-                    last_progress_at = time.time()
-
-                if reply is not None and reply.error_code not in (mavftp.FtpError.Success,):
-                    raise RuntimeError(f"MAVFTP download failed for log {entry['id']}: {reply}")
-                if not ftp.done and time.time() - last_progress_at > 45:
-                    raise RuntimeError(f"MAVFTP download stalled for log {entry['id']}")
+            self._clear_ftp_message_queue()
+            self._ftp_reset_sessions()
+            session = None
+            try:
+                session, remote_file_size = self._ftp_open_file_ro(remote_path)
+                expected_size = entry["size"] if entry["size"] > 0 else remote_file_size
+                self._ftp_read_file(session, expected_size, file_path)
+            finally:
+                if session is not None:
+                    self._ftp_terminate_session(session)
 
         if not file_path.exists():
             raise RuntimeError(f"MAVFTP download for log {entry['id']} did not produce a file")
