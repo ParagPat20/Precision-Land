@@ -47,6 +47,7 @@ import math
 import argparse
 import os
 import traceback
+import glob
 from collections import deque  # For rolling stability buffer
 from datetime import datetime
 
@@ -834,15 +835,22 @@ def _build_port_candidates(primary=None):
     if primary and str(primary).strip().lower() != 'auto':
         add(primary)
 
-    # 2) Enumerated ports from the OS (Windows COM*, Linux /dev/tty*)
+    # 2) Stable Linux symlinks (prefer these over ttyACM guessing)
+    for p in sorted(glob.glob('/dev/serial/by-id/*')):
+        add(p)
+    for p in sorted(glob.glob('/dev/serial/by-path/*')):
+        add(p)
+
+    # 3) Enumerated ports from the OS (Windows COM*, Linux /dev/tty*)
     for p in _enumerate_serial_ports():
         add(p)
 
-    # 3) Common Linux serial device fallbacks (in case enumeration is unavailable)
+    # 4) Common Linux serial device fallbacks (in case enumeration is unavailable)
     for p in (
-        '/dev/ttyACM0',
+        '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2', '/dev/ttyACM3',
         '/dev/ttyAMA0', '/dev/ttyAMA1',
-        '/dev/ttyUSB0', '/dev/serial0',
+        '/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3',
+        '/dev/serial0',
     ):
         add(p)
 
