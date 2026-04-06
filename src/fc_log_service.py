@@ -6,10 +6,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 import mimetypes
+import re
+
+try:
+    from pymavlink import mavftp
+except ImportError:
+    mavftp = None
 
 
 class FlightControllerLogService:
     CHUNK_SIZE = 90
+    MAVFTP_LOG_DIR = "@SYS/logs"
 
     def __init__(self, vehicle, cache_dir, web_root, host="0.0.0.0", port=8765):
         self.vehicle = vehicle
@@ -19,12 +26,13 @@ class FlightControllerLogService:
         self.host = host
         self.port = port
 
-        self._download_lock = threading.Lock()
+        self._download_lock = threading.RLock()
         self._list_lock = threading.Lock()
         self._list_entries = {}
         self._list_event = threading.Event()
         self._chunk_waiters = {}
         self._chunk_lock = threading.Lock()
+        self._ftp_lock = threading.Lock()
         self._http_thread = None
 
         self.vehicle.add_message_listener("LOG_ENTRY", self._on_log_entry)
@@ -178,6 +186,53 @@ class FlightControllerLogService:
         master = self.vehicle._master
         master.mav.log_request_end_send(master.target_system, master.target_component)
 
+    def _create_ftp_client(self):
+        if mavftp is None:
+            raise RuntimeError("pymavlink.mavftp is not available")
+
+        master = self.vehicle._master
+        return mavftp.MAVFTP(
+            master,
+            master.target_system,
+            master.target_component,
+        )
+
+    def _parse_log_id_from_name(self, remote_name):
+        stem = Path(remote_name).stem
+        match = re.search(r"(\d+)$", stem)
+        if match is None:
+            return None
+        return int(match.group(1))
+
+    def _list_logs_via_mavftp(self):
+        if mavftp is None:
+            return []
+
+        with self._ftp_lock:
+            ftp = self._create_ftp_client()
+            result = ftp.cmd_list([self.MAVFTP_LOG_DIR])
+
+        if result is None or result.error_code != mavftp.FtpError.Success:
+            return []
+
+        entries = []
+        for item in ftp.list_result:
+            if item.is_dir or not item.name.lower().endswith(".bin"):
+                continue
+
+            log_id = self._parse_log_id_from_name(item.name)
+            if log_id is None:
+                continue
+
+            entries.append({
+                "id": log_id,
+                "ftp_name": item.name,
+                "ftp_path": f"{self.MAVFTP_LOG_DIR}/{item.name}",
+                "size": int(item.size_b),
+            })
+
+        return sorted(entries, key=lambda item: item["id"], reverse=True)
+
     def fetch_log_list(self, timeout=4.0):
         with self._list_lock:
             self._list_entries = {}
@@ -197,22 +252,40 @@ class FlightControllerLogService:
         return max(entries, key=lambda item: item["id"])
 
     def list_flight_controller_logs(self):
-        entries = self.fetch_log_list()
-        if not entries:
+        ftp_entries = {
+            item["id"]: item
+            for item in self._list_logs_via_mavftp()
+        }
+        mav_entries = {
+            item["id"]: item
+            for item in self.fetch_log_list()
+        }
+        all_ids = sorted(set(ftp_entries.keys()) | set(mav_entries.keys()), reverse=True)
+        if not all_ids:
             return []
 
-        latest_id = max(item["id"] for item in entries)
+        latest_id = max(all_ids)
         payload = []
-        for entry in sorted(entries, key=lambda item: item["id"], reverse=True):
+        for log_id in all_ids:
+            ftp_entry = ftp_entries.get(log_id, {})
+            mav_entry = mav_entries.get(log_id, {})
+            entry = {
+                "id": log_id,
+                "size": ftp_entry.get("size", mav_entry.get("size", 0)),
+                "time_utc": mav_entry.get("time_utc", 0),
+                "ftp_name": ftp_entry.get("ftp_name"),
+                "ftp_path": ftp_entry.get("ftp_path"),
+            }
             file_name = self._build_filename(entry)
             cached_path = self.cache_dir / file_name
             payload.append({
-                "id": entry["id"],
+                "id": log_id,
                 "size": entry["size"],
                 "time_utc": entry["time_utc"],
-                "is_latest": entry["id"] == latest_id,
-                "cached": cached_path.exists() and cached_path.stat().st_size == entry["size"],
+                "is_latest": log_id == latest_id,
+                "cached": cached_path.exists() and (entry["size"] == 0 or cached_path.stat().st_size == entry["size"]),
                 "cached_name": file_name,
+                "transfer_method": "mavftp" if entry["ftp_path"] else "log_request_data",
             })
         return payload
 
@@ -244,8 +317,73 @@ class FlightControllerLogService:
 
     def download_latest_log(self):
         with self._download_lock:
-            entry = self.get_latest_entry()
+            logs = self.list_flight_controller_logs()
+            if not logs:
+                raise RuntimeError("No logs reported by the flight controller")
+            latest = next((item for item in logs if item["is_latest"]), None)
+            if latest is None:
+                raise RuntimeError("No latest log reported by the flight controller")
+            entry = {
+                "id": latest["id"],
+                "size": latest["size"],
+                "time_utc": latest["time_utc"],
+                "ftp_path": self._ftp_path_for_log_id(latest["id"]),
+            }
             return self._download_entry(entry)
+
+    def _ftp_path_for_log_id(self, log_id):
+        ftp_entry = next((item for item in self._list_logs_via_mavftp() if item["id"] == log_id), None)
+        if ftp_entry is None:
+            return None
+        return ftp_entry["ftp_path"]
+
+    def _download_entry_via_mavftp(self, entry, file_path):
+        remote_path = entry.get("ftp_path")
+        if not remote_path:
+            raise RuntimeError(f"No MAVFTP path available for log {entry['id']}")
+
+        print(f"[LOG SERVICE] Downloading FC log {entry['id']} via MAVFTP from {remote_path} to {file_path}")
+        with self._ftp_lock:
+            ftp = self._create_ftp_client()
+            result = ftp.cmd_get([remote_path, str(file_path)])
+            if result is None or result.error_code != mavftp.FtpError.Success:
+                raise RuntimeError(f"Failed to start MAVFTP download for log {entry['id']}: {result}")
+
+            last_size = 0
+            last_progress_at = time.time()
+            while not ftp.done:
+                reply = ftp.process_ftp_reply("ReadFile", timeout=30)
+                current_size = file_path.stat().st_size if file_path.exists() else 0
+                if current_size > last_size:
+                    last_size = current_size
+                    last_progress_at = time.time()
+
+                if reply is not None and reply.error_code not in (mavftp.FtpError.Success,):
+                    raise RuntimeError(f"MAVFTP download failed for log {entry['id']}: {reply}")
+                if not ftp.done and time.time() - last_progress_at > 45:
+                    raise RuntimeError(f"MAVFTP download stalled for log {entry['id']}")
+
+        if not file_path.exists():
+            raise RuntimeError(f"MAVFTP download for log {entry['id']} did not produce a file")
+
+        if entry["size"] > 0 and file_path.stat().st_size != entry["size"]:
+            raise RuntimeError(
+                f"MAVFTP download size mismatch for log {entry['id']}: expected {entry['size']} bytes, got {file_path.stat().st_size}"
+            )
+
+    def _download_entry_via_log_request(self, entry, file_path):
+        print(f"[LOG SERVICE] Downloading FC log {entry['id']} via LOG_REQUEST_DATA to {file_path}")
+        offset = 0
+        with file_path.open("wb") as output:
+            while offset < entry["size"]:
+                requested = min(self.CHUNK_SIZE, entry["size"] - offset)
+                chunk = self._wait_for_chunk(entry["id"], offset, requested)
+                if len(chunk) == 0:
+                    raise RuntimeError(f"Received empty chunk while downloading log {entry['id']}")
+                output.write(chunk)
+                offset += len(chunk)
+
+        self._send_log_request_end()
 
     def _download_entry(self, entry):
         with self._download_lock:
@@ -255,26 +393,37 @@ class FlightControllerLogService:
             if file_path.exists() and file_path.stat().st_size == entry["size"]:
                 return self._metadata_for_path(file_path, entry)
 
-            print(f"[LOG SERVICE] Downloading latest FC log {entry['id']} to {file_path}")
-            offset = 0
-            with file_path.open("wb") as output:
-                while offset < entry["size"]:
-                    requested = min(self.CHUNK_SIZE, entry["size"] - offset)
-                    chunk = self._wait_for_chunk(entry["id"], offset, requested)
-                    if len(chunk) == 0:
-                        raise RuntimeError(f"Received empty chunk while downloading log {entry['id']}")
-                    output.write(chunk)
-                    offset += len(chunk)
+            download_error = None
+            if entry.get("ftp_path"):
+                try:
+                    self._download_entry_via_mavftp(entry, file_path)
+                except Exception as error:
+                    download_error = error
+                    print(f"[LOG SERVICE] MAVFTP download failed for log {entry['id']}: {error}")
+                    if file_path.exists():
+                        file_path.unlink()
 
-            self._send_log_request_end()
+            if not file_path.exists():
+                if entry["size"] <= 0:
+                    raise RuntimeError(
+                        f"Log {entry['id']} cannot be downloaded because the controller did not report a valid size"
+                    ) from download_error
+                self._download_entry_via_log_request(entry, file_path)
+
             return self._metadata_for_path(file_path, entry)
 
     def download_log_by_id(self, log_id):
-        entries = self.fetch_log_list()
-        match = next((entry for entry in entries if entry["id"] == log_id), None)
+        inventory = self.list_flight_controller_logs()
+        match = next((entry for entry in inventory if entry["id"] == log_id), None)
         if match is None:
             raise RuntimeError(f"Log id {log_id} not reported by the flight controller")
-        return self._download_entry(match)
+        entry = {
+            "id": match["id"],
+            "size": match["size"],
+            "time_utc": match["time_utc"],
+            "ftp_path": self._ftp_path_for_log_id(match["id"]),
+        }
+        return self._download_entry(entry)
 
     def _metadata_for_path(self, file_path, entry=None):
         stat = file_path.stat()
