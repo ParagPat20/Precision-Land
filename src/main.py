@@ -888,11 +888,11 @@ if args.connect:
             vehicle = connect(args.connect)
             break
         except Exception as e:
-            print(f"Connection failed on {args.connect}: {e}. Retrying in 2s...")
-            time.sleep(2)
+            print(f"Connection failed on {args.connect}: {e}. Retrying in 5s...")
+            time.sleep(5)
 else:
     # Auto mode: cycle through all detected ports before waiting/re-scanning.
-    scan_interval_sec = 10
+    scan_interval_sec = 5
     last_scan_ts = 0.0
     ports = []
     idx = 0
@@ -925,8 +925,8 @@ else:
                 print(f"[CONNECT] Failed on {candidate}: {e}. Trying next port...")
                 time.sleep(0.5)
             else:
-                print(f"[CONNECT] Failed on {candidate}: {e}. Re-scanning in 2s...")
-                time.sleep(2)
+                print(f"[CONNECT] Failed on {candidate}: {e}. Re-scanning in 5s...")
+                time.sleep(5)
 print(vehicle, "connected!!!")
 
 #--------------------------------------------------
