@@ -16,7 +16,7 @@ except ImportError:
 
 class FlightControllerLogService:
     CHUNK_SIZE = 90
-    MAVFTP_LOG_DIR = "@SYS/logs"
+    MAVFTP_LOG_DIRS = ("@SYS/logs", "/APM/LOGS", "/APM/LOGS/")
 
     def __init__(self, vehicle, cache_dir, web_root, host="0.0.0.0", port=8765):
         self.vehicle = vehicle
@@ -208,42 +208,54 @@ class FlightControllerLogService:
         if mavftp is None:
             return []
 
-        with self._ftp_lock:
-            ftp = self._create_ftp_client()
-            result = ftp.cmd_list([self.MAVFTP_LOG_DIR])
+        for log_dir in self.MAVFTP_LOG_DIRS:
+            try:
+                with self._ftp_lock:
+                    ftp = self._create_ftp_client()
+                    result = ftp.cmd_list([log_dir])
 
-        if result is None or result.error_code != mavftp.FtpError.Success:
-            return []
+                if result is None or result.error_code != mavftp.FtpError.Success:
+                    print(f"[LOG SERVICE] MAVFTP list failed for {log_dir}: {result}")
+                    continue
 
-        entries = []
-        for item in ftp.list_result:
-            if item.is_dir or not item.name.lower().endswith(".bin"):
-                continue
+                entries = []
+                for item in ftp.list_result:
+                    if item.is_dir or not item.name.lower().endswith(".bin"):
+                        continue
 
-            log_id = self._parse_log_id_from_name(item.name)
-            if log_id is None:
-                continue
+                    log_id = self._parse_log_id_from_name(item.name)
+                    if log_id is None:
+                        continue
 
-            entries.append({
-                "id": log_id,
-                "ftp_name": item.name,
-                "ftp_path": f"{self.MAVFTP_LOG_DIR}/{item.name}",
-                "size": int(item.size_b),
-            })
+                    entries.append({
+                        "id": log_id,
+                        "ftp_name": item.name,
+                        "ftp_path": f"{log_dir.rstrip('/')}/{item.name}",
+                        "size": int(item.size_b),
+                    })
 
-        return sorted(entries, key=lambda item: item["id"], reverse=True)
+                if entries:
+                    return sorted(entries, key=lambda item: item["id"], reverse=True)
+            except Exception as error:
+                print(f"[LOG SERVICE] MAVFTP inventory failed for {log_dir}: {error}")
+
+        return []
 
     def fetch_log_list(self, timeout=4.0):
-        with self._list_lock:
-            self._list_entries = {}
-            self._list_event.clear()
+        try:
+            with self._list_lock:
+                self._list_entries = {}
+                self._list_event.clear()
 
-        self._send_log_request_list()
-        self._list_event.wait(timeout=timeout)
-        time.sleep(0.5)
+            self._send_log_request_list()
+            self._list_event.wait(timeout=timeout)
+            time.sleep(0.5)
 
-        with self._list_lock:
-            return list(self._list_entries.values())
+            with self._list_lock:
+                return list(self._list_entries.values())
+        except Exception as error:
+            print(f"[LOG SERVICE] LOG_REQUEST_LIST failed: {error}")
+            return []
 
     def get_latest_entry(self):
         entries = self.fetch_log_list()
@@ -252,14 +264,8 @@ class FlightControllerLogService:
         return max(entries, key=lambda item: item["id"])
 
     def list_flight_controller_logs(self):
-        ftp_entries = {
-            item["id"]: item
-            for item in self._list_logs_via_mavftp()
-        }
-        mav_entries = {
-            item["id"]: item
-            for item in self.fetch_log_list()
-        }
+        ftp_entries = {item["id"]: item for item in self._list_logs_via_mavftp()}
+        mav_entries = {item["id"]: item for item in self.fetch_log_list()}
         all_ids = sorted(set(ftp_entries.keys()) | set(mav_entries.keys()), reverse=True)
         if not all_ids:
             return []
