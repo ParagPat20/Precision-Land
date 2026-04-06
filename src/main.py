@@ -47,6 +47,7 @@ import math
 import argparse
 import os
 import traceback
+import glob
 from collections import deque  # For rolling stability buffer
 from datetime import datetime
 
@@ -60,6 +61,14 @@ import threading
 import firebase_admin
 from firebase_admin import credentials, db
 from core.mission_generator import DeliveryTemplate, LatLng
+
+# Serial port auto-detection:
+# - Prefer using pyserial's port enumeration when available (covers Linux + Windows reliably).
+# - Fall back to simple /dev device globbing (useful on minimal images without pyserial installed).
+try:
+    from serial.tools import list_ports  # type: ignore
+except Exception:  # pragma: no cover (environment dependent)
+    list_ports = None
 
 # Helper function to format timestamp for debugging
 def format_timestamp(timestamp_ms):
@@ -732,7 +741,85 @@ def init_firebase_listener():
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--connect', default = '/dev/ttyACM0')
+
+# Connection string (serial port, UDP endpoint, etc.).
+# If not provided, we auto-select the "best" available serial port on this machine.
+def _detect_available_vehicle_ports():
+    """
+    Return a list of candidate serial ports available on this system.
+
+    Ordering matters: the first item is the best guess for a flight controller connection.
+    """
+    # Preferred device name patterns (common on RPi/Linux)
+    preferred_prefixes = (
+        "/dev/ttyACM",  # Pixhawk / ArduPilot on CDC ACM
+        "/dev/ttyAMA",  # RPi UART (PL011)
+        "/dev/ttyUSB",  # USB-Serial adapters
+        "/dev/serial/by-id/",  # Stable symlinks when present
+        "COM",  # Windows
+    )
+
+    candidates = []
+
+    if list_ports is not None:
+        try:
+            for p in list_ports.comports():
+                # p.device is like "/dev/ttyACM0" or "COM3"
+                if p.device:
+                    candidates.append(str(p.device))
+        except Exception:
+            # If enumeration fails for any reason, we still try /dev globbing below.
+            candidates = []
+
+    # Fallback for minimal environments without pyserial.
+    if not candidates and os.name != "nt":
+        candidates.extend(glob.glob("/dev/ttyACM*"))
+        candidates.extend(glob.glob("/dev/ttyAMA*"))
+        candidates.extend(glob.glob("/dev/ttyUSB*"))
+        # Keep stable IDs if available (often symlinks to ttyUSB/ttyACM)
+        candidates.extend(glob.glob("/dev/serial/by-id/*"))
+
+    # Deduplicate while preserving order.
+    seen = set()
+    deduped = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            deduped.append(c)
+
+    def rank(port_name: str) -> int:
+        for i, prefix in enumerate(preferred_prefixes):
+            if port_name.startswith(prefix):
+                return i
+        return len(preferred_prefixes) + 1
+
+    deduped.sort(key=lambda p: (rank(p), p))
+    return deduped
+
+
+def _auto_connect_string(explicit_connect: str | None) -> str:
+    """
+    Decide which connection string to use.
+
+    - If user provided --connect, always use it.
+    - Otherwise pick the most likely available serial port.
+    """
+    if explicit_connect:
+        return explicit_connect
+
+    ports = _detect_available_vehicle_ports()
+    if ports:
+        chosen = ports[0]
+        print(f"[CONNECT] Auto-selected port: {chosen}")
+        return chosen
+
+    # Last-resort fallback: preserve the old behavior so we don't break headless runs.
+    fallback = "/dev/ttyACM0"
+    print(f"[CONNECT] No serial ports detected; falling back to {fallback}")
+    return fallback
+
+
+parser.add_argument('--connect', default=None, help="Vehicle connection string (auto-detected if omitted)")
 args = parser.parse_args()
 
 #--------------------------------------------------
@@ -795,7 +882,7 @@ def camera_to_uav(x_cam, y_cam):
 print('Connecting...')
 while True:
     try:
-        vehicle = connect(args.connect)
+        vehicle = connect(_auto_connect_string(args.connect))
         break
     except Exception as e:
         print(f"Connection failed: {e}. Retrying in 2s...")
