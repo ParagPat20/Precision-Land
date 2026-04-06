@@ -241,18 +241,23 @@ class FlightControllerLogService:
 
         return []
 
-    def fetch_log_list(self, timeout=4.0):
+    def fetch_log_list(self, timeout=8.0, attempts=2):
         try:
-            with self._list_lock:
-                self._list_entries = {}
-                self._list_event.clear()
+            for _ in range(attempts):
+                with self._list_lock:
+                    self._list_entries = {}
+                    self._list_event.clear()
 
-            self._send_log_request_list()
-            self._list_event.wait(timeout=timeout)
-            time.sleep(0.5)
+                self._send_log_request_list()
+                self._list_event.wait(timeout=timeout)
+                time.sleep(0.5)
 
-            with self._list_lock:
-                return list(self._list_entries.values())
+                with self._list_lock:
+                    entries = list(self._list_entries.values())
+                if entries:
+                    return entries
+
+            return []
         except Exception as error:
             print(f"[LOG SERVICE] LOG_REQUEST_LIST failed: {error}")
             return []
@@ -264,12 +269,14 @@ class FlightControllerLogService:
         return max(entries, key=lambda item: item["id"])
 
     def list_flight_controller_logs(self):
-        ftp_entries = {item["id"]: item for item in self._list_logs_via_mavftp()}
+        # Use the legacy log inventory path as the primary source because it is
+        # what ArduPilot tools already rely on for DataFlash log enumeration.
         mav_entries = {item["id"]: item for item in self.fetch_log_list()}
-        all_ids = sorted(set(ftp_entries.keys()) | set(mav_entries.keys()), reverse=True)
-        if not all_ids:
+        if not mav_entries:
             return []
 
+        ftp_entries = {item["id"]: item for item in self._list_logs_via_mavftp()}
+        all_ids = sorted(mav_entries.keys(), reverse=True)
         latest_id = max(all_ids)
         payload = []
         for log_id in all_ids:
