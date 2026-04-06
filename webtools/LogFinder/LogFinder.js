@@ -4,6 +4,7 @@ import('../modules/JsDataflashParser/parser.js').then((mod) => { DataflashParser
 
 var dirHandle
 let remoteSourceUrl = null
+let remoteInventoryUrl = null
 
 async function load_file_source(source) {
     if (source == null) {
@@ -34,6 +35,120 @@ async function get_dir_then_load() {
 
     // Enable reload if valid dir
     document.getElementById("reload").disabled = dirHandle == null
+}
+
+function format_size_bytes(size) {
+    const unit_array = ['B', 'kB', 'MB', 'GB', 'TB']
+    const unit_index = (size == 0) ? 0 : Math.floor(Math.log(size) / Math.log(1024))
+    const scaled_size = size / Math.pow(1024, unit_index)
+    return scaled_size.toFixed(2) + " " + unit_array[unit_index]
+}
+
+function format_utc_time(time_utc) {
+    if (!time_utc || time_utc <= 0) {
+        return "Unknown time"
+    }
+    return new Date(time_utc * 1000).toLocaleString()
+}
+
+function render_inventory(logs, source) {
+    const inventoryDiv = document.getElementById("inventory")
+    inventoryDiv.replaceChildren()
+
+    if (!Array.isArray(logs) || logs.length === 0) {
+        const empty = document.createElement("p")
+        empty.textContent = "No flight-controller logs were reported."
+        inventoryDiv.appendChild(empty)
+        return
+    }
+
+    const title = document.createElement("h3")
+    title.textContent = "Flight Controller Logs"
+    inventoryDiv.appendChild(title)
+
+    const table = document.createElement("table")
+    table.style.width = "1200px"
+    table.style.borderCollapse = "collapse"
+
+    const headerRow = document.createElement("tr")
+    ;["Log ID", "Time", "Size", "State", "Action"].forEach((text) => {
+        const th = document.createElement("th")
+        th.textContent = text
+        th.style.textAlign = "left"
+        th.style.padding = "8px"
+        th.style.borderBottom = "1px solid #ccc"
+        headerRow.appendChild(th)
+    })
+    table.appendChild(headerRow)
+
+    for (const log of logs) {
+        const row = document.createElement("tr")
+        if (log.is_latest) {
+            row.style.backgroundColor = "#eef6ff"
+        }
+
+        const idCell = document.createElement("td")
+        idCell.style.padding = "8px"
+        idCell.textContent = log.is_latest ? `${log.id} (latest)` : `${log.id}`
+        row.appendChild(idCell)
+
+        const timeCell = document.createElement("td")
+        timeCell.style.padding = "8px"
+        timeCell.textContent = format_utc_time(log.time_utc)
+        row.appendChild(timeCell)
+
+        const sizeCell = document.createElement("td")
+        sizeCell.style.padding = "8px"
+        sizeCell.textContent = format_size_bytes(log.size)
+        row.appendChild(sizeCell)
+
+        const stateCell = document.createElement("td")
+        stateCell.style.padding = "8px"
+        stateCell.textContent = log.cached ? "Downloaded on RPi" : "Available on FC"
+        row.appendChild(stateCell)
+
+        const actionCell = document.createElement("td")
+        actionCell.style.padding = "8px"
+        const button = document.createElement("button")
+        button.textContent = log.cached ? "Load downloaded log" : "Download to RPi"
+        button.addEventListener("click", () => {
+            loading_call(async () => {
+                if (!log.cached) {
+                    const response = await fetch(new URL(`/api/fc-logs/download/${log.id}`, source))
+                    if (!response.ok) {
+                        throw new Error(`Failed to download log ${log.id}: HTTP ${response.status}`)
+                    }
+                    await response.json()
+                }
+
+                await load_from_server(document.getElementById("server_url").value.trim())
+                await load_inventory_from_server(source)
+            })
+        })
+        actionCell.appendChild(button)
+        row.appendChild(actionCell)
+
+        table.appendChild(row)
+    }
+
+    inventoryDiv.appendChild(table)
+}
+
+async function load_inventory_from_server(url = null) {
+    const input = document.getElementById("inventory_url")
+    const source = url || input.value.trim()
+    if (source.length == 0) {
+        return
+    }
+
+    remoteInventoryUrl = source
+    const response = await fetch(source)
+    if (!response.ok) {
+        throw new Error(`Failed to fetch FC log inventory: HTTP ${response.status}`)
+    }
+
+    const manifest = await response.json()
+    render_inventory(manifest.logs || [], source)
 }
 
 async function load_from_server(url = null) {
@@ -875,6 +990,9 @@ function reset() {
 }
 
 async function reload_current_source() {
+    if (remoteInventoryUrl != null) {
+        await load_inventory_from_server(remoteInventoryUrl)
+    }
     if (remoteSourceUrl != null) {
         await load_from_server(remoteSourceUrl)
         return
@@ -973,9 +1091,14 @@ async function initial_load() {
 
     const params = new URLSearchParams(window.location.search)
     const source = params.get("source")
+    const inventory = params.get("inventory")
     if (source != null) {
         document.getElementById("server_url").value = source
         loading_call(() => load_from_server(source))
+    }
+    if (inventory != null) {
+        document.getElementById("inventory_url").value = inventory
+        loading_call(() => load_inventory_from_server(inventory))
     }
 
 }

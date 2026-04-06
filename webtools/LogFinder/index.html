@@ -63,9 +63,14 @@
 <button id="load_server" type="button" onclick="loading_call(load_from_server)">Load server logs</button>
 </P>
 <P>
+<input id="inventory_url" type="text" style="width:900px" placeholder="Flight controller log inventory URL, for example http://rpi.local:8765/api/fc-logs">
+<button id="load_inventory" type="button" onclick="loading_call(load_inventory_from_server)">Show FC logs</button>
+</P>
+<P>
 <progress id="load" style="width: 1200px; height: 30px;"></progress>
 </P>
 
+<div id="inventory"></div>
 <div id="tables"></div>
 
 <script>

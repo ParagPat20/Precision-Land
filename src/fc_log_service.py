@@ -51,7 +51,7 @@ class FlightControllerLogService:
                 parsed = urlparse(self.path)
                 if parsed.path == "/":
                     self.send_response(302)
-                    self.send_header("Location", "/webtools/LogFinder/index.html?source=/api/logs")
+                    self.send_header("Location", "/webtools/LogFinder/index.html?source=/api/logs&inventory=/api/fc-logs")
                     self.end_headers()
                     return
 
@@ -59,9 +59,25 @@ class FlightControllerLogService:
                     self._send_json({"logs": service.list_cached_logs()})
                     return
 
+                if parsed.path == "/api/fc-logs":
+                    try:
+                        self._send_json({"logs": service.list_flight_controller_logs()})
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
                 if parsed.path == "/api/logs/latest":
                     try:
                         metadata = service.download_latest_log()
+                        self._send_json(metadata)
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path.startswith("/api/fc-logs/download/"):
+                    try:
+                        log_id = int(parsed.path.rsplit("/", 1)[-1])
+                        metadata = service.download_log_by_id(log_id)
                         self._send_json(metadata)
                     except Exception as error:
                         self._send_json({"error": str(error)}, status=500)
@@ -180,6 +196,26 @@ class FlightControllerLogService:
             raise RuntimeError("No logs reported by the flight controller")
         return max(entries, key=lambda item: item["id"])
 
+    def list_flight_controller_logs(self):
+        entries = self.fetch_log_list()
+        if not entries:
+            return []
+
+        latest_id = max(item["id"] for item in entries)
+        payload = []
+        for entry in sorted(entries, key=lambda item: item["id"], reverse=True):
+            file_name = self._build_filename(entry)
+            cached_path = self.cache_dir / file_name
+            payload.append({
+                "id": entry["id"],
+                "size": entry["size"],
+                "time_utc": entry["time_utc"],
+                "is_latest": entry["id"] == latest_id,
+                "cached": cached_path.exists() and cached_path.stat().st_size == entry["size"],
+                "cached_name": file_name,
+            })
+        return payload
+
     def _wait_for_chunk(self, log_id, offset, count, retries=3, timeout=2.0):
         for _ in range(retries):
             key = (log_id, offset)
@@ -209,6 +245,10 @@ class FlightControllerLogService:
     def download_latest_log(self):
         with self._download_lock:
             entry = self.get_latest_entry()
+            return self._download_entry(entry)
+
+    def _download_entry(self, entry):
+        with self._download_lock:
             file_name = self._build_filename(entry)
             file_path = self.cache_dir / file_name
 
@@ -228,6 +268,13 @@ class FlightControllerLogService:
 
             self._send_log_request_end()
             return self._metadata_for_path(file_path, entry)
+
+    def download_log_by_id(self, log_id):
+        entries = self.fetch_log_list()
+        match = next((entry for entry in entries if entry["id"] == log_id), None)
+        if match is None:
+            raise RuntimeError(f"Log id {log_id} not reported by the flight controller")
+        return self._download_entry(match)
 
     def _metadata_for_path(self, file_path, entry=None):
         stat = file_path.stat()
