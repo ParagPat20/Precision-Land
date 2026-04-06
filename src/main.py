@@ -48,6 +48,7 @@ import argparse
 import os
 import traceback
 import glob
+from typing import Optional
 from collections import deque  # For rolling stability buffer
 from datetime import datetime
 
@@ -797,7 +798,7 @@ def _detect_available_vehicle_ports():
     return deduped
 
 
-def _auto_connect_string(explicit_connect: str | None) -> str:
+def _auto_connect_string(explicit_connect: Optional[str]) -> str:
     """
     Decide which connection string to use.
 
@@ -880,13 +881,52 @@ def camera_to_uav(x_cam, y_cam):
 #--------------------------------------------------    
 #-- Connect to the vehicle with retry loop
 print('Connecting...')
-while True:
-    try:
-        vehicle = connect(_auto_connect_string(args.connect))
-        break
-    except Exception as e:
-        print(f"Connection failed: {e}. Retrying in 2s...")
-        time.sleep(2)
+if args.connect:
+    # User explicitly provided a connection string; keep retrying that single target.
+    while True:
+        try:
+            vehicle = connect(args.connect)
+            break
+        except Exception as e:
+            print(f"Connection failed on {args.connect}: {e}. Retrying in 2s...")
+            time.sleep(2)
+else:
+    # Auto mode: cycle through all detected ports before waiting/re-scanning.
+    scan_interval_sec = 10
+    last_scan_ts = 0.0
+    ports = []
+    idx = 0
+
+    while True:
+        now = time.time()
+        if not ports or idx >= len(ports) or (now - last_scan_ts) >= scan_interval_sec:
+            ports = _detect_available_vehicle_ports()
+            last_scan_ts = now
+            idx = 0
+
+            if ports:
+                print(f"[CONNECT] Detected ports: {', '.join(ports)}")
+            else:
+                # Keep old default as last resort, but we still won't get stuck forever:
+                # after a failure, we'll re-scan again on the next iteration.
+                ports = ["/dev/ttyACM0"]
+                print("[CONNECT] No serial ports detected; trying /dev/ttyACM0 as fallback")
+
+        candidate = ports[idx]
+        idx += 1
+
+        try:
+            print(f"[CONNECT] Trying {candidate} ...")
+            vehicle = connect(candidate)
+            break
+        except Exception as e:
+            remaining = len(ports) - idx
+            if remaining > 0:
+                print(f"[CONNECT] Failed on {candidate}: {e}. Trying next port...")
+                time.sleep(0.5)
+            else:
+                print(f"[CONNECT] Failed on {candidate}: {e}. Re-scanning in 2s...")
+                time.sleep(2)
 print(vehicle, "connected!!!")
 
 #--------------------------------------------------
