@@ -732,13 +732,37 @@ def init_firebase_listener():
 
 
 
+def resolve_vehicle_connection_path(manual_path=None):
+    """Prefer stable Pixhawk serial-by-id paths over ttyACM indexes."""
+    if manual_path:
+        return manual_path
+
+    by_id_candidates = []
+    by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*ArduPilot*if00")))
+    by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*Pixhawk*if00")))
+    by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*ArduPilot*")))
+    by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*Pixhawk*")))
+
+    seen = set()
+    for candidate in by_id_candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if os.path.exists(candidate):
+            return candidate
+
+    fallback_candidates = ["/dev/ttyACM0", "/dev/ttyUSB0"]
+    for candidate in fallback_candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    return "/dev/ttyACM0"
+
+
 parser = argparse.ArgumentParser()
-parser.add_argument(
-    '--connect',
-    default='auto',
-    help="Connection string or 'auto' to try available serial ports (default: auto)"
-)
+parser.add_argument('--connect', default = None, help="Vehicle connection path. Defaults to Pixhawk /dev/serial/by-id path when available.")
 args = parser.parse_args()
+args.connect = resolve_vehicle_connection_path(args.connect)
 
 #--------------------------------------------------
 #-------------- FUNCTIONS  
@@ -796,95 +820,15 @@ def camera_to_uav(x_cam, y_cam):
 #--------------------------------------------------
 #-------------- CONNECTION  
 #--------------------------------------------------    
-# -- Serial connection helpers (auto port selection)
-# Tries each candidate port once (no repeat) and gives each attempt up to 5 seconds.
-try:
-    from serial.tools import list_ports  # type: ignore
-except Exception:
-    list_ports = None
-
-
-def _enumerate_serial_ports():
-    """Return a list of available serial port device names (best-effort)."""
-    ports = []
-    if list_ports is not None:
-        try:
-            ports = [p.device for p in list_ports.comports()]
-        except Exception:
-            ports = []
-    return ports
-
-
-def _build_port_candidates(primary=None):
-    """
-    Build an ordered list of connection strings to try.
-    - primary: user-provided connection string to try first (if not 'auto')
-    """
-    candidates = []
-    seen = set()
-
-    def add(p):
-        if not p:
-            return
-        if p in seen:
-            return
-        seen.add(p)
-        candidates.append(p)
-
-    # 1) User-specified port (if any)
-    if primary and str(primary).strip().lower() != 'auto':
-        add(primary)
-
-    # 2) Stable Linux symlinks (prefer these over ttyACM guessing)
-    for p in sorted(glob.glob('/dev/serial/by-id/*')):
-        add(p)
-    for p in sorted(glob.glob('/dev/serial/by-path/*')):
-        add(p)
-
-    # 3) Enumerated ports from the OS (Windows COM*, Linux /dev/tty*)
-    for p in _enumerate_serial_ports():
-        add(p)
-
-    # 4) Common Linux serial device fallbacks (in case enumeration is unavailable)
-    for p in (
-        '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2', '/dev/ttyACM3',
-        '/dev/ttyAMA0', '/dev/ttyAMA1',
-        '/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3',
-        '/dev/serial0',
-    ):
-        add(p)
-
-    return candidates
-
-
-def connect_vehicle_any_port(connect_arg):
-    """
-    Connect to a vehicle by trying multiple ports.
-    Each port is attempted once with a 5s timeout; failures move to the next port.
-    """
-    candidates = _build_port_candidates(connect_arg)
-    if not candidates:
-        raise RuntimeError("No serial port candidates found to try")
-
-    print(f"Connecting... (trying up to {len(candidates)} port(s), 5s each)")
-    last_err = None
-    for idx, conn_str in enumerate(candidates, start=1):
-        print(f"[CONNECT] ({idx}/{len(candidates)}) Trying: {conn_str}")
-        try:
-            # timeout: overall connect wait; heartbeat_timeout: time to wait for MAVLink heartbeat
-            v = connect(conn_str, wait_ready=True, timeout=5, heartbeat_timeout=5)
-            print(f"[CONNECT] [OK] Connected on {conn_str}")
-            return v
-        except Exception as e:
-            last_err = e
-            print(f"[CONNECT] [FAIL] {conn_str}: {e}")
-            continue
-
-    raise RuntimeError(f"Unable to connect on any port. Last error: {last_err}")
-
-
-# -- Connect to the vehicle (auto-port selection by default)
-vehicle = connect_vehicle_any_port(args.connect)
+#-- Connect to the vehicle with retry loop
+print(f'Connecting using {args.connect}...')
+while True:
+    try:
+        vehicle = connect(args.connect)
+        break
+    except Exception as e:
+        print(f"Connection failed: {e}. Retrying in 2s...")
+        time.sleep(2)
 print(vehicle, "connected!!!")
 
 #--------------------------------------------------
