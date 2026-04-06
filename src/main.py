@@ -55,6 +55,7 @@ from pymavlink import mavutil
 import numpy as np
 from opencv.lib_aruco_pose import *
 from led_controller import DroneLEDController
+from fc_log_service import start_log_services
 import threading
 import firebase_admin
 from firebase_admin import credentials, db
@@ -800,6 +801,11 @@ while True:
         print(f"Connection failed: {e}. Retrying in 2s...")
         time.sleep(2)
 print(vehicle, "connected!!!")
+
+#--------------------------------------------------
+#-------------- FLIGHT CONTROLLER LOG SERVICE
+#--------------------------------------------------
+fc_log_service = start_log_services(vehicle)
 
 #--------------------------------------------------
 #-------------- LED CONTROLLER & FAILSAFE LISTENER
