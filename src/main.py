@@ -842,7 +842,7 @@ def _build_port_candidates(primary=None):
     for p in (
         '/dev/ttyACM0',
         '/dev/ttyAMA0', '/dev/ttyAMA1',
-        '/dev/ttyUSB0', '/dev/ttyS0',
+        '/dev/ttyUSB0', '/dev/serial0',
     ):
         add(p)
 
