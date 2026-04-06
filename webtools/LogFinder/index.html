@@ -56,11 +56,11 @@
 
 <P>
 <button id="get_dir" type="button" onclick="loading_call(get_dir_then_load)">Search directory</button>
-<button id="reload" type="button" onclick="loading_call(reload_current_source())">Reload</button>
+<button id="reload" type="button" onclick="loading_call(reload_current_source)">Reload</button>
 </P>
 <P>
 <input id="server_url" type="text" style="width:900px" placeholder="Server log manifest URL, for example http://rpi.local:8765/api/logs">
-<button id="load_server" type="button" onclick="loading_call(load_from_server())">Load server logs</button>
+<button id="load_server" type="button" onclick="loading_call(load_from_server)">Load server logs</button>
 </P>
 <P>
 <progress id="load" style="width: 1200px; height: 30px;"></progress>
@@ -69,6 +69,11 @@
 <div id="tables"></div>
 
 <script>
+
+  if (typeof tippy !== 'function') {
+    console.warn('tippy failed to load, falling back to no-op tooltips')
+    window.tippy = function() { return null }
+  }
 
   window.onerror = function(msg, url, linenumber) {
       if (msg == "ResizeObserver loop completed with undelivered notifications.") {
