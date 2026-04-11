@@ -24,7 +24,7 @@ import neopixel
 # ===================== Configuration =====================
 STRIP1_PIN  = board.D18        # GPIO 18 — PWM0 (hardware-supported)
 STRIP2_PIN  = board.D13        # GPIO 23 — change to board.D13 / board.D10 if needed
-NUM_LEDS    = 4                # LEDs per strip
+NUM_LEDS    = 8                # LEDs per strip
 BRIGHTNESS  = 0.5
 LED_ORDER   = neopixel.GRB     # WS2812B standard
 MODE_DURATION = 5              # Default seconds per mode
