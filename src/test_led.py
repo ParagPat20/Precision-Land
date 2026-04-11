@@ -227,6 +227,21 @@ class LEDTester:
             self.fill_all(color)
             time.sleep(0.025)
 
+    # --- 11. Breathing Red-Blue: smooth crossfade between red and blue with breathing pulse ---
+    def mode_breathing_red_blue(self, duration):
+        end = time.time() + duration
+        while time.time() < end:
+            t = time.time()
+            # Colour crossfade — sin at 0.8 Hz gives ~7.8 s full red→blue→red cycle
+            blend = (math.sin(t * 0.8) + 1.0) / 2.0
+            # Breathing brightness at 1.3 Hz (~4.8 s cycle), incommensurate so it never repeats the same way
+            breath = (math.sin(t * 1.3) + 1.0) / 2.0
+            breath = 0.05 + breath * 0.95
+            r = int(255 * (1.0 - blend) * breath)
+            b = int(255 * blend * breath)
+            self.fill_all((r, 0, b))
+            time.sleep(0.02)
+
     # --- 9. Ping-Pong: a single pixel bounces back and forth ---
     def mode_ping_pong(self, duration):
         end = time.time() + duration
@@ -258,16 +273,7 @@ class LEDTester:
 
     def run(self, duration_per_mode):
         modes = [
-            ("STATIC COLORS",     self.mode_static),
-            ("BLAZING RED",       self.mode_blazing_red),
-            ("RUNNING LIGHT",     self.mode_running_light),
-            ("RAINBOW",           self.mode_rainbow),
-            ("COLOR WIPE",        self.mode_color_wipe),
-            ("STROBE",            self.mode_strobe),
-            ("ALTERNATING",       self.mode_alternating),
-            ("BREATHING RAINBOW", self.mode_breathing_rainbow),
-            ("PING PONG",         self.mode_ping_pong),
-            ("FIRE FLICKER",      self.mode_fire_flicker),
+            ("BREATHING RED-BLUE", self.mode_breathing_red_blue),
         ]
 
         banner = (
