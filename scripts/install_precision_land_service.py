@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import pwd
 import stat
 import subprocess
 import sys
@@ -10,6 +11,30 @@ SERVICE_NAME = "precision-land.service"
 TMUX_SCRIPT_REL = "scripts/run_precision_land_tmux.sh"
 
 
+def detect_project_dir() -> Path:
+    """Repo root: parent of the directory containing this installer."""
+    return Path(__file__).resolve().parent.parent
+
+
+def detect_service_user() -> str:
+    """User for systemd User= (not root when using sudo)."""
+    if os.environ.get("SUDO_USER"):
+        return os.environ["SUDO_USER"]
+    u = pwd.getpwuid(os.getuid()).pw_name
+    if u == "root":
+        print(
+            "ERROR: Cannot infer desktop user. Run: sudo -E python3 ... "
+            "from your login account, or: sudo -u jech python3 ...",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return u
+
+
+def user_home(user: str) -> Path:
+    return Path(pwd.getpwnam(user).pw_dir)
+
+
 def ensure_executable(path: Path) -> None:
     mode = path.stat().st_mode
     path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -17,6 +42,7 @@ def ensure_executable(path: Path) -> None:
 
 def write_service_file(service_path: Path, project_dir: Path, user: str) -> None:
     tmux_script = project_dir / TMUX_SCRIPT_REL
+    xauth = user_home(user) / ".Xauthority"
     unit = f"""
 [Unit]
 Description=Precision-Land tmux runner
@@ -29,7 +55,7 @@ User={user}
 WorkingDirectory={project_dir}
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/{user}/.Xauthority
+Environment=XAUTHORITY={xauth}
 ExecStart={tmux_script}
 Restart=always
 RestartSec=5
@@ -45,12 +71,14 @@ def run(cmd: list[str]) -> None:
 
 
 def main() -> int:
-    user = "jecon2"
-    project_dir = Path(f"/home/{user}/Precision-Land").resolve()
+    project_dir = detect_project_dir()
+    user = detect_service_user()
     tmux_script = project_dir / TMUX_SCRIPT_REL
     if not tmux_script.exists():
         print(f"ERROR: tmux runner not found at {tmux_script}", file=sys.stderr)
         return 1
+
+    print(f"precision-land: user={user} project_dir={project_dir}")
 
     # Ensure tmux script is executable
     ensure_executable(tmux_script)

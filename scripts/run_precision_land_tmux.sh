@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Configuration
+# Repo root = parent of this script's directory (works on any user/path)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
+
 SESSION_NAME="precision_land"
-PROJECT_DIR="/home/jecon2/Precision-Land"
 PYTHON_CMD="python3"
 MAIN_PY="${PROJECT_DIR}/src/main.py"
 
-# Ensure DISPLAY is set for GUI environments (if needed by OpenCV, etc.)
-export DISPLAY=":0"
-export XAUTHORITY="/home/jecon2/.Xauthority"
+# DISPLAY for OpenCV window; XAUTHORITY follows login user (systemd sets HOME for User=)
+export DISPLAY="${DISPLAY:-:0}"
+export XAUTHORITY="${XAUTHORITY:-${HOME}/.Xauthority}"
 
 # Create tmux session if it doesn't exist
 if ! tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
