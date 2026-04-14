@@ -834,6 +834,10 @@ print(vehicle, "connected!!!")
 #--------------------------------------------------
 #-------------- FLIGHT CONTROLLER LOG SERVICE
 #--------------------------------------------------
+# HTTP log browser + MAVFTP download (BurstReadFile → pipelined ReadFile on UART).
+# Throughput, window size, pacing, and stall/retry policy are tuned in fc_log_service.py
+# (class constants and optional env JECH_FC_ENABLE_MAVFTP, JECH_FC_LOG_CACHE_DIR, etc.).
+# No extra wiring here beyond start_log_services + disarm hook below.
 fc_log_service = start_log_services(vehicle)
 
 #--------------------------------------------------
@@ -856,14 +860,18 @@ def listener(self, name, message):
         other_failsafe_active = True
         print(f"[LED] Failsafe Detected: {text}")
 
-# Reset flags on arming?
 @vehicle.on_attribute('armed')
 def armed_listener(self, attr_name, value):
     global battery_failsafe_active, other_failsafe_active
-    if value: # particle armed
+    if value:
         battery_failsafe_active = False
         other_failsafe_active = False
         print("[LED] Armed - Resetting Failsafe Flags")
+    else:
+        # Disarmed: background thread in fc_log_service waits briefly, then MAVFTP-pulls
+        # the latest .bin (same stack as the HTTP /api/logs/latest path).
+        print("[LOG SERVICE] Disarm detected - triggering auto log download...")
+        fc_log_service.auto_download_latest_log()
 
 
 #--------------------------------------------------
