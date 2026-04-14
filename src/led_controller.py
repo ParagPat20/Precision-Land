@@ -3,9 +3,9 @@ import threading
 import board
 import neopixel
 
-# LED strip configuration:
-LED_COUNT      = 12      # Number of LED pixels.
-LED_PIN        = board.D18 # GPIO pin led connects to (18 uses PWM!).
+# LED strip configuration (matches test_led.py: GPIO 13, WS2812B, two eyes × 4 LEDs):
+LED_COUNT      = 8       # Total pixels — left 0..3, right 4..7
+LED_PIN        = board.D13
 LED_BRIGHTNESS = 0.5     # Set to 0.0 to 1.0
 LED_ORDER      = neopixel.GRB # Standard for WS2812B
 
@@ -35,7 +35,7 @@ class DroneLEDController(threading.Thread):
         self.lock = threading.Lock()
         
         # Initialize Strip
-        # Using the logic confirmed by user in test_leds.py
+        # Same strip layout as test_led.py (GPIO 13, 8 LEDs)
         try:
             self.strip = neopixel.NeoPixel(
                 LED_PIN, 
@@ -51,13 +51,9 @@ class DroneLEDController(threading.Thread):
             # but LEDs won't work.
             self.strip = None
             
-        # Segment definitions
-        # Left: 0,1,2 (3 LEDs)
-        # Middle: 3,4,5,6,7,8 (6 LEDs)
-        # Right: 9,10,11 (3 LEDs)
-        self.left_indices = [0, 1, 2]
-        self.middle_indices = [3, 4, 5, 6, 7, 8]
-        self.right_indices = [9, 10, 11]
+        # Segment definitions: left eye 0–3, right eye 4–7 (no centre strip)
+        self.left_indices = [0, 1, 2, 3]
+        self.right_indices = [4, 5, 6, 7]
 
     def set_state(self, new_state):
         with self.lock:
@@ -126,10 +122,9 @@ class DroneLEDController(threading.Thread):
                 self.set_all(OFF)
                 time.sleep(0.1)
                 
-                # Step 2: Direction Colors (Left Red, Right Green)
+                # Step 2: Direction colours (left red, right green)
                 self.set_segment(self.left_indices, RED)
                 self.set_segment(self.right_indices, GREEN)
-                self.set_segment(self.middle_indices, OFF)
                 self.show()
                 time.sleep(0.5)
                 if self.get_state() != self.STATE_RTL: continue
@@ -172,12 +167,11 @@ class DroneLEDController(threading.Thread):
                  time.sleep(1.0) 
 
             elif state == self.STATE_FLYING:
-                # Direction Colors: Blinking Left RED and Right GREEN in 3-LED segments
-                
+                # Direction colours: blinking left red, right green (4 LEDs per side)
+
                 # ON
                 self.set_segment(self.left_indices, RED)
                 self.set_segment(self.right_indices, GREEN)
-                self.set_segment(self.middle_indices, OFF)
                 self.show()
                 time.sleep(0.5) # On duration
                 
