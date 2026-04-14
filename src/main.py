@@ -733,11 +733,14 @@ def init_firebase_listener():
 
 
 def resolve_vehicle_connection_path(manual_path=None):
-    """Prefer stable Pixhawk serial-by-id paths over ttyACM indexes."""
+    """Pick a stable /dev/serial/by-id path: Prolific USB–serial (telemetry) first, then Pixhawk."""
     if manual_path:
         return manual_path
 
     by_id_candidates = []
+    # Drone telemetry on Prolific USB–Serial (e.g. usb-Prolific_Technology_Inc._USB-Serial_Controller_*-if00-port0)
+    by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*Prolific*if00*")))
+    by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*Prolific*")))
     by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*ArduPilot*if00")))
     by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*Pixhawk*if00")))
     by_id_candidates.extend(sorted(glob.glob("/dev/serial/by-id/*ArduPilot*")))
@@ -751,16 +754,17 @@ def resolve_vehicle_connection_path(manual_path=None):
         if os.path.exists(candidate):
             return candidate
 
-    fallback_candidates = ["/dev/ttyACM0", "/dev/ttyUSB0"]
+    # Prolific adapters usually enumerate as ttyUSB*; ACM is native Pixhawk USB.
+    fallback_candidates = ["/dev/ttyUSB0", "/dev/ttyACM0"]
     for candidate in fallback_candidates:
         if os.path.exists(candidate):
             return candidate
 
-    return "/dev/ttyACM0"
+    return "/dev/ttyUSB0"
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--connect', default = None, help="Vehicle connection path. Defaults to Pixhawk /dev/serial/by-id path when available.")
+parser.add_argument('--connect', default = None, help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0.")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
 
