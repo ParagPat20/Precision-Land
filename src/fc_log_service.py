@@ -55,6 +55,12 @@ class FlightControllerLogService:
     BURST_LOG_INTERVAL_SEC = 2.0
     BURST_RESEND_BACKOFF_CAP = 2.5
 
+    # ListDirectory / OpenFileRO (MAVFTP control plane): pymavlink ``mavftp.process_ftp_reply``
+    # defaults to ~5s wall-clock with 0.1s recv slices — much looser than streaming ReadFile.
+    # Opcode 3 (list) on UART often loses to LOG/HEARTBEAT traffic; 0.2s x 6 was too aggressive.
+    FTP_CONTROL_RECV_TIMEOUT_SEC = float(os.environ.get("JECH_FC_MAVFTP_CONTROL_TIMEOUT", "1.25"))
+    FTP_CONTROL_MAX_RETRIES = int(os.environ.get("JECH_FC_MAVFTP_CONTROL_RETRIES", "12"))
+
     def __init__(self, vehicle, cache_dir, web_root, host="0.0.0.0", port=8765):
         self.vehicle = vehicle
         self.cache_dir = Path(cache_dir)
@@ -350,10 +356,17 @@ class FlightControllerLogService:
         return ts == 0 or ts == master.source_system
 
     def _ftp_component_acceptable(self, parsed, master):
+        """FC replies name our component; accept 0 (wildcard) and common GCS-style ids."""
         tc = parsed.get("target_component")
-        if tc is None:
+        if tc is None or tc == 0:
             return True
-        return tc in (0, master.source_component)
+        ours = getattr(master, "source_component", None)
+        if ours is not None and tc == ours:
+            return True
+        # Mission Planner / QGC / companion defaults ArduPilot sometimes uses when addressing the link
+        if tc in (190, 195, 240, 250):
+            return True
+        return False
 
     def _ftp_link_prefers_large_window(self, master):
         """UDP transports can safely run a wider ReadFile pipeline than UART."""
@@ -412,7 +425,11 @@ class FlightControllerLogService:
 
     def _ftp_reset_sessions(self):
         try:
-            self._ftp_request(self.FTP_OPCODE_RESET_SESSIONS, timeout=0.2, retries=2)
+            self._ftp_request(
+                self.FTP_OPCODE_RESET_SESSIONS,
+                timeout=self.FTP_CONTROL_RECV_TIMEOUT_SEC,
+                retries=max(2, self.FTP_CONTROL_MAX_RETRIES // 4),
+            )
         except Exception:
             return
 
@@ -426,8 +443,8 @@ class FlightControllerLogService:
                 self.FTP_OPCODE_LIST_DIRECTORY,
                 offset=offset,
                 data=encoded_dir,
-                timeout=0.2,
-                retries=6,
+                timeout=self.FTP_CONTROL_RECV_TIMEOUT_SEC,
+                retries=self.FTP_CONTROL_MAX_RETRIES,
             )
             if reply["opcode"] == self.FTP_OPCODE_NAK:
                 error_code = reply["data"][0] if reply["data"] else self.FTP_ERROR_FAIL
@@ -449,8 +466,8 @@ class FlightControllerLogService:
         reply = self._ftp_request(
             self.FTP_OPCODE_OPEN_FILE_RO,
             data=remote_path.encode("utf-8"),
-            timeout=0.2,
-            retries=6,
+            timeout=self.FTP_CONTROL_RECV_TIMEOUT_SEC,
+            retries=self.FTP_CONTROL_MAX_RETRIES,
         )
         if reply["opcode"] == self.FTP_OPCODE_NAK:
             error_code = reply["data"][0] if reply["data"] else self.FTP_ERROR_FAIL
