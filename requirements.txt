@@ -1,15 +1,21 @@
-# Python 3.7+ compatible requirements
-# Note: Install legacy Pi camera support via apt (not pip):
-#   sudo apt-get update && sudo apt-get install -y python3-picamera
-# If using the newer libcamera stack, consider picamera2 (not required here).
+# Precision-Land Python dependencies
+#
+# Target: Python 3.9+ (3.12/3.13 on Pi is supported by current OpenCV wheels).
+# OpenCV 4.10+ wheels are built for NumPy 2; pin both so pip does not mix an old
+# cv2 (NumPy-1 ABI) with numpy 2.x (causes "_ARRAY_API not found").
+#
+# If you previously installed OpenCV system-wide, prefer a venv, or remove the old
+# wheel before reinstalling:
+#   python3 -m pip uninstall -y opencv-python opencv-contrib-python opencv-python-headless
 
+# NumPy 2.x (matches OpenCV wheel ABI)
+numpy>=2.0.0,<3
 
-# OpenCV (Python 3.7 compatible)
-opencv-python==4.5.5.64
-opencv-contrib-python==4.5.5.64
+# OpenCV with contrib (ArUco, etc.). Do not also install opencv-python — same cv2 module.
+opencv-contrib-python==4.13.0.92
 
 # MAVLink / DroneKit stack
-pymavlink==2.4.40
+pymavlink>=2.4.40,<3
 dronekit==2.9.2
 
 # LED Control (Adafruit CircuitPython)
@@ -18,4 +24,3 @@ adafruit-blinka
 adafruit-circuitpython-raspberry-pi5-neopixel-write; platform_machine == "aarch64"
 rpi_ws281x; platform_machine != "aarch64"
 firebase-admin>=6.0.0
-
