@@ -4,7 +4,7 @@ import os
 import pickle
 
 # ================= CONFIG =================
-CONNECTION = '/dev/ttyACM0'
+CONNECTION = '/dev/ttyUSB0'
 BAUD = 115200
 
 CHUNK_SIZE = 900
