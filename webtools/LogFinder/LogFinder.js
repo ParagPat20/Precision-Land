@@ -566,11 +566,11 @@ function setup_table(logs) {
             img.style.verticalAlign = "bottom"
 
             if (log.info.crash_dump || log.info.watchdog) {
-                img.src = "../images/exclamation-triangle-red.svg"
+                img.src = "/webtools/images/exclamation-triangle-red.svg"
 
             } else {
                 // Arming checks 0
-                img.src = "../images/exclamation-triangle-orange.svg"
+                img.src = "/webtools/images/exclamation-triangle-orange.svg"
 
             }
 
@@ -1200,7 +1200,7 @@ async function initial_load() {
     }
 
 
-    fetch("board_types.txt")
+    fetch("/webtools/LogFinder/board_types.txt")
         .then((res) => {
         return res.text();
     }).then((data) => load_board_types(data));

@@ -187,7 +187,10 @@ class FlightControllerLogService:
                         possible_dir = (service.web_root / relative_web_path).resolve()
                         if possible_dir.is_dir() and not parsed.path.endswith("/"):
                             self.send_response(301)
-                            self.send_header("Location", parsed.path + "/")
+                            location = parsed.path + "/"
+                            if parsed.query:
+                                location += "?" + parsed.query
+                            self.send_header("Location", location)
                             self.end_headers()
                             return
                     try:
