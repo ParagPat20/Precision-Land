@@ -20,6 +20,7 @@ QGC_CHUNK_SIZE = LOG_DATA_LEN * QGC_CHUNK_BINS
 QGC_DATA_TIMEOUT_SEC = 0.5
 QGC_LIST_TIMEOUT_SEC = 5.0
 QGC_LIST_RETRIES = 2
+COMMON_BAUD_RATES = (921600, 460800, 230400, 115200, 57600)
 
 
 @dataclass
@@ -40,6 +41,29 @@ def connect(connection, baud):
         f"Connected: system={master.target_system} component={master.target_component}"
     )
     return master
+
+
+def connect_auto_baud(connection):
+    last_error = None
+    for baud in COMMON_BAUD_RATES:
+        print(f"Trying {connection} at {baud} baud...")
+        master = mavutil.mavlink_connection(connection, baud=baud)
+        try:
+            heartbeat = master.wait_heartbeat(timeout=3)
+            if heartbeat is not None:
+                print(
+                    f"Connected at {baud} baud: "
+                    f"system={master.target_system} component={master.target_component}"
+                )
+                return master, baud
+        except Exception as error:
+            last_error = error
+        finally:
+            if master.target_system == 0:
+                master.close()
+    if last_error is not None:
+        raise RuntimeError(f"No heartbeat found on {connection}: {last_error}")
+    raise RuntimeError(f"No heartbeat found on {connection}")
 
 
 def is_ardupilot(master):
@@ -367,9 +391,11 @@ def parse_args():
     )
     parser.add_argument(
         "--baud",
-        type=int,
-        default=BAUD,
-        help=f"MAVLink serial baud. Must match the FC SERIALx_BAUD. Default: {BAUD}",
+        default=str(BAUD),
+        help=(
+            "MAVLink serial baud, or 'auto' to scan common rates. "
+            f"Must match the actual FC port baud. Default: {BAUD}"
+        ),
     )
     parser.add_argument(
         "--log-id",
@@ -391,7 +417,10 @@ def parse_args():
 
 def main():
     args = parse_args()
-    master = connect(args.device, args.baud)
+    if str(args.baud).lower() == "auto":
+        master, _detected_baud = connect_auto_baud(args.device)
+    else:
+        master = connect(args.device, int(args.baud))
     logs = get_log_list(master)
     if not logs:
         print("No logs found")
