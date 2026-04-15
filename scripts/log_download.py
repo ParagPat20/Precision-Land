@@ -5,7 +5,7 @@ import time
 # ================= CONFIG =================
 CONNECTION = '/dev/ttyUSB0'
 BAUD = 115200
-REMOTE_DIR = '@MAV_LOG'   # ArduPilot log directory
+REMOTE_DIR = '/APM/LOG'   # ArduPilot log directory
 # ==========================================
 
 
@@ -65,7 +65,7 @@ def download_file(ftp, remote_file, local_file):
 def main():
     master = connect()
 
-    ftp = MAVFTP(master)
+    ftp = MAVFTP(master,1,1)
 
     logs = list_logs(ftp)
 
