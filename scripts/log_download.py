@@ -19,11 +19,22 @@ target_component = master.target_component
 entries = {}
 download_set = set()
 
+def cancel_any_active_log_transfer():
+    """Ensure the FC is not stuck streaming LOG_DATA from a previous run."""
+    try:
+        master.mav.log_request_end_send(target_system, target_component)
+        # Give the FC a brief moment to stop the stream.
+        time.sleep(0.2)
+    except Exception:
+        pass
+
 
 # ----------------------------
 # STEP 1: Get log list
 # ----------------------------
 def get_log_list():
+    # If a previous download was interrupted, stop it before requesting the list.
+    cancel_any_active_log_transfer()
     master.mav.log_request_list_send(
         target_system,
         target_component,
@@ -155,11 +166,15 @@ def retry_missing(log_id):
 # ----------------------------
 # MAIN FLOW
 # ----------------------------
-logs = get_log_list()
+try:
+    logs = get_log_list()
 
-if not logs:
-    print("No logs found")
-    exit()
+    if not logs:
+        print("No logs found")
+        exit()
 
-latest_log = max(logs.keys())
-download_log(latest_log, f"log{latest_log}.bin")
+    latest_log = max(logs.keys())
+    download_log(latest_log, f"log{latest_log}.bin")
+finally:
+    # Always end the log transfer session (even on Ctrl+C) so the next run can list logs.
+    cancel_any_active_log_transfer()
