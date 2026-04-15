@@ -841,6 +841,7 @@ print(vehicle, "connected!!!")
 # HTTP log browser + DataFlash download via LOG_REQUEST_DATA (MAVProxy log.py style, fc_log_service.py).
 # Optional env: JECH_FC_LOG_CACHE_DIR, JECH_FC_LOG_PORT, JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC, etc.
 # No extra wiring here beyond start_log_services + disarm hook below.
+# Single DroneKit Vehicle instance: pass-through only — fc_log_service does NOT call connect().
 fc_log_service = start_log_services(vehicle)
 
 #--------------------------------------------------
@@ -879,7 +880,16 @@ def armed_listener(self, attr_name, value):
 
 #--------------------------------------------------
 #-------------- PARAMETERS  
-#-------------------------------------------------- 
+#--------------------------------------------------
+# First parameter assignment triggers DroneKit wait_ready() for the param table (default 30s).
+# On UART telemetry the FC often needs longer; wait here on the same `vehicle` (no reconnect).
+_param_ready_timeout = float(os.environ.get("JECH_PARAM_READY_TIMEOUT_SEC", "180"))
+print(f"[PARAM] Waiting for FC parameter download (timeout {_param_ready_timeout}s, same vehicle as log service)...")
+try:
+    vehicle.wait_ready(timeout=_param_ready_timeout)
+except Exception as exc:
+    print(f"[PARAM] wait_ready: {exc!r} — continuing; first param write may still retry internally.")
+
 vehicle.parameters['PLND_ENABLED']       = 1
 vehicle.parameters['PLND_TYPE']          = 1 # Mavlink landing backend
 

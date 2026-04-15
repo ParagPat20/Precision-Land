@@ -79,7 +79,7 @@ def download_log(log_id, filename):
 
         if msg.count > 0:
             f.seek(msg.ofs)
-            f.write(msg.data[:msg.count])
+            f.write(bytes(msg.data[:msg.count]))
             download_set.add(msg.ofs // CHUNK_SIZE)
 
         # finish condition
