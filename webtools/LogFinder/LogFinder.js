@@ -53,8 +53,14 @@ function renderLogDownloadBanner(status) {
         const pct = Math.min(100, Math.round((got / exp) * 100))
         sizePart = `${format_size_bytes(got)} / ${format_size_bytes(exp)} (${pct}%)`
     }
-    const head = status.detail ? `${status.detail} · ` : ""
-    el.textContent = `${head}${logLabel}: ${sizePart}${elapsed}`
+    const nowSpeed = Number(status.current_kbps) > 0 ? ` | now ${Number(status.current_kbps).toFixed(1)} KB/s` : ""
+    const avgSpeed = Number(status.average_kbps) > 0 ? ` | avg ${Number(status.average_kbps).toFixed(1)} KB/s` : ""
+    const packets = Number(status.packet_rate) > 0 ? ` | ${Number(status.packet_rate).toFixed(1)} pkt/s` : ""
+    const missing = Number(status.missing_bins) > 0 ? ` | missing ${Number(status.missing_bins)} bins` : ""
+    const retries = Number(status.retries) > 0 ? ` | retries ${Number(status.retries)}` : ""
+    const method = status.transfer_method ? ` | ${status.transfer_method}` : ""
+    const head = status.detail ? `${status.detail} | ` : ""
+    el.textContent = `${head}${logLabel}: ${sizePart}${nowSpeed}${avgSpeed}${packets}${missing}${retries}${method}${elapsed}`
     document.querySelectorAll("[data-fc-download-btn]").forEach((b) => {
         b.disabled = true
         b.title = "Wait for the current transfer to finish (single FC link)."
@@ -176,13 +182,14 @@ function render_inventory(logs, source, transferStatus) {
 
         const stateCell = document.createElement("td")
         stateCell.style.padding = "8px"
-        stateCell.textContent = log.cached ? "Downloaded on RPi" : "Available on FC"
+        const method = log.transfer_method === "qgc_log_request_data" ? "QGC fast transfer" : "LOG_REQUEST_DATA"
+        stateCell.textContent = log.cached ? "Downloaded on RPi" : `Available on FC (${method})`
         row.appendChild(stateCell)
 
         const actionCell = document.createElement("td")
         actionCell.style.padding = "8px"
         const button = document.createElement("button")
-        button.textContent = log.cached ? "Load downloaded log" : "Download to RPi"
+        button.textContent = log.cached ? "Load downloaded log" : "Download to RPi (QGC fast)"
         if (!log.cached) {
             button.setAttribute("data-fc-download-btn", "1")
             const block = transferStatus && transferStatus.busy === true

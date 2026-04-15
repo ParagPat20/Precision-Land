@@ -1,5 +1,5 @@
 # Flight-controller log cache HTTP service: list/download DataFlash logs over the existing
-# DroneKit MAVLink link using LOG_REQUEST_LIST / LOG_REQUEST_DATA only (MAVProxy log.py style).
+# DroneKit MAVLink link using QGC-style LOG_REQUEST_LIST / LOG_REQUEST_DATA chunks.
 # No MAVFTP — avoids FILE_TRANSFER_PROTOCOL contention on UART telemetry.
 
 import json
@@ -10,15 +10,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 import mimetypes
+from pymavlink import mavutil
 
 
 class FlightControllerLogService:
-    # ArduPilot LOG_DATA payloads are up to 90 bytes per message (MAVProxy log module).
-    CHUNK_SIZE = 90
-    # If no LOG_DATA for this long, re-request missing ranges (see scripts/mavlog.py idle_task).
-    LOG_STREAM_IDLE_TRIGGER_SEC = 0.7
-    LOG_STREAM_GAP_RESEND_MAX = 20
+    # QGroundControl downloads DataFlash logs in 512 LOG_DATA bins per chunk.
+    LOG_DATA_LEN = 90
+    QGC_CHUNK_BINS = 512
+    QGC_CHUNK_SIZE = LOG_DATA_LEN * QGC_CHUNK_BINS
+    QGC_DATA_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_QGC_RETRY_SEC", "0.5"))
     LOG_DOWNLOAD_WALL_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC", "7200"))
+    PAUSE_TELEMETRY_DURING_DOWNLOAD = os.environ.get("JECH_FC_LOG_PAUSE_TELEMETRY", "1") != "0"
 
     def __init__(self, vehicle, cache_dir, web_root, host="0.0.0.0", port=8765):
         self.vehicle = vehicle
@@ -40,7 +42,7 @@ class FlightControllerLogService:
         self._flight_log_download_label = ""
         self._auto_download_status_msg = ""
 
-        # Streaming download state (MAVProxy LogModule.handle_log_data + idle_task).
+        # Streaming download state (QGC-style chunk table).
         self._stream_cv = threading.Condition(threading.RLock())
         self._stream_state = None
 
@@ -70,6 +72,12 @@ class FlightControllerLogService:
             bytes_downloaded = int(st.get("bytes_written", 0)) if st else 0
             expected_bytes = int(st.get("expected_size", 0)) if st else 0
             log_id = st.get("log_id") if st else None
+            current_kbps = round(float(st.get("current_rate_bps", 0.0)) / 1024.0, 1) if st else 0.0
+            average_kbps = round(float(st.get("average_rate_bps", 0.0)) / 1024.0, 1) if st else 0.0
+            packet_rate = round(float(st.get("packet_rate", 0.0)), 1) if st else 0.0
+            missing_bins = int(st.get("missing_bins", 0)) if st else 0
+            retries = int(st.get("retries", 0)) if st else 0
+            transfer_method = st.get("transfer_method") if st else ""
         with self._client_activity_lock:
             auto_wait = self._auto_download_in_progress and not self._flight_log_download_active
             busy = self._flight_log_download_active or auto_wait
@@ -90,6 +98,12 @@ class FlightControllerLogService:
             "bytes_downloaded": bytes_downloaded,
             "expected_bytes": expected_bytes,
             "log_id": log_id,
+            "current_kbps": current_kbps,
+            "average_kbps": average_kbps,
+            "packet_rate": packet_rate,
+            "missing_bins": missing_bins,
+            "retries": retries,
+            "transfer_method": transfer_method,
         }
 
     def start(self):
@@ -222,7 +236,7 @@ class FlightControllerLogService:
                 self._list_event.set()
 
     def _on_log_data(self, vehicle, name, message):
-        """Route LOG_DATA to an active MAVProxy-style stream download if log id matches."""
+        """Route LOG_DATA to an active QGC-style chunk download if log id matches."""
         with self._stream_cv:
             st = self._stream_state
             if st is None or int(message.id) != st["log_id"]:
@@ -230,21 +244,42 @@ class FlightControllerLogService:
             fh = st["fh"]
             ofs = int(message.ofs)
             cnt = int(message.count)
-            if cnt != 0:
-                if ofs != st["download_ofs"]:
-                    fh.seek(ofs)
-                    st["download_ofs"] = ofs
-                payload = bytes(message.data[:cnt])
-                fh.write(payload)
-                st["bytes_written"] = st.get("bytes_written", 0) + cnt
-                st["download_set"].add(ofs // self.CHUNK_SIZE)
-                st["download_ofs"] += cnt
+            expected = int(st["expected_size"])
+            if ofs % self.LOG_DATA_LEN != 0 or ofs > expected:
+                return
+
+            chunk = ofs // self.QGC_CHUNK_SIZE
+            if chunk != st["current_chunk"]:
+                return
+
+            bin_index = (ofs - chunk * self.QGC_CHUNK_SIZE) // self.LOG_DATA_LEN
+            if bin_index >= len(st["chunk_table"]):
+                return
+
+            payload = bytes(message.data[:cnt])
+            fh.seek(ofs)
+            fh.write(payload)
+
+            if ofs not in st["written_offsets"]:
+                st["written_offsets"].add(ofs)
+                st["written_ranges"].append((ofs, cnt))
+                st["bytes_written"] += cnt
+                st["rate_bytes"] += cnt
+                st["rate_packets"] += 1
+
+            st["chunk_table"][bin_index] = True
             st["last_ts"] = time.time()
-            if cnt == 0 or (
-                cnt < self.CHUNK_SIZE
-                and len(st["download_set"]) == 1 + (ofs // self.CHUNK_SIZE)
-            ):
+
+            self._qgc_update_rates_locked(st)
+            if self._qgc_log_complete_locked(st):
                 st["complete"] = True
+            elif self._qgc_chunk_complete_locked(st):
+                self._qgc_advance_chunk_locked(st)
+                self._qgc_request_missing_range_locked(st)
+            elif bin_index < len(st["chunk_table"]) - 1 and st["chunk_table"][bin_index + 1]:
+                self._qgc_request_missing_range_locked(st)
+
+            st["missing_bins"] = st["chunk_table"].count(False)
             self._stream_cv.notify_all()
 
     def _send_log_request_list(self):
@@ -259,29 +294,80 @@ class FlightControllerLogService:
         master = self.vehicle._master
         master.mav.log_request_end_send(master.target_system, master.target_component)
 
-    def _stream_resend_missing(self, st):
-        """Re-request gaps after idle (MAVProxy LogModule.handle_log_data_missing)."""
+    def _set_telemetry_streams(self, rate_hz):
         master = self.vehicle._master
-        ts, tc = master.target_system, master.target_component
-        log_id = st["log_id"]
-        ds = st["download_set"]
-        if not ds:
+        streams = (
+            mavutil.mavlink.MAV_DATA_STREAM_ALL,
+            mavutil.mavlink.MAV_DATA_STREAM_RAW_SENSORS,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS,
+            mavutil.mavlink.MAV_DATA_STREAM_RC_CHANNELS,
+            mavutil.mavlink.MAV_DATA_STREAM_RAW_CONTROLLER,
+            mavutil.mavlink.MAV_DATA_STREAM_POSITION,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTRA2,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTRA3,
+        )
+        for stream_id in streams:
+            master.mav.request_data_stream_send(
+                master.target_system,
+                master.target_component,
+                stream_id,
+                rate_hz,
+                1 if rate_hz > 0 else 0,
+            )
+
+    def _qgc_num_chunks(self, expected_size):
+        return max(1, (int(expected_size) + self.QGC_CHUNK_SIZE - 1) // self.QGC_CHUNK_SIZE)
+
+    def _qgc_chunk_bins(self, expected_size, chunk):
+        remaining = max(0, int(expected_size) - int(chunk) * self.QGC_CHUNK_SIZE)
+        bins = (remaining + self.LOG_DATA_LEN - 1) // self.LOG_DATA_LEN
+        return max(1, min(self.QGC_CHUNK_BINS, bins))
+
+    def _qgc_chunk_complete_locked(self, st):
+        return bool(st["chunk_table"]) and all(st["chunk_table"])
+
+    def _qgc_log_complete_locked(self, st):
+        return self._qgc_chunk_complete_locked(st) and (
+            st["current_chunk"] + 1 == self._qgc_num_chunks(st["expected_size"])
+        )
+
+    def _qgc_advance_chunk_locked(self, st):
+        st["current_chunk"] += 1
+        st["chunk_table"] = [False] * self._qgc_chunk_bins(st["expected_size"], st["current_chunk"])
+        st["missing_bins"] = len(st["chunk_table"])
+
+    def _qgc_update_rates_locked(self, st):
+        now = time.time()
+        dt = now - st["last_rate_ts"]
+        if dt < 1.0:
             return
-        highest = max(ds)
-        diff = set(range(highest)).difference(ds)
-        if not diff:
-            self._send_log_request_data(log_id, (1 + highest) * self.CHUNK_SIZE, 0xFFFFFFFF)
-        else:
-            num_requests = 0
-            while num_requests < self.LOG_STREAM_GAP_RESEND_MAX and diff:
-                start = min(diff)
-                diff.remove(start)
-                end = start
-                while end + 1 in diff:
-                    diff.remove(end + 1)
-                    end += 1
-                self._send_log_request_data(log_id, start * self.CHUNK_SIZE, (end + 1 - start) * self.CHUNK_SIZE)
-                num_requests += 1
+        st["current_rate_bps"] = st["rate_bytes"] / max(dt, 0.000001)
+        st["packet_rate"] = st["rate_packets"] / max(dt, 0.000001)
+        total_dt = max(now - st["start_ts"], 0.000001)
+        st["average_rate_bps"] = st["bytes_written"] / total_dt
+        st["rate_bytes"] = 0
+        st["rate_packets"] = 0
+        st["last_rate_ts"] = now
+
+    def _qgc_request_missing_range_locked(self, st):
+        if self._qgc_chunk_complete_locked(st):
+            return
+        start = 0
+        while start < len(st["chunk_table"]) and st["chunk_table"][start]:
+            start += 1
+        end = start
+        while end < len(st["chunk_table"]) and not st["chunk_table"][end]:
+            end += 1
+        offset = st["current_chunk"] * self.QGC_CHUNK_SIZE + start * self.LOG_DATA_LEN
+        count = (end - start) * self.LOG_DATA_LEN
+        if count <= 0:
+            return
+        master = self.vehicle._master
+        master.mav.log_request_data_send(master.target_system, master.target_component, st["log_id"], offset, count)
+        st["retries"] += 1
+        st["last_request_ts"] = time.time()
+        st["missing_bins"] = st["chunk_table"].count(False)
 
     def fetch_log_list(self, timeout=8.0, attempts=2):
         try:
@@ -334,7 +420,7 @@ class FlightControllerLogService:
                 "is_latest": log_id == latest_id,
                 "cached": cached_path.exists() and (entry["size"] == 0 or cached_path.stat().st_size == entry["size"]),
                 "cached_name": file_name,
-                "transfer_method": "log_request_data",
+                "transfer_method": "qgc_log_request_data",
             })
         return payload
 
@@ -362,58 +448,91 @@ class FlightControllerLogService:
 
     def _download_entry_via_log_request(self, entry, file_path):
         """
-        Bulk LOG_REQUEST_DATA then stream LOG_DATA into file, with idle gap fill like MAVProxy log.py.
+        QGC-style LOG_REQUEST_DATA download: 512 LOG_DATA bins per chunk,
+        retrying the first missing contiguous range until the chunk is complete.
         """
         log_id = entry["id"]
         expected = int(entry["size"])
         print(
-            f"[LOG SERVICE] Downloading FC log {log_id} via LOG_REQUEST_DATA (MAVProxy-style) -> {file_path}"
+            f"[LOG SERVICE] Downloading FC log {log_id} via QGC LOG_REQUEST_DATA chunks -> {file_path}"
         )
-        master = self.vehicle._master
-        ts, tc = master.target_system, master.target_component
         fh = file_path.open("wb")
+        fh.truncate(expected)
+        now = time.time()
         st = {
             "log_id": log_id,
             "expected_size": expected,
             "bytes_written": 0,
             "fh": fh,
             "path": file_path,
-            "download_set": set(),
-            "download_ofs": 0,
-            "last_ts": time.time(),
+            "current_chunk": 0,
+            "chunk_table": [False] * self._qgc_chunk_bins(expected, 0),
+            "missing_bins": self._qgc_chunk_bins(expected, 0),
+            "written_offsets": set(),
+            "written_ranges": [],
+            "rate_bytes": 0,
+            "rate_packets": 0,
+            "current_rate_bps": 0.0,
+            "average_rate_bps": 0.0,
+            "packet_rate": 0.0,
+            "retries": 0,
+            "start_ts": now,
+            "last_rate_ts": now,
+            "last_ts": now,
+            "last_request_ts": 0.0,
             "complete": False,
+            "transfer_method": "qgc_log_request_data",
         }
         with self._stream_cv:
             self._stream_state = st
         try:
-            master.mav.log_request_data_send(ts, tc, log_id, 0, 0xFFFFFFFF)
+            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+                self._set_telemetry_streams(0)
+            with self._stream_cv:
+                self._qgc_request_missing_range_locked(st)
             deadline = time.monotonic() + self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC
             while time.monotonic() < deadline:
                 with self._stream_cv:
                     if st["complete"]:
                         break
-                    if expected > 0 and st["path"].stat().st_size >= expected:
-                        st["complete"] = True
-                        break
-                    self._stream_cv.wait(timeout=0.25)
+                    self._stream_cv.wait(timeout=0.05)
                     if st["complete"]:
                         break
-                    if time.time() - st["last_ts"] > self.LOG_STREAM_IDLE_TRIGGER_SEC:
-                        self._stream_resend_missing(st)
+                    if time.time() - st["last_request_ts"] >= self.QGC_DATA_TIMEOUT_SEC:
+                        self._qgc_request_missing_range_locked(st)
                         st["last_ts"] = time.time()
+                    self._qgc_update_rates_locked(st)
             with self._stream_cv:
-                ok = st["complete"] or (expected > 0 and st["path"].stat().st_size >= expected)
+                ok = st["complete"]
+                unique_bytes = sum(count for _ofs, count in st["written_ranges"])
             if not ok:
-                got = file_path.stat().st_size if file_path.exists() else 0
                 raise RuntimeError(
-                    f"Log {log_id} download incomplete or timed out (got {got} of {expected} B)"
+                    f"Log {log_id} download incomplete or timed out "
+                    f"(got {unique_bytes} of {expected} B, chunk {st['current_chunk']}, "
+                    f"missing {st['missing_bins']} bins)"
                 )
         finally:
             fh.flush()
             fh.close()
+            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+                self._set_telemetry_streams(4)
             with self._stream_cv:
                 self._stream_state = None
             self._send_log_request_end()
+
+        file_size = file_path.stat().st_size
+        unique_bytes = sum(count for _ofs, count in st["written_ranges"])
+        if file_size != expected or unique_bytes != expected:
+            raise RuntimeError(
+                f"Log {log_id} failed size check: file_size={file_size}, "
+                f"unique_payload_bytes={unique_bytes}, expected={expected}"
+            )
+        elapsed = max(time.time() - st["start_ts"], 0.000001)
+        print(
+            f"[LOG SERVICE] QGC download complete: log {log_id}, "
+            f"{self._qgc_num_chunks(expected)} chunks, {len(st['written_offsets'])} LOG_DATA packets, "
+            f"{expected / elapsed / 1024.0:.1f} KB/s"
+        )
 
     def _download_entry(self, entry):
         with self._download_lock:
@@ -432,7 +551,12 @@ class FlightControllerLogService:
 
                 if file_path.exists():
                     file_path.unlink()
-                self._download_entry_via_log_request(entry, file_path)
+                try:
+                    self._download_entry_via_log_request(entry, file_path)
+                except Exception:
+                    if file_path.exists():
+                        file_path.unlink()
+                    raise
                 return self._metadata_for_path(file_path, entry)
             finally:
                 self._flight_log_download_leave()
@@ -457,6 +581,7 @@ class FlightControllerLogService:
             "url": f"/logs/{file_path.name}",
             "size": stat.st_size,
             "modified_at": int(stat.st_mtime),
+            "transfer_method": "qgc_log_request_data",
         }
         if entry is not None:
             payload["log_id"] = entry["id"]
@@ -491,13 +616,13 @@ class FlightControllerLogService:
         return candidate
 
     # ----------------------------------------------------------------
-    # Auto-download latest log on disarm (LOG_REQUEST_DATA; progress via /api/log-download-status)
+    # Auto-download latest log on disarm (QGC LOG_REQUEST_DATA chunks; progress via /api/log-download-status)
     # ----------------------------------------------------------------
 
     def auto_download_latest_log(self):
         """
         Triggered when the drone disarms. Downloads the latest log in a background thread
-        using MAVProxy-style LOG_REQUEST_DATA streaming.
+        using QGC-style LOG_REQUEST_DATA chunk streaming.
         """
         if self._auto_download_in_progress:
             print("[LOG SERVICE] Auto-download already in progress, skipping.")
@@ -515,7 +640,7 @@ class FlightControllerLogService:
         print("[LOG SERVICE] Drone disarmed – waiting 5s for FC to finalize log...")
         time.sleep(5)
         try:
-            self._set_auto_download_msg("Disarm: downloading latest log (LOG_REQUEST_DATA)…")
+            self._set_auto_download_msg("Disarm: downloading latest log (QGC LOG_REQUEST_DATA)…")
             print("[LOG SERVICE] Starting auto-download of latest flight log…")
             metadata = self.download_latest_log()
             print(

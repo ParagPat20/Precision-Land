@@ -765,6 +765,7 @@ def resolve_vehicle_connection_path(manual_path=None):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--connect', default = None, help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0.")
+parser.add_argument('--baud', type=int, default=int(os.environ.get("JECH_MAVLINK_BAUD", "921600")), help="Vehicle serial baud rate. Default: %(default)s")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
 
@@ -825,10 +826,10 @@ def camera_to_uav(x_cam, y_cam):
 #-------------- CONNECTION  
 #--------------------------------------------------    
 #-- Connect to the vehicle with retry loop
-print(f'Connecting using {args.connect}...')
+print(f'Connecting using {args.connect} at {args.baud} baud...')
 while True:
     try:
-        vehicle = connect(args.connect)
+        vehicle = connect(args.connect, baud=args.baud)
         break
     except Exception as e:
         print(f"Connection failed: {e}. Retrying in 2s...")
@@ -838,7 +839,7 @@ print(vehicle, "connected!!!")
 #--------------------------------------------------
 #-------------- FLIGHT CONTROLLER LOG SERVICE
 #--------------------------------------------------
-# HTTP log browser + DataFlash download via LOG_REQUEST_DATA (MAVProxy log.py style, fc_log_service.py).
+# HTTP log browser + DataFlash download via QGC-style LOG_REQUEST_DATA chunks (fc_log_service.py).
 # Optional env: JECH_FC_LOG_CACHE_DIR, JECH_FC_LOG_PORT, JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC, etc.
 # No extra wiring here beyond start_log_services + disarm hook below.
 # Single DroneKit Vehicle instance: pass-through only — fc_log_service does NOT call connect().
@@ -873,7 +874,7 @@ def armed_listener(self, attr_name, value):
         print("[LED] Armed - Resetting Failsafe Flags")
     else:
         # Disarmed: background thread in fc_log_service waits briefly, then pulls the latest .bin
-        # over LOG_REQUEST_DATA (same stack as HTTP /api/logs/latest).
+        # over QGC-style LOG_REQUEST_DATA chunks (same stack as HTTP /api/logs/latest).
         print("[LOG SERVICE] Disarm detected - triggering auto log download...")
         fc_log_service.auto_download_latest_log()
 
