@@ -3,7 +3,7 @@ import time
 import os
 
 DEVICE = "/dev/ttyUSB0"
-BAUD = 921600
+BAUD = 115200
 
 CHUNK_SIZE = 90
 
