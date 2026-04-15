@@ -82,6 +82,9 @@ firebase_initialized = False
 abort_requested = False  # Global abort flag to stop mission execution
 active_mission_ref = None  # Reference to current mission command in Firebase
 mission_active = False  # Track if a mission is currently active (IN_PROGRESS)
+latest_battery_voltage = 0.0
+latest_battery_current = 0.0
+latest_battery_remaining = -1
 
 def build_telemetry_payload():
     """Build the latest telemetry snapshot for Firebase consumers."""
@@ -90,13 +93,16 @@ def build_telemetry_payload():
         return None
 
     # Safe extraction of battery data
-    batt_voltage = 0.0
-    batt_cur = 0.0
+    batt_voltage = latest_battery_voltage
+    batt_cur = latest_battery_current
+    batt_remaining = latest_battery_remaining
     if vehicle.battery is not None:
         if vehicle.battery.voltage is not None:
             batt_voltage = float(vehicle.battery.voltage)
         if vehicle.battery.current is not None:
             batt_cur = float(vehicle.battery.current)
+        if vehicle.battery.level is not None:
+            batt_remaining = int(vehicle.battery.level)
 
     return {
         'lat': loc.lat,
@@ -105,7 +111,12 @@ def build_telemetry_payload():
         'heading': float(vehicle.heading) if vehicle.heading is not None else 0.0,
         'mode': vehicle.mode.name if vehicle.mode is not None else 'UNKNOWN',
         'batteryVoltage': batt_voltage,
+        'battery_voltage': batt_voltage,
+        'batteryCurrent': batt_cur,
+        'battery_current': batt_cur,
         'current': batt_cur,
+        'batteryRemaining': batt_remaining,
+        'battery_remaining': batt_remaining,
         'updated_at': int(time.time() * 1000)
     }
 
@@ -160,7 +171,12 @@ def telemetry_loop(cmd_ref):
                 telemetry = build_telemetry_payload()
                 if telemetry is not None:
                     cmd_ref.child('telemetry').update(telemetry)
-                    print(f"[FIREBASE DEBUG] [OK] Telemetry sent: lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, heading={vehicle.heading}°, mode={vehicle.mode.name}")
+                    print(
+                        f"[FIREBASE DEBUG] [OK] Telemetry sent: "
+                        f"lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, "
+                        f"heading={vehicle.heading}, mode={vehicle.mode.name}, "
+                        f"batt={telemetry['batteryVoltage']:.2f}V, current={telemetry['current']:.2f}A"
+                    )
                 else:
                     print("[FIREBASE DEBUG] Location data not available, skipping telemetry send")
             except Exception as e:
@@ -458,11 +474,12 @@ def firebase_listener_thread():
         file_size = os.path.getsize(CREDENTIALS_PATH)
         print(f"[FIREBASE DEBUG] [CHECK] Service account key found ({file_size} bytes)")
     
-    while not firebase_initialized:
+    initial_command_fetch_started = False
+
+    while True:
         try:
-            print(f"[FIREBASE DEBUG] [TIMING] Starting Firebase initialization... (elapsed: {time.time() - start_time:.1f}s)")
-            
             if not firebase_admin._apps:
+                print(f"[FIREBASE DEBUG] [TIMING] Starting Firebase initialization... (elapsed: {time.time() - start_time:.1f}s)")
                 print(f"[FIREBASE DEBUG] [TIMING] Loading credentials from: {CREDENTIALS_PATH}")
                 cred_start = time.time()
                 cred = credentials.Certificate(CREDENTIALS_PATH)
@@ -479,11 +496,10 @@ def firebase_listener_thread():
                 }
                 firebase_admin.initialize_app(cred, options)
                 print(f"[FIREBASE DEBUG] [TIMING] Firebase app initialized in {time.time() - init_start:.2f}s")
-            
-            print(f"[FIREBASE DEBUG] [OK] Firebase Connected! (Total time: {time.time() - start_time:.1f}s)")
-            print(f"[FIREBASE DEBUG] Database URL: {DATABASE_URL}")
-            print(f"[FIREBASE DEBUG] Drone ID: {DRONE_ID}")
-            firebase_initialized = True
+                print(f"[FIREBASE DEBUG] [OK] Firebase Connected! (Total time: {time.time() - start_time:.1f}s)")
+                print(f"[FIREBASE DEBUG] Database URL: {DATABASE_URL}")
+                print(f"[FIREBASE DEBUG] Drone ID: {DRONE_ID}")
+                firebase_initialized = True
             
             print(f"[FIREBASE DEBUG] [TIMING] Getting database reference...")
             ref_start = time.time()
@@ -511,13 +527,7 @@ def firebase_listener_thread():
             print(f"[FIREBASE DEBUG] [TIMING] Setting up Firebase listener...")
             print("[FIREBASE DEBUG] This may take 3-5 minutes due to network latency to Singapore...")
             print("[FIREBASE DEBUG] System is fully operational during this time! ArUco tracking works!")
-            listener_start = time.time()
-            ref.listen(on_firebase_event)
-            print(f"[FIREBASE DEBUG] [TIMING] Listener setup completed in {time.time() - listener_start:.2f}s")
-            print("[FIREBASE DEBUG] [OK] Firebase Listener Active - Listening for commands and abort requests...")
-            print("[FIREBASE DEBUG] READY! System can now receive missions from app!")
-            print(f"[FIREBASE DEBUG] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
-            
+
             # Fetch initial command in background (don't block the main listener)
             # This way the system is ready to receive new commands immediately
             def fetch_initial_command():
@@ -547,14 +557,25 @@ def firebase_listener_thread():
                     traceback.print_exc()
             
             # Start initial fetch in background thread so it doesn't block
-            initial_fetch_thread = threading.Thread(target=fetch_initial_command, name="InitialFetchThread", daemon=True)
-            initial_fetch_thread.start()
-            print("[FIREBASE DEBUG] Initial command fetch started in background thread")
+            if not initial_command_fetch_started:
+                initial_fetch_thread = threading.Thread(target=fetch_initial_command, name="InitialFetchThread", daemon=True)
+                initial_fetch_thread.start()
+                initial_command_fetch_started = True
+                print("[FIREBASE DEBUG] Initial command fetch started in background thread")
+
+            listener_start = time.time()
+            print("[FIREBASE DEBUG] [OK] Firebase Listener Active - Listening for commands and abort requests...")
+            print("[FIREBASE DEBUG] READY! System can now receive missions from app!")
+            print(f"[FIREBASE DEBUG] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
+            ref.listen(on_firebase_event)
+            print(f"[FIREBASE DEBUG] Firebase listener ended after {time.time() - listener_start:.1f}s; reconnecting in 10s...")
+            time.sleep(10)
             
         except Exception as e:
-            print(f"[FIREBASE DEBUG] Firebase Connection Failed: {e}. Retrying in 10s...")
+            print(f"[FIREBASE DEBUG] Firebase listener/connection failed: {e}. Retrying in 10s...")
             print(f"[FIREBASE DEBUG] [TIMING] Failed at {time.time() - start_time:.1f}s")
-            traceback.print_exc()
+            if os.environ.get("JECH_FIREBASE_TRACEBACK", "0") == "1":
+                traceback.print_exc()
             time.sleep(10)
 
 def status_publisher_thread():
@@ -580,7 +601,11 @@ def status_publisher_thread():
             status_ref.update(status_payload)
             readable_time = format_timestamp(current_time)
             if telemetry is not None:
-                print(f"[FIREBASE DEBUG] [OK] Status published - last_seen: {current_time} ({readable_time}), lat={telemetry['lat']:.6f}, lng={telemetry['lng']:.6f}, alt={telemetry['alt']:.1f}m")
+                print(
+                    f"[FIREBASE DEBUG] [OK] Status published - last_seen: {current_time} ({readable_time}), "
+                    f"lat={telemetry['lat']:.6f}, lng={telemetry['lng']:.6f}, alt={telemetry['alt']:.1f}m, "
+                    f"batt={telemetry['batteryVoltage']:.2f}V, current={telemetry['current']:.2f}A"
+                )
             else:
                 print(f"[FIREBASE DEBUG] [OK] Status published - last_seen: {current_time} ({readable_time}), telemetry unavailable")
         except Exception as e:
@@ -835,6 +860,20 @@ while True:
         print(f"Connection failed: {e}. Retrying in 2s...")
         time.sleep(2)
 print(vehicle, "connected!!!")
+
+@vehicle.on_message('SYS_STATUS')
+def sys_status_battery_listener(self, name, message):
+    """Cache MAVLink SYS_STATUS battery data as a fallback for DroneKit vehicle.battery."""
+    global latest_battery_voltage, latest_battery_current, latest_battery_remaining
+    voltage_mv = int(getattr(message, "voltage_battery", -1))
+    current_ca = int(getattr(message, "current_battery", -1))
+    remaining = int(getattr(message, "battery_remaining", -1))
+    if voltage_mv > 0:
+        latest_battery_voltage = voltage_mv / 1000.0
+    if current_ca >= 0:
+        latest_battery_current = current_ca / 100.0
+    if remaining >= 0:
+        latest_battery_remaining = remaining
 
 #--------------------------------------------------
 #-------------- FLIGHT CONTROLLER LOG SERVICE
