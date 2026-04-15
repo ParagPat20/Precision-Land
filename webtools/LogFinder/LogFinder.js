@@ -198,8 +198,11 @@ function render_inventory(logs, source, transferStatus) {
                 button.title = "FC log transfer already running — wait for it to finish."
             }
         }
-        button.addEventListener("click", () => {
-            loading_call(async () => {
+        button.addEventListener("click", async () => {
+            const originalText = button.textContent
+            button.disabled = true
+            button.textContent = log.cached ? "Loading log..." : "Downloading..."
+            try {
                 const apiBase = new URL(source, window.location.href).toString()
                 if (!log.cached) {
                     const st = await fetchLogDownloadStatus()
@@ -215,7 +218,11 @@ function render_inventory(logs, source, transferStatus) {
 
                 await load_from_server(document.getElementById("server_url").value.trim())
                 await load_inventory_from_server(apiBase)
-            })
+            } catch (error) {
+                button.disabled = false
+                button.textContent = originalText
+                alert(error.message || error)
+            }
         })
         actionCell.appendChild(button)
         row.appendChild(actionCell)
