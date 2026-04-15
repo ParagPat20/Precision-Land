@@ -111,12 +111,7 @@ def build_telemetry_payload():
         'heading': float(vehicle.heading) if vehicle.heading is not None else 0.0,
         'mode': vehicle.mode.name if vehicle.mode is not None else 'UNKNOWN',
         'batteryVoltage': batt_voltage,
-        'battery_voltage': batt_voltage,
-        'batteryCurrent': batt_cur,
-        'battery_current': batt_cur,
         'current': batt_cur,
-        'batteryRemaining': batt_remaining,
-        'battery_remaining': batt_remaining,
         'updated_at': int(time.time() * 1000)
     }
 
