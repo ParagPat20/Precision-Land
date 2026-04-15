@@ -51,9 +51,14 @@ def download_log(log_id, filename):
 
     f = open(filename, "wb")
 
-    offset = 0
+    # Total size comes from LOG_ENTRY (if present). Used for % and ETA-ish feedback.
+    expected_size = int(entries.get(log_id).size) if log_id in entries else 0
+
     retries = 0
     last_recv = time.time()
+    start = time.time()
+    last_report = start
+    last_report_bytes = 0
 
     master.mav.log_request_data_send(
         target_system,
@@ -73,6 +78,19 @@ def download_log(log_id, filename):
                 retry_missing(log_id)
                 retries += 1
                 last_recv = time.time()
+            # Progress report (even if packets are missing).
+            now = time.time()
+            if now - last_report >= 2.0:
+                size = os.path.getsize(filename) if os.path.exists(filename) else 0
+                inst_rate_kbs = ((size - last_report_bytes) / 1024.0) / max(now - last_report, 0.001)
+                avg_rate_kbs = (size / 1024.0) / max(now - start, 0.001)
+                if expected_size > 0:
+                    pct = min(100.0, (100.0 * size) / expected_size)
+                    print(f"Progress: {size}/{expected_size} bytes ({pct:.1f}%)  speed={inst_rate_kbs:.1f} kB/s avg={avg_rate_kbs:.1f} kB/s retries={retries}")
+                else:
+                    print(f"Progress: {size} bytes  speed={inst_rate_kbs:.1f} kB/s avg={avg_rate_kbs:.1f} kB/s retries={retries}")
+                last_report = now
+                last_report_bytes = size
             continue
 
         last_recv = time.time()
@@ -83,6 +101,21 @@ def download_log(log_id, filename):
             f.write(bytes(msg.data[:msg.count]))
             download_set.add(msg.ofs // CHUNK_SIZE)
 
+        # Progress report (every ~2 seconds) while data is flowing.
+        now = time.time()
+        if now - last_report >= 2.0:
+            f.flush()
+            size = os.path.getsize(filename)
+            inst_rate_kbs = ((size - last_report_bytes) / 1024.0) / max(now - last_report, 0.001)
+            avg_rate_kbs = (size / 1024.0) / max(now - start, 0.001)
+            if expected_size > 0:
+                pct = min(100.0, (100.0 * size) / expected_size)
+                print(f"Progress: {size}/{expected_size} bytes ({pct:.1f}%)  speed={inst_rate_kbs:.1f} kB/s avg={avg_rate_kbs:.1f} kB/s retries={retries}")
+            else:
+                print(f"Progress: {size} bytes  speed={inst_rate_kbs:.1f} kB/s avg={avg_rate_kbs:.1f} kB/s retries={retries}")
+            last_report = now
+            last_report_bytes = size
+
         # finish condition
         if msg.count == 0:
             break
@@ -90,7 +123,13 @@ def download_log(log_id, filename):
     f.close()
 
     size = os.path.getsize(filename)
-    print(f"Done: {filename} ({size} bytes, retries={retries})")
+    dt = max(time.time() - start, 0.001)
+    speed = (size / 1024.0) / dt
+    if expected_size > 0:
+        pct = min(100.0, (100.0 * size) / expected_size)
+        print(f"Done: {filename} ({size}/{expected_size} bytes, {pct:.1f}%, {dt:.1f}s, {speed:.1f} kB/s, retries={retries})")
+    else:
+        print(f"Done: {filename} ({size} bytes, {dt:.1f}s, {speed:.1f} kB/s, retries={retries})")
 
 
 # ----------------------------
