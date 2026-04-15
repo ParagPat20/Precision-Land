@@ -182,8 +182,16 @@ class FlightControllerLogService:
                     return
 
                 if parsed.path.startswith("/webtools/"):
+                    relative_web_path = unquote(parsed.path[len("/webtools/"):])
+                    if relative_web_path:
+                        possible_dir = (service.web_root / relative_web_path).resolve()
+                        if possible_dir.is_dir() and not parsed.path.endswith("/"):
+                            self.send_response(301)
+                            self.send_header("Location", parsed.path + "/")
+                            self.end_headers()
+                            return
                     try:
-                        asset_path = service.resolve_web_asset(parsed.path[len("/webtools/"):])
+                        asset_path = service.resolve_web_asset(relative_web_path)
                     except FileNotFoundError:
                         self._send_json({"error": "Asset not found"}, status=404)
                         return

@@ -1,6 +1,6 @@
 
 var DataflashParser
-import('../modules/JsDataflashParser/parser.js').then((mod) => { DataflashParser = mod.default });
+import('/webtools/modules/JsDataflashParser/parser.js').then((mod) => { DataflashParser = mod.default });
 
 var dirHandle
 let remoteSourceUrl = null
@@ -149,7 +149,7 @@ function render_inventory(logs, source, transferStatus) {
     table.style.borderCollapse = "collapse"
 
     const headerRow = document.createElement("tr")
-    ;["Log ID", "Time", "Size", "State", "Action"].forEach((text) => {
+    ;["Log ID", "Time", "Size", "State", "Action", "Open In"].forEach((text) => {
         const th = document.createElement("th")
         th.textContent = text
         th.style.textAlign = "left"
@@ -219,6 +219,34 @@ function render_inventory(logs, source, transferStatus) {
         })
         actionCell.appendChild(button)
         row.appendChild(actionCell)
+
+        const openCell = document.createElement("td")
+        openCell.style.padding = "8px"
+        const openButton = document.createElement("button")
+        openButton.textContent = "Open In"
+        openButton.disabled = !log.cached
+        if (!log.cached) {
+            openButton.title = "Download this log to the RPi first."
+        } else {
+            const apiBase = new URL(source, window.location.href).toString()
+            const fileName = log.cached_name || `log_${String(log.id).padStart(5, "0")}.bin`
+            const remoteFile = {
+                name: fileName,
+                relativePath: fileName,
+                rel_path: fileName,
+                url: new URL(`/logs/${fileName}`, apiBase).toString()
+            }
+            const openIn = get_open_in(() => remoteFile)
+            openIn.update_enable(null)
+            tippy(openButton, {
+                content: openIn.tippy_div,
+                placement: "left",
+                interactive: true,
+                appendTo: () => document.body,
+            })
+        }
+        openCell.appendChild(openButton)
+        row.appendChild(openCell)
 
         table.appendChild(row)
     }
