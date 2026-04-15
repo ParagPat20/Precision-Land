@@ -79,7 +79,8 @@ def download_log(log_id, filename):
 
         if msg.count > 0:
             f.seek(msg.ofs)
-            f.write(msg.data[:msg.count])
+            # LOG_DATA.data is a sequence of ints in some pymavlink builds; convert to bytes for file I/O.
+            f.write(bytes(msg.data[:msg.count]))
             download_set.add(msg.ofs // CHUNK_SIZE)
 
         # finish condition
