@@ -5,7 +5,7 @@ import time
 # ================= CONFIG =================
 CONNECTION = '/dev/ttyUSB0'
 BAUD = 115200
-REMOTE_DIR = '/APM/LOG'   # ArduPilot log directory
+REMOTE_DIR = '/APM/LOGS'   # ArduPilot log directory
 # ==========================================
 
 
@@ -19,16 +19,27 @@ def connect():
 
 def list_logs(ftp):
     print("\nFetching log list...")
-    files = ftp.listdir(REMOTE_DIR)
 
-    logs = [f for f in files if f.endswith('.BIN') or f.endswith('.bin')]
+    result = ftp.cmd_list([REMOTE_DIR])
+
+    if result is None:
+        print("Failed to list directory")
+        return []
+
+    logs = []
+
+    for entry in result:
+        name = entry[0]
+
+        if name.lower().endswith(".bin"):
+            logs.append(name)
+
     logs.sort()
 
     for i, log in enumerate(logs):
         print(f"{i+1}. {log}")
 
     return logs
-
 
 def download_file(ftp, remote_file, local_file):
     print(f"\nDownloading {remote_file} → {local_file}")
