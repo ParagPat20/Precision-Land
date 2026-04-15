@@ -881,17 +881,18 @@ def armed_listener(self, attr_name, value):
 #--------------------------------------------------
 #-------------- PARAMETERS  
 #--------------------------------------------------
-# First parameter assignment triggers DroneKit wait_ready() for the param table (default 30s).
-# On UART telemetry the FC often needs longer; wait here on the same `vehicle` (no reconnect).
-_param_ready_timeout = float(os.environ.get("JECH_PARAM_READY_TIMEOUT_SEC", "180"))
-print(f"[PARAM] Waiting for FC parameter download (timeout {_param_ready_timeout}s, same vehicle as log service)...")
-try:
-    vehicle.wait_ready(timeout=_param_ready_timeout)
-except Exception as exc:
-    print(f"[PARAM] wait_ready: {exc!r} — continuing; first param write may still retry internally.")
+# DroneKit parameter writes can block startup (wait_ready() default 30s) on slow UART links.
+# To match the instant log-download behavior (scripts/log_download.py), send MAVLink PARAM_SET
+# directly on the already-open vehicle link and continue without waiting for a full param table.
+def set_param_nonblocking(param_name: str, value: float, param_type: int) -> None:
+    master = vehicle._master
+    pid = param_name.encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
+    master.mav.param_set_send(master.target_system, master.target_component, pid, float(value), int(param_type))
+    print(f"[PARAM] Sent PARAM_SET {param_name}={value} type={param_type} (non-blocking)")
 
-vehicle.parameters['PLND_ENABLED']       = 1
-vehicle.parameters['PLND_TYPE']          = 1 # Mavlink landing backend
+# PLND params (integers in ArduPilot; send as INT8 to avoid float-only semantics).
+set_param_nonblocking("PLND_ENABLED", 1, mavutil.mavlink.MAV_PARAM_TYPE_INT8)
+set_param_nonblocking("PLND_TYPE", 1, mavutil.mavlink.MAV_PARAM_TYPE_INT8)  # Mavlink landing backend
 
 # vehicle.parameters['LAND_REPOSITION']   = 0 # !!!!!! ONLY FOR SITL IF NO RC IS CONNECTED
 
