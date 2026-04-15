@@ -9,6 +9,7 @@ CONNECTION = "/dev/ttyUSB0"
 BAUD = 115200
 LOG_ID = "latest"  # Use "latest" or an integer log id from the printed list.
 OUTPUT_FILE = None  # Use None for QGC-style log_<id>_<time>.bin naming.
+PAUSE_TELEMETRY_DURING_DOWNLOAD = True
 # ==========================================
 
 
@@ -153,7 +154,28 @@ class QGCLogDownload:
         self.rate_bytes = 0
         self.rate_avg = 0.0
         self.last_rate_time = time.time()
+        self.rate_packets = 0
         self.retries = 0
+
+    def set_telemetry_streams(self, rate_hz):
+        for stream_id in (
+            mavutil.mavlink.MAV_DATA_STREAM_ALL,
+            mavutil.mavlink.MAV_DATA_STREAM_RAW_SENSORS,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS,
+            mavutil.mavlink.MAV_DATA_STREAM_RC_CHANNELS,
+            mavutil.mavlink.MAV_DATA_STREAM_RAW_CONTROLLER,
+            mavutil.mavlink.MAV_DATA_STREAM_POSITION,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTRA2,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTRA3,
+        ):
+            self.master.mav.request_data_stream_send(
+                self.master.target_system,
+                self.master.target_component,
+                stream_id,
+                rate_hz,
+                1 if rate_hz > 0 else 0,
+            )
 
     def num_chunks(self):
         return max(1, (self.entry.size + QGC_CHUNK_SIZE - 1) // QGC_CHUNK_SIZE)
@@ -226,6 +248,7 @@ class QGCLogDownload:
             self.written_offsets.add(ofs)
             self.bytes_written += count
             self.rate_bytes += count
+            self.rate_packets += 1
 
         self.chunk_table[bin_index] = True
 
@@ -244,20 +267,24 @@ class QGCLogDownload:
 
         dt = max(now - self.last_rate_time, 0.000001)
         rate = self.rate_bytes / dt
+        packet_rate = self.rate_packets / dt
         self.rate_avg = self.rate_avg * 0.95 + rate * 0.05
         total_dt = max(now - started, 0.000001)
         total_rate = self.bytes_written / total_dt
         percent = 100.0 * min(self.bytes_written, self.entry.size) / self.entry.size
+        missing = self.chunk_table.count(False)
 
         print(
             f"\r{percent:5.1f}% | "
-            f"{self.rate_avg / 1024:6.1f} KB/s | "
+            f"now {rate / 1024:6.1f} KB/s | "
             f"avg {total_rate / 1024:6.1f} KB/s | "
+            f"{packet_rate:5.1f} pkt/s | "
             f"{min(self.bytes_written, self.entry.size)}/{self.entry.size} bytes | "
-            f"retries={self.retries}",
+            f"missing={missing} retries={self.retries}",
             end="",
         )
         self.rate_bytes = 0
+        self.rate_packets = 0
         self.last_rate_time = now
 
     def download(self):
@@ -267,6 +294,8 @@ class QGCLogDownload:
         )
         started = time.time()
         try:
+            if PAUSE_TELEMETRY_DURING_DOWNLOAD:
+                self.set_telemetry_streams(0)
             with open(self.filename, "wb") as file_obj:
                 file_obj.truncate(self.entry.size)
                 self.request_missing_range()
@@ -289,6 +318,8 @@ class QGCLogDownload:
                 self.master.target_system,
                 self.master.target_component,
             )
+            if PAUSE_TELEMETRY_DURING_DOWNLOAD:
+                self.set_telemetry_streams(4)
             if os.path.exists(self.filename):
                 os.remove(self.filename)
             raise
@@ -297,6 +328,8 @@ class QGCLogDownload:
             self.master.target_system,
             self.master.target_component,
         )
+        if PAUSE_TELEMETRY_DURING_DOWNLOAD:
+            self.set_telemetry_streams(4)
         elapsed = max(time.time() - started, 0.000001)
         print(
             f"\nDownload complete: {self.entry.size} bytes in {elapsed:.1f}s "
