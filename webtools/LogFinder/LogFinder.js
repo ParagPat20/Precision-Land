@@ -5,7 +5,7 @@ import('../modules/JsDataflashParser/parser.js').then((mod) => { DataflashParser
 var dirHandle
 let remoteSourceUrl = null
 let remoteInventoryUrl = null
-let mavftpPollTimer = null
+let logDownloadPollTimer = null
 
 function fcLogApiOrigin() {
     const s = document.getElementById("server_url").value.trim() || document.getElementById("inventory_url").value.trim()
@@ -15,12 +15,12 @@ function fcLogApiOrigin() {
     return new URL(s, window.location.href).origin
 }
 
-async function fetchMavftpStatus() {
+async function fetchLogDownloadStatus() {
     const origin = fcLogApiOrigin()
     if (!origin) {
         return null
     }
-    const url = new URL("/api/mavftp-status", origin)
+    const url = new URL("/api/log-download-status", origin)
     const response = await fetch(url.toString())
     if (!response.ok) {
         return null
@@ -28,12 +28,12 @@ async function fetchMavftpStatus() {
     return await response.json()
 }
 
-function renderMavftpBanner(status) {
-    const el = document.getElementById("mavftp_status_banner")
+function renderLogDownloadBanner(status) {
+    const el = document.getElementById("log_download_status_banner")
     if (!el) {
         return
     }
-    const block = status && (status.busy === true || status.mavftp_active === true)
+    const block = status && status.busy === true
     if (!block) {
         el.style.display = "none"
         el.textContent = ""
@@ -44,29 +44,38 @@ function renderMavftpBanner(status) {
         return
     }
     el.style.display = "block"
-    const elapsed = status.elapsed_sec != null ? ` ~${status.elapsed_sec}s` : ""
-    el.textContent = (status.detail || "FC log transfer in progress") + elapsed
+    const elapsed = status.elapsed_sec != null ? ` · ${status.elapsed_sec}s elapsed` : ""
+    const got = Number(status.bytes_downloaded) || 0
+    const exp = Number(status.expected_bytes) || 0
+    const logLabel = status.log_id != null ? `log ${status.log_id}` : "log"
+    let sizePart = `${format_size_bytes(got)} downloaded`
+    if (exp > 0) {
+        const pct = Math.min(100, Math.round((got / exp) * 100))
+        sizePart = `${format_size_bytes(got)} / ${format_size_bytes(exp)} (${pct}%)`
+    }
+    const head = status.detail ? `${status.detail} · ` : ""
+    el.textContent = `${head}${logLabel}: ${sizePart}${elapsed}`
     document.querySelectorAll("[data-fc-download-btn]").forEach((b) => {
         b.disabled = true
         b.title = "Wait for the current transfer to finish (single FC link)."
     })
 }
 
-async function refreshMavftpBanner() {
+async function refreshLogDownloadBanner() {
     try {
-        const st = await fetchMavftpStatus()
-        renderMavftpBanner(st)
+        const st = await fetchLogDownloadStatus()
+        renderLogDownloadBanner(st)
     } catch (_e) {
         /* ignore poll errors */
     }
 }
 
-function startMavftpStatusPolling() {
-    if (mavftpPollTimer != null) {
+function startLogDownloadStatusPolling() {
+    if (logDownloadPollTimer != null) {
         return
     }
-    refreshMavftpBanner()
-    mavftpPollTimer = window.setInterval(refreshMavftpBanner, 2000)
+    refreshLogDownloadBanner()
+    logDownloadPollTimer = window.setInterval(refreshLogDownloadBanner, 2000)
 }
 
 async function load_file_source(source) {
@@ -176,7 +185,7 @@ function render_inventory(logs, source, transferStatus) {
         button.textContent = log.cached ? "Load downloaded log" : "Download to RPi"
         if (!log.cached) {
             button.setAttribute("data-fc-download-btn", "1")
-            const block = transferStatus && (transferStatus.busy === true || transferStatus.mavftp_active === true)
+            const block = transferStatus && transferStatus.busy === true
             if (block) {
                 button.disabled = true
                 button.title = "FC log transfer already running — wait for it to finish."
@@ -186,8 +195,8 @@ function render_inventory(logs, source, transferStatus) {
             loading_call(async () => {
                 const apiBase = new URL(source, window.location.href).toString()
                 if (!log.cached) {
-                    const st = await fetchMavftpStatus()
-                    if (st && (st.busy === true || st.mavftp_active === true)) {
+                    const st = await fetchLogDownloadStatus()
+                    if (st && st.busy === true) {
                         throw new Error("FC link busy: " + (st.detail || "download in progress"))
                     }
                     const response = await fetch(new URL(`/api/fc-logs/download/${log.id}`, apiBase))
@@ -225,10 +234,10 @@ async function load_inventory_from_server(url = null) {
     }
 
     const manifest = await response.json()
-    const transferStatus = await fetchMavftpStatus()
+    const transferStatus = await fetchLogDownloadStatus()
     render_inventory(manifest.logs || [], resolvedSource, transferStatus)
-    renderMavftpBanner(transferStatus)
-    startMavftpStatusPolling()
+    renderLogDownloadBanner(transferStatus)
+    startLogDownloadStatusPolling()
 }
 
 async function load_from_server(url = null) {
@@ -1181,7 +1190,7 @@ async function initial_load() {
         loading_call(() => load_inventory_from_server(inventory))
     }
     if (source != null || inventory != null) {
-        startMavftpStatusPolling()
+        startLogDownloadStatusPolling()
     }
 
 }
