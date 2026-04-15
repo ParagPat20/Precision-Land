@@ -1,17 +1,13 @@
 from pymavlink import mavutil
+from pymavlink.mavftp import MAVFTP
 import time
-import os
-import pickle
 
 # ================= CONFIG =================
 CONNECTION = '/dev/ttyUSB0'
 BAUD = 115200
-
-CHUNK_SIZE = 900
-WINDOW_SIZE = 10
-RETRY_TIMEOUT = 1.0
-
+REMOTE_DIR = '@MAV_LOG'   # ArduPilot log directory
 # ==========================================
+
 
 def connect():
     print("Connecting...")
@@ -21,156 +17,68 @@ def connect():
     return master
 
 
-def get_log_list(master):
-    print("Requesting log list...")
-    master.mav.log_request_list_send(
-        master.target_system,
-        master.target_component,
-        0,
-        0xFFFF
-    )
+def list_logs(ftp):
+    print("\nFetching log list...")
+    files = ftp.listdir(REMOTE_DIR)
 
-    logs = []
-    while True:
-        msg = master.recv_match(type='LOG_ENTRY', blocking=True)
-        if not msg:
-            continue
+    logs = [f for f in files if f.endswith('.BIN') or f.endswith('.bin')]
+    logs.sort()
 
-        logs.append(msg)
-        print(f"Log {msg.id} size={msg.size}")
-
-        if msg.id == msg.last_log_num:
-            break
+    for i, log in enumerate(logs):
+        print(f"{i+1}. {log}")
 
     return logs
 
 
-# ---------- Resume ----------
-def load_map(filename):
-    if os.path.exists(filename + ".map"):
-        with open(filename + ".map", "rb") as f:
-            return pickle.load(f)
-    return set()
+def download_file(ftp, remote_file, local_file):
+    print(f"\nDownloading {remote_file} → {local_file}")
 
-def save_map(filename, offsets):
-    with open(filename + ".map", "wb") as f:
-        pickle.dump(offsets, f)
+    start_time = time.time()
+    last_time = start_time
+    last_bytes = 0
 
+    def progress_callback(transferred, total):
+        nonlocal last_time, last_bytes
 
-# ---------- Downloader ----------
-def download_log(master, log_id, size, filename):
-    print(f"\nDownloading log {log_id} → {filename} (size={size} bytes)")
-
-    received = load_map(filename)
-    requested = {}
-    retries = 0
-
-    # Preallocate file
-    with open(filename, "ab") as f:
-        f.truncate(size)
-
-    f = open(filename, "r+b")
-
-    total_bytes = sum(CHUNK_SIZE for _ in received)
-    last_bytes = total_bytes
-    last_time = time.time()
-
-    # ---------- Send initial window ----------
-    next_offset = 0
-    for i in range(WINDOW_SIZE):
-        offset = i * CHUNK_SIZE
-        if offset not in received:
-            master.mav.log_request_data_send(
-                master.target_system,
-                master.target_component,
-                log_id,
-                offset,
-                CHUNK_SIZE
-            )
-            requested[offset] = time.time()
-        next_offset = offset + CHUNK_SIZE
-
-    # ---------- Main loop ----------
-    while True:
-        msg = master.recv_match(type='LOG_DATA', blocking=False)
-
-        if msg:
-            offset = msg.ofs
-
-            if offset not in received:
-                data = bytes(msg.data[:msg.count])
-                f.seek(offset)
-                f.write(data)
-
-                received.add(offset)
-                total_bytes += len(data)
-
-            # mark as received
-            if offset in requested:
-                del requested[offset]
-
-        # ---------- Send new requests ----------
-        while len(requested) < WINDOW_SIZE and next_offset < size:
-            if next_offset not in received:
-                master.mav.log_request_data_send(
-                    master.target_system,
-                    master.target_component,
-                    log_id,
-                    next_offset,
-                    CHUNK_SIZE
-                )
-                requested[next_offset] = time.time()
-
-            next_offset += CHUNK_SIZE
-
-        # ---------- Retry missing ----------
         now = time.time()
-        for offset in list(requested.keys()):
-            if now - requested[offset] > RETRY_TIMEOUT:
-                master.mav.log_request_data_send(
-                    master.target_system,
-                    master.target_component,
-                    log_id,
-                    offset,
-                    CHUNK_SIZE
-                )
-                requested[offset] = now
-                retries += 1
-
-        # ---------- Progress ----------
         if now - last_time >= 1:
-            speed = (total_bytes - last_bytes) / (now - last_time) / 1024
-            percent = (total_bytes / size) * 100
+            speed = (transferred - last_bytes) / (now - last_time) / 1024
+            percent = (transferred / total) * 100
 
             print(
-                f"\r{percent:5.1f}% | {speed:6.1f} KB/s | {total_bytes}/{size} bytes | retries={retries}",
+                f"\r{percent:5.1f}% | {speed:6.1f} KB/s | {transferred}/{total} bytes",
                 end=""
             )
 
             last_time = now
-            last_bytes = total_bytes
+            last_bytes = transferred
 
-            save_map(filename, received)
+    ftp.get(
+        remote_file,
+        local_file,
+        callback=progress_callback
+    )
 
-        # ---------- Exit ----------
-        if total_bytes >= size:
-            break
-
-    f.close()
     print("\nDownload complete")
 
 
-# ---------- MAIN ----------
 def main():
     master = connect()
-    logs = get_log_list(master)
+
+    ftp = MAVFTP(master)
+
+    logs = list_logs(ftp)
 
     if not logs:
         print("No logs found")
         return
 
-    latest = logs[-1]
-    download_log(master, latest.id, latest.size, f"log{latest.id}.bin")
+    latest_log = logs[-1]
+
+    remote_path = f"{REMOTE_DIR}/{latest_log}"
+    local_path = latest_log
+
+    download_file(ftp, remote_path, local_path)
 
 
 if __name__ == "__main__":
