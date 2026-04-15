@@ -26,8 +26,8 @@ numpy>=2.0.0,<3
 # OpenCV with contrib (ArUco, etc.). Do not also install opencv-python — same cv2 module.
 opencv-contrib-python==4.13.0.92
 
-# MAVLink / DroneKit stack
-pymavlink>=2.4.40,<3
+# MAVLink / DroneKit stack (pymavlink >=2.4.49 provides pymavlink.mavftp_op for scripts/mavftp.py)
+pymavlink>=2.4.49,<3
 dronekit==2.9.2
 
 # LED Control (Adafruit CircuitPython)

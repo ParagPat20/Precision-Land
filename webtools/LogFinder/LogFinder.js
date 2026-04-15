@@ -45,7 +45,7 @@ function renderMavftpBanner(status) {
     }
     el.style.display = "block"
     const elapsed = status.elapsed_sec != null ? ` ~${status.elapsed_sec}s` : ""
-    el.textContent = (status.detail || "FC log / MAVFTP transfer in progress") + elapsed
+    el.textContent = (status.detail || "FC log transfer in progress") + elapsed
     document.querySelectorAll("[data-fc-download-btn]").forEach((b) => {
         b.disabled = true
         b.title = "Wait for the current transfer to finish (single FC link)."
@@ -179,7 +179,7 @@ function render_inventory(logs, source, transferStatus) {
             const block = transferStatus && (transferStatus.busy === true || transferStatus.mavftp_active === true)
             if (block) {
                 button.disabled = true
-                button.title = "MAVFTP / FC log transfer already running — wait for it to finish."
+                button.title = "FC log transfer already running — wait for it to finish."
             }
         }
         button.addEventListener("click", () => {
