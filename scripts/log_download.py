@@ -175,6 +175,7 @@ class QGCLogDownload:
         self.current_chunk = 0
         self.chunk_table = [False] * self.chunk_bins(0)
         self.written_offsets = set()
+        self.written_ranges = []
         self.bytes_written = 0
         self.rate_bytes = 0
         self.rate_avg = 0.0
@@ -271,6 +272,7 @@ class QGCLogDownload:
 
         if ofs not in self.written_offsets:
             self.written_offsets.add(ofs)
+            self.written_ranges.append((ofs, count))
             self.bytes_written += count
             self.rate_bytes += count
             self.rate_packets += 1
@@ -356,6 +358,17 @@ class QGCLogDownload:
         if PAUSE_TELEMETRY_DURING_DOWNLOAD:
             self.set_telemetry_streams(4)
         elapsed = max(time.time() - started, 0.000001)
+        file_size = os.path.getsize(self.filename)
+        unique_bytes = sum(count for _ofs, count in self.written_ranges)
+        if file_size != self.entry.size or unique_bytes != self.entry.size:
+            raise RuntimeError(
+                f"Downloaded file failed size check: file_size={file_size}, "
+                f"unique_payload_bytes={unique_bytes}, expected={self.entry.size}"
+            )
+        print(
+            "\nAll QGC chunks complete: "
+            f"{self.num_chunks()} chunks, {len(self.written_offsets)} LOG_DATA packets"
+        )
         print(
             f"\nDownload complete: {self.entry.size} bytes in {elapsed:.1f}s "
             f"({self.entry.size / elapsed / 1024:.1f} KB/s)"
