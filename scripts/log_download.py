@@ -1,3 +1,4 @@
+import argparse
 from dataclasses import dataclass
 import os
 import time
@@ -31,9 +32,9 @@ class LogEntry:
     last_log_num: int
 
 
-def connect():
-    print("Connecting...")
-    master = mavutil.mavlink_connection(CONNECTION, baud=BAUD)
+def connect(connection, baud):
+    print(f"Connecting to {connection} at {baud} baud...")
+    master = mavutil.mavlink_connection(connection, baud=baud)
     master.wait_heartbeat()
     print(
         f"Connected: system={master.target_system} component={master.target_component}"
@@ -345,26 +346,62 @@ def default_filename(entry):
     return f"log_{entry.qgc_id}_{timestamp}.bin"
 
 
-def select_log(logs):
-    if str(LOG_ID).lower() == "latest":
+def select_log(logs, log_id):
+    if str(log_id).lower() == "latest":
         return max(logs, key=lambda item: item.qgc_id)
-    wanted = int(LOG_ID)
+    wanted = int(log_id)
     for entry in logs:
         if entry.qgc_id == wanted or entry.mav_id == wanted:
             return entry
     raise RuntimeError(f"Log {wanted} was not reported by the flight controller")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Download ArduPilot/PX4 logs using QGC-style LOG_REQUEST_DATA."
+    )
+    parser.add_argument(
+        "--device",
+        default=CONNECTION,
+        help=f"MAVLink serial device. Default: {CONNECTION}",
+    )
+    parser.add_argument(
+        "--baud",
+        type=int,
+        default=BAUD,
+        help=f"MAVLink serial baud. Must match the FC SERIALx_BAUD. Default: {BAUD}",
+    )
+    parser.add_argument(
+        "--log-id",
+        default=LOG_ID,
+        help="QGC log id, MAVLink log id, or 'latest'. Default: latest",
+    )
+    parser.add_argument(
+        "--output",
+        default=OUTPUT_FILE,
+        help="Output filename. Default: QGC-style log_<id>_<time>.bin",
+    )
+    parser.add_argument(
+        "--keep-telemetry",
+        action="store_true",
+        help="Do not pause normal telemetry streams during download.",
+    )
+    return parser.parse_args()
+
+
 def main():
-    master = connect()
+    args = parse_args()
+    master = connect(args.device, args.baud)
     logs = get_log_list(master)
     if not logs:
         print("No logs found")
         return
 
     print_log_list(logs)
-    entry = select_log(logs)
-    filename = OUTPUT_FILE or default_filename(entry)
+    entry = select_log(logs, args.log_id)
+    filename = args.output or default_filename(entry)
+    global PAUSE_TELEMETRY_DURING_DOWNLOAD
+    PAUSE_TELEMETRY_DURING_DOWNLOAD = not args.keep_telemetry
     QGCLogDownload(master, entry, filename).download()
 
 
