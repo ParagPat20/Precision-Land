@@ -6,7 +6,7 @@ from pymavlink import mavutil
 
 # ================= CONFIG =================
 CONNECTION = "/dev/ttyUSB0"
-BAUD = 256000
+BAUD = 115200
 LOG_ID = "latest"  # Use "latest" or an integer log id from the printed list.
 OUTPUT_FILE = None  # Use None for QGC-style log_<id>_<time>.bin naming.
 PAUSE_TELEMETRY_DURING_DOWNLOAD = True
