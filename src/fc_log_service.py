@@ -632,18 +632,11 @@ class FlightControllerLogService:
 
     def auto_download_latest_log(self):
         """
-        Triggered when the drone disarms. Downloads the latest log in a background thread
-        using QGC-style LOG_REQUEST_DATA chunk streaming.
+        Triggered when the drone disarms. Auto-download is disabled.
+        Please download manually from logfinder.
         """
-        if self._auto_download_in_progress:
-            print("[LOG SERVICE] Auto-download already in progress, skipping.")
-            return
-        t = threading.Thread(
-            target=self._auto_download_worker,
-            name="AutoLogDownload",
-            daemon=True,
-        )
-        t.start()
+        print("[LOG SERVICE] Auto-download disabled. Please download logs manually from logfinder.")
+        return
 
     def _auto_download_worker(self):
         self._auto_download_in_progress = True
