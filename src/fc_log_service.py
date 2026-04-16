@@ -443,19 +443,7 @@ class FlightControllerLogService:
         return f"log_{entry['id']:05d}_{timestamp}.bin"
 
     def download_latest_log(self):
-        with self._download_lock:
-            logs = self.list_flight_controller_logs()
-            if not logs:
-                raise RuntimeError("No logs reported by the flight controller")
-            latest = next((item for item in logs if item["is_latest"]), None)
-            if latest is None:
-                raise RuntimeError("No latest log reported by the flight controller")
-            entry = {
-                "id": latest["id"],
-                "size": latest["size"],
-                "time_utc": latest["time_utc"],
-            }
-            return self._download_entry(entry)
+        print("Not doing it")
 
     def _download_entry_via_log_request(self, entry, file_path):
         """
