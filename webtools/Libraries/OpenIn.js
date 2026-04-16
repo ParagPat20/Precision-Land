@@ -66,14 +66,22 @@ function get_open_in(get_file_fun) {
             if (file.url != null) {
                 if (dest.hook_load) {
                     const newWindow = window.open(dest.path)
-                    newWindow.addEventListener('load', () => { newWindow.postMessage({ type: 'remoteUrl', data: file}, '*') })
+                    if (newWindow) {
+                        newWindow.addEventListener('load', () => { newWindow.postMessage({ type: 'remoteUrl', data: file}, '*') })
+                    } else {
+                        alert("Popup blocked. Please allow popups for this site to open the tool.");
+                    }
                     return
                 }
 
                 const response = await fetch(file.url)
                 const arrayBuffer = await response.arrayBuffer()
                 const newWindow = window.open(dest.path)
-                setTimeout(() => { newWindow.postMessage({ type: 'arrayBuffer', data: arrayBuffer}, '*') }, 2000)
+                if (newWindow) {
+                    setTimeout(() => { newWindow.postMessage({ type: 'arrayBuffer', data: arrayBuffer}, '*') }, 2000)
+                } else {
+                    alert("Popup blocked. Please allow popups for this site to open the tool.");
+                }
                 return
             }
 
@@ -81,9 +89,13 @@ function get_open_in(get_file_fun) {
                 // Open the new page and keep a reference to it
                 const newWindow = window.open(dest.path)
 
-                // For WebTools with the same origin we can hook the load and send the file handle
-                // This means they get the file name and can recursively "open in"
-                newWindow.addEventListener('load', () => { newWindow.postMessage({ type: 'file', data: file}, '*') })
+                if (newWindow) {
+                    // For WebTools with the same origin we can hook the load and send the file handle
+                    // This means they get the file name and can recursively "open in"
+                    newWindow.addEventListener('load', () => { newWindow.postMessage({ type: 'file', data: file}, '*') })
+                } else {
+                    alert("Popup blocked. Please allow popups for this site to open the tool.");
+                }
                 return
             }
 
@@ -95,7 +107,11 @@ function get_open_in(get_file_fun) {
                 // Open the new page and keep a reference to it
                 const newWindow = window.open(dest.path)
 
-                setTimeout(() => { newWindow.postMessage({ type: 'arrayBuffer', data: arrayBuffer}, '*') }, 2000)
+                if (newWindow) {
+                    setTimeout(() => { newWindow.postMessage({ type: 'arrayBuffer', data: arrayBuffer}, '*') }, 2000)
+                } else {
+                    alert("Popup blocked. Please allow popups for this site to open the tool.");
+                }
             }
 
             // Load file
