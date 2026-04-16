@@ -63,14 +63,38 @@ function get_open_in(get_file_fun) {
                 return
             }
 
+            // Function to wait for child handshake before sending
+            function sendToChildWhenReady(newWindow, payloadMsg) {
+                if (!newWindow) {
+                    alert("Popup blocked. Please allow popups for this site to open the tool.");
+                    return;
+                }
+                let sent = false;
+                const listener = function(event) {
+                    if (event.source === newWindow && event.data && event.data.type === 'openInReady') {
+                        if (!sent) {
+                            newWindow.postMessage(payloadMsg, '*');
+                            sent = true;
+                        }
+                        window.removeEventListener('message', listener);
+                    }
+                };
+                window.addEventListener('message', listener);
+                
+                // Fallback timeout in case ready message is missed or not supported
+                setTimeout(() => {
+                    if (!sent) {
+                        newWindow.postMessage(payloadMsg, '*');
+                        sent = true;
+                        window.removeEventListener('message', listener);
+                    }
+                }, 2000);
+            }
+
             if (file.url != null) {
                 if (dest.hook_load) {
                     const newWindow = window.open(dest.path)
-                    if (newWindow) {
-                        newWindow.addEventListener('load', () => { newWindow.postMessage({ type: 'remoteUrl', data: file}, '*') })
-                    } else {
-                        alert("Popup blocked. Please allow popups for this site to open the tool.");
-                    }
+                    sendToChildWhenReady(newWindow, { type: 'remoteUrl', data: file });
                     return
                 }
 
@@ -78,7 +102,7 @@ function get_open_in(get_file_fun) {
                 const arrayBuffer = await response.arrayBuffer()
                 const newWindow = window.open(dest.path)
                 if (newWindow) {
-                    setTimeout(() => { newWindow.postMessage({ type: 'arrayBuffer', data: arrayBuffer}, '*') }, 2000)
+                    setTimeout(() => { newWindow.postMessage({ type: 'arrayBuffer', data: arrayBuffer}, '*') }, 3000)
                 } else {
                     alert("Popup blocked. Please allow popups for this site to open the tool.");
                 }
@@ -88,14 +112,7 @@ function get_open_in(get_file_fun) {
             if (dest.hook_load) {
                 // Open the new page and keep a reference to it
                 const newWindow = window.open(dest.path)
-
-                if (newWindow) {
-                    // For WebTools with the same origin we can hook the load and send the file handle
-                    // This means they get the file name and can recursively "open in"
-                    newWindow.addEventListener('load', () => { newWindow.postMessage({ type: 'file', data: file}, '*') })
-                } else {
-                    alert("Popup blocked. Please allow popups for this site to open the tool.");
-                }
+                sendToChildWhenReady(newWindow, { type: 'file', data: file });
                 return
             }
 
@@ -108,7 +125,8 @@ function get_open_in(get_file_fun) {
                 const newWindow = window.open(dest.path)
 
                 if (newWindow) {
-                    setTimeout(() => { newWindow.postMessage({ type: 'arrayBuffer', data: arrayBuffer}, '*') }, 2000)
+                    // UAV Log Viewer can take a while to initialize, wait 3 seconds
+                    setTimeout(() => { newWindow.postMessage({ type: 'arrayBuffer', data: arrayBuffer}, '*') }, 3000)
                 } else {
                     alert("Popup blocked. Please allow popups for this site to open the tool.");
                 }
@@ -176,15 +194,15 @@ function setup_open_in(button_id, file_id, load_fun, pageLoadDone, placement) {
             await pageLoadDone()
         }
 
-        if (event.data.type === 'arrayBuffer') {
+        if (event.data && event.data.type === 'arrayBuffer') {
             load_fun(event.data.data)
 
-        } else if (event.data.type === 'remoteUrl') {
+        } else if (event.data && event.data.type === 'remoteUrl') {
             const response = await fetch(event.data.data.url)
             const arrayBuffer = await response.arrayBuffer()
             load_fun(arrayBuffer)
 
-        } else if (event.data.type === 'file') {
+        } else if (event.data && event.data.type === 'file') {
             // Trick to populate file input button
             const dataTransfer = new DataTransfer()
             dataTransfer.items.add(event.data.data)
@@ -194,6 +212,11 @@ function setup_open_in(button_id, file_id, load_fun, pageLoadDone, placement) {
             input.dispatchEvent(new Event('change'))
         }
     })
+
+    // Notify our parent/opener window that we are ready to receive data
+    if (window.opener) {
+        window.opener.postMessage({ type: 'openInReady' }, '*');
+    }
 
     function update(log) {
         const msgs = get_base_log_message_types(log)
