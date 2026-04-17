@@ -530,8 +530,12 @@ class FlightControllerLogService:
                 self.ftp_master.msg_queue.get()
                 
             res = ftp.cmd_get([remote_path, str(file_path)], progress_callback=ftp_progress_callback)
-            if res.error != FtpError.Success:
-                raise RuntimeError(f"MAVFTP download failed: {res.error}")
+            if res.error_code != FtpError.Success:
+                raise RuntimeError(f"MAVFTP download initiation failed: {res.error_code}")
+            
+            res = ftp.process_ftp_reply("get", timeout=self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC)
+            if res.error_code != FtpError.Success:
+                raise RuntimeError(f"MAVFTP download failed: {res.error_code}")
                 
             with self._stream_cv:
                 st["complete"] = True
