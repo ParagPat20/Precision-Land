@@ -39,6 +39,31 @@ Status Management:
 - EXPIRED_STALE: Mission command was too old (>45s)
 
 """
+import time
+import math
+import argparse
+import os
+import sys
+import traceback
+import glob
+import threading
+from os import path
+from collections import deque  # For rolling stability buffer
+from datetime import datetime
+
+from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
+from pymavlink import mavutil
+import numpy as np
+import firebase_admin
+from firebase_admin import credentials, db
+
+# Setup path for local imports
+sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
+from opencv.lib_aruco_pose import *
+from led_controller import DroneLEDController
+from fc_log_service import start_log_services
+from core.mission_generator import DeliveryTemplate, LatLng
+
 # Backoff configuration for Firebase reconnections
 FIREBASE_INITIAL_BACKOFF = 5  # seconds
 FIREBASE_MAX_BACKOFF = 300   # seconds
@@ -48,29 +73,6 @@ FIREBASE_BACKOFF_MULTIPLIER = 2
 processed_mission_ids = set()
 processed_mission_lock = threading.Lock()
 MAX_MISSION_CACHE = 100  # keep recent IDs to avoid unbounded growth
-sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
-
-import time
-import math
-import argparse
-import os
-import traceback
-import threading
-import time
-import glob
-from collections import deque  # For rolling stability buffer
-from datetime import datetime
-
-from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
-from pymavlink import mavutil
-import numpy as np
-from opencv.lib_aruco_pose import *
-from led_controller import DroneLEDController
-from fc_log_service import start_log_services
-import threading
-import firebase_admin
-from firebase_admin import credentials, db
-from core.mission_generator import DeliveryTemplate, LatLng
 
 # Helper function to format timestamp for debugging
 def format_timestamp(timestamp_ms):
