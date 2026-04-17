@@ -518,12 +518,12 @@ class FlightControllerLogService:
                 now_cb = time.time()
                 with self._stream_cv:
                     dt = max(now_cb - st["last_rate_ts"], 0.000001)
-                    bytes_diff = ftp.read_total - st["bytes_written"]
-                    st["bytes_written"] = ftp.read_total
                     if dt >= 1.0 or ftp.read_total >= expected:
+                        bytes_diff = ftp.read_total - st["bytes_written"]
                         st["current_rate_bps"] = bytes_diff / dt
                         st["last_rate_ts"] = now_cb
-                        st["average_rate_bps"] = ftp.read_total / max(now_cb - st["start_ts"], 0.000001)
+                        st["bytes_written"] = ftp.read_total
+                    st["average_rate_bps"] = ftp.read_total / max(now_cb - st["start_ts"], 0.000001)
 
             # clear queue
             while not self.ftp_master.msg_queue.empty():
