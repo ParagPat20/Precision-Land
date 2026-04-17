@@ -717,6 +717,7 @@ class MAVFTP:  # pylint: disable=too-many-instance-attributes
             ofs = self.fh.tell()
             dt = time.time() - self.op_start
             rate = (ofs / dt) / 1024.0
+            sys.stdout.write("\n")
             if self.callback is not None:
                 self.fh.seek(0)
                 self.callback(self.fh)
@@ -768,6 +769,24 @@ class MAVFTP:  # pylint: disable=too-many-instance-attributes
         self.fh.seek(op.offset)
         self.fh.write(op.payload)
         self.read_total += len(op.payload)
+
+        # Print live progress and speed to the terminal
+        now = time.time()
+        if not hasattr(self, '_last_progress_print'):
+            self._last_progress_print = 0.0
+
+        if now - self._last_progress_print > 0.5:  # Update twice a second
+            dt = now - self.op_start if self.op_start else 1.0
+            rate_kbps = (self.read_total / dt) / 1024.0
+            
+            if self.remote_file_size:
+                progress_pct = (self.read_total / self.remote_file_size) * 100
+                sys.stdout.write(f"\rDownloading {self.filename}: {progress_pct:.1f}% | {self.read_total/1024.0/1024.0:.2f} MB / {self.remote_file_size/1024.0/1024.0:.2f} MB | {rate_kbps:.1f} KB/s")
+            else:
+                sys.stdout.write(f"\rDownloading {self.filename}: {self.read_total/1024.0/1024.0:.2f} MB | {rate_kbps:.1f} KB/s")
+            sys.stdout.flush()
+            self._last_progress_print = now
+
         if self.callback_progress is not None and self.remote_file_size:
             self.callback_progress(self.read_total / self.remote_file_size)
 
