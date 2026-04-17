@@ -15,10 +15,11 @@ from pymavlink import mavutil
 
 class FlightControllerLogService:
     # QGroundControl downloads DataFlash logs in 512 LOG_DATA bins per chunk.
+    # Since we are over Ethernet/UDP, we can increase this drastically for faster downloads!
     LOG_DATA_LEN = 90
-    QGC_CHUNK_BINS = 512
+    QGC_CHUNK_BINS = int(os.environ.get("JECH_FC_LOG_QGC_CHUNK_BINS", "4096"))  # 368KB per chunk (was 512)
     QGC_CHUNK_SIZE = LOG_DATA_LEN * QGC_CHUNK_BINS
-    QGC_DATA_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_QGC_RETRY_SEC", "0.5"))
+    QGC_DATA_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_QGC_RETRY_SEC", "0.15")) # Faster retries on UDP (was 0.5)
     LOG_DOWNLOAD_WALL_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC", "7200"))
     PAUSE_TELEMETRY_DURING_DOWNLOAD = os.environ.get("JECH_FC_LOG_PAUSE_TELEMETRY", "1") != "0"
 
