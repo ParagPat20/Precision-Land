@@ -149,7 +149,7 @@ function render_inventory(logs, source, transferStatus) {
     table.style.borderCollapse = "collapse"
 
     const headerRow = document.createElement("tr")
-    ;["Log ID", "Time", "Size", "State", "Action", "Open In"].forEach((text) => {
+    ;["Log ID", "Time", "Size", "State", "Action", "Download", "Open In"].forEach((text) => {
         const th = document.createElement("th")
         th.textContent = text
         th.style.textAlign = "left"
@@ -227,6 +227,32 @@ function render_inventory(logs, source, transferStatus) {
         actionCell.appendChild(button)
         row.appendChild(actionCell)
 
+        // --- "Download to PC" button: forces browser save-as dialog ---
+        const dlCell = document.createElement("td")
+        dlCell.style.padding = "8px"
+        const dlBtn = document.createElement("button")
+        dlBtn.textContent = "\u2B07 Download"
+        dlBtn.title = log.cached
+            ? "Download this log file to your computer"
+            : "Download to RPi first, then you can download to your PC."
+        dlBtn.disabled = !log.cached
+        if (log.cached) {
+            const apiBaseForDl = new URL(source, window.location.href).toString()
+            const fileNameForDl = log.cached_name || `log_${String(log.id).padStart(5, "0")}.bin`
+            const downloadUrl = new URL(`/logs/${fileNameForDl}`, apiBaseForDl).toString()
+            dlBtn.addEventListener("click", () => {
+                const a = document.createElement("a")
+                a.href = downloadUrl
+                a.download = fileNameForDl
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+            })
+        }
+        dlCell.appendChild(dlBtn)
+        row.appendChild(dlCell)
+
+        // --- "Open In" button: serves file inline for in-page analysis tools ---
         const openCell = document.createElement("td")
         openCell.style.padding = "8px"
         const openButton = document.createElement("button")
@@ -241,7 +267,8 @@ function render_inventory(logs, source, transferStatus) {
                 name: fileName,
                 relativePath: fileName,
                 rel_path: fileName,
-                url: new URL(`/logs/${fileName}`, apiBase).toString()
+                // Use /logs-open/ so the file is served inline (not forced download)
+                url: new URL(`/logs-open/${fileName}`, apiBase).toString()
             }
             const openIn = get_open_in(() => remoteFile)
             openIn.update_enable(null)

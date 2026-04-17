@@ -201,6 +201,27 @@ class FlightControllerLogService:
                     self._cors()
                     self.send_header("Content-Type", "application/octet-stream")
                     self.send_header("Content-Length", str(file_path.stat().st_size))
+                    self.send_header("Content-Disposition", f'attachment; filename="{file_path.name}"')
+                    self.end_headers()
+                    with file_path.open("rb") as file_obj:
+                        self.wfile.write(file_obj.read())
+                    return
+
+                # Same as /logs/ but served inline (no forced download) — used by
+                # the Log Finder "Open in Browser" button so the browser can read
+                # the binary for in-page analysis tools.
+                if parsed.path.startswith("/logs-open/"):
+                    relative_name = unquote(parsed.path[len("/logs-open/"):])
+                    try:
+                        file_path = service.resolve_log_path(relative_name)
+                    except FileNotFoundError:
+                        self._send_json({"error": "Log not found"}, status=404)
+                        return
+
+                    self.send_response(200)
+                    self._cors()
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(file_path.stat().st_size))
                     self.send_header("Content-Disposition", f'inline; filename="{file_path.name}"')
                     self.end_headers()
                     with file_path.open("rb") as file_obj:

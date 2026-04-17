@@ -39,7 +39,15 @@ Status Management:
 - EXPIRED_STALE: Mission command was too old (>45s)
 
 """
-from os import sys, path
+# Backoff configuration for Firebase reconnections
+FIREBASE_INITIAL_BACKOFF = 5  # seconds
+FIREBASE_MAX_BACKOFF = 300   # seconds
+FIREBASE_BACKOFF_MULTIPLIER = 2
+
+# Global cache for processed mission IDs to avoid duplicate handling
+processed_mission_ids = set()
+processed_mission_lock = threading.Lock()
+MAX_MISSION_CACHE = 100  # keep recent IDs to avoid unbounded growth
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 import time
@@ -395,26 +403,43 @@ def run_mission_thread(command):
         active_mission_ref = None
         print("[FIREBASE DEBUG] ========== MISSION ENDED ==========")
 
+processed_mission_ids = set()
+processed_mission_lock = threading.Lock()
+MAX_MISSION_CACHE = 100  # keep recent IDs to avoid unbounded growth
+
 def check_mission(command):
     """
     Checks incoming Firebase commands and handles them appropriately.
     Handles PENDING missions and ABORT_REQUESTED status changes.
     """
-    global abort_requested, active_mission_ref, mission_active
-    
+    global abort_requested, active_mission_ref, mission_active, processed_mission_ids, processed_mission_lock
+
     if not command or not isinstance(command, dict):
         print("[FIREBASE DEBUG] check_mission called with invalid command (None or not dict)")
         return
-    
+
+    # Deduplicate based on command ID
+    cmd_id = command.get('id')
+    if cmd_id:
+        with processed_mission_lock:
+            if cmd_id in processed_mission_ids:
+                print(f"[FIREBASE DEBUG] Mission {cmd_id} already processed – skipping")
+                return
+            # Add to cache and prune if needed
+            processed_mission_ids.add(cmd_id)
+            if len(processed_mission_ids) > MAX_MISSION_CACHE:
+                # Remove oldest entry (convert to list for deterministic removal)
+                oldest = next(iter(processed_mission_ids))
+                processed_mission_ids.remove(oldest)
+
     status = command.get('status')
     print(f"[FIREBASE DEBUG] check_mission called - Status: {status}")
-    
+
     # Handle abort requests (can come at any time)
     if status == 'ABORT_REQUESTED':
         print("[FIREBASE DEBUG] [ABORT] Abort request received from Firebase!")
         abort_requested = True
         mission_active = False  # Stop sending telemetry immediately
-        
         # If there's an active mission, update its status
         if active_mission_ref:
             try:
@@ -425,7 +450,6 @@ def check_mission(command):
                 print("[FIREBASE DEBUG] Updated active mission status to ABORTED")
             except Exception as e:
                 print(f"[FIREBASE DEBUG] Error updating abort status: {e}")
-        
         # Always try to switch to RTL mode (regardless of armed status)
         try:
             print("[FIREBASE DEBUG] [ABORT] Switching vehicle to RTL mode...")
@@ -433,9 +457,8 @@ def check_mission(command):
             print("[ABORT] Vehicle mode set to RTL")
         except Exception as e:
             print(f"[FIREBASE DEBUG] Error switching to RTL: {e}")
-        
         return
-    
+
     # Handle new PENDING missions
     if status == 'PENDING':
         # Reset abort flag and mission active flag for new mission
@@ -449,6 +472,10 @@ def check_mission(command):
         t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread")
         t.start()
         print(f"[FIREBASE DEBUG] Mission thread started: {t.name}")
+        return
+
+    # Other statuses are ignored here
+    print(f"[FIREBASE DEBUG] Ignoring command with status '{status}'")
 
 def firebase_listener_thread():
     """
@@ -470,6 +497,7 @@ def firebase_listener_thread():
         print(f"[FIREBASE DEBUG] [CHECK] Service account key found ({file_size} bytes)")
     
     initial_command_fetch_started = False
+    backoff = FIREBASE_INITIAL_BACKOFF  # seconds
 
     while True:
         try:
@@ -563,15 +591,18 @@ def firebase_listener_thread():
             print("[FIREBASE DEBUG] READY! System can now receive missions from app!")
             print(f"[FIREBASE DEBUG] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
             ref.listen(on_firebase_event)
-            print(f"[FIREBASE DEBUG] Firebase listener ended after {time.time() - listener_start:.1f}s; reconnecting in 10s...")
-            time.sleep(10)
+            # If listener exits, treat it as a disconnect and apply backoff
+            print(f"[FIREBASE DEBUG] Firebase listener ended after {time.time() - listener_start:.1f}s; reconnecting in {backoff}s...")
+            time.sleep(backoff)
+            backoff = min(backoff * FIREBASE_BACKOFF_MULTIPLIER, FIREBASE_MAX_BACKOFF)
             
         except Exception as e:
-            print(f"[FIREBASE DEBUG] Firebase listener/connection failed: {e}. Retrying in 10s...")
+            print(f"[FIREBASE DEBUG] Firebase listener/connection failed: {e}. Retrying in {backoff}s...")
             print(f"[FIREBASE DEBUG] [TIMING] Failed at {time.time() - start_time:.1f}s")
             if os.environ.get("JECH_FIREBASE_TRACEBACK", "0") == "1":
                 traceback.print_exc()
-            time.sleep(10)
+            time.sleep(backoff)
+            backoff = min(backoff * FIREBASE_BACKOFF_MULTIPLIER, FIREBASE_MAX_BACKOFF)
 
 def status_publisher_thread():
     """
