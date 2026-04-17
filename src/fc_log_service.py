@@ -511,7 +511,7 @@ class FlightControllerLogService:
         ])
         
         try:
-            ftp = MAVFTP(self.ftp_master, settings, self.ftp_master.target_system, self.ftp_master.target_component)
+            ftp = MAVFTP(self.ftp_master, self.ftp_master.target_system, self.ftp_master.target_component, settings)
             remote_path = f"/APM/LOGS/{int(log_id):08d}.BIN"
             
             def ftp_progress_callback(percentage):
