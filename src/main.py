@@ -784,7 +784,7 @@ def resolve_vehicle_connection_path(manual_path=None):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--connect', default = 'udp:192.168.144.14:14551', help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0. Overridden to UDP by default.")
+parser.add_argument('--connect', default = 'udpout:192.168.144.14:14551', help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0. Overridden to UDP by default.")
 parser.add_argument('--baud', type=int, default=int(os.environ.get("JECH_MAVLINK_BAUD", "921600")), help="Vehicle serial baud rate. Default: %(default)s")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
