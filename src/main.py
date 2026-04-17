@@ -784,7 +784,7 @@ def resolve_vehicle_connection_path(manual_path=None):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--connect', default = None, help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0.")
+parser.add_argument('--connect', default = 'udp:192.168.144.14:14551', help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0. Overridden to UDP by default.")
 parser.add_argument('--baud', type=int, default=int(os.environ.get("JECH_MAVLINK_BAUD", "921600")), help="Vehicle serial baud rate. Default: %(default)s")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
@@ -846,10 +846,17 @@ def camera_to_uav(x_cam, y_cam):
 #-------------- CONNECTION  
 #--------------------------------------------------    
 #-- Connect to the vehicle with retry loop
-print(f'Connecting using {args.connect} at {args.baud} baud...')
+if args.connect.startswith('udp') or args.connect.startswith('tcp') or args.connect.startswith('192.168.'):
+    print(f'Connecting using {args.connect} (Network IP connection)...')
+else:
+    print(f'Connecting using {args.connect} at {args.baud} baud...')
+
 while True:
     try:
-        vehicle = connect(args.connect, baud=args.baud)
+        if args.connect.startswith('udp') or args.connect.startswith('tcp') or args.connect.startswith('192.168.'):
+            vehicle = connect(args.connect)
+        else:
+            vehicle = connect(args.connect, baud=args.baud)
         break
     except Exception as e:
         print(f"Connection failed: {e}. Retrying in 2s...")
