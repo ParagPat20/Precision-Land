@@ -10,7 +10,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 import mimetypes
+import queue
 from pymavlink import mavutil
+from scripts.mavftp import MAVFTP, MAVFTPSettings, FtpError
+
+class FTPMasterWrapper:
+    def __init__(self, real_master):
+        self.real_master = real_master
+        self.msg_queue = queue.Queue()
+        self.source_system = real_master.source_system
+        self.source_component = real_master.source_component
+        self.target_system = real_master.target_system
+        self.target_component = real_master.target_component
+        self.mav = real_master.mav
+
+    def recv_match(self, type=None, blocking=False, timeout=0):
+        try:
+            return self.msg_queue.get(block=blocking, timeout=timeout)
+        except queue.Empty:
+            return None
+
 
 
 class FlightControllerLogService:
@@ -47,8 +66,14 @@ class FlightControllerLogService:
         self._stream_cv = threading.Condition(threading.RLock())
         self._stream_state = None
 
+        self.ftp_master = FTPMasterWrapper(self.vehicle._master)
+
         self.vehicle.add_message_listener("LOG_ENTRY", self._on_log_entry)
         self.vehicle.add_message_listener("LOG_DATA", self._on_log_data)
+        self.vehicle.add_message_listener("FILE_TRANSFER_PROTOCOL", self._on_ftp)
+
+    def _on_ftp(self, vehicle, name, message):
+        self.ftp_master.msg_queue.put(message)
 
     def _set_auto_download_msg(self, msg: str) -> None:
         with self._client_activity_lock:
@@ -89,7 +114,7 @@ class FlightControllerLogService:
             if auto_wait:
                 bits.append(self._auto_download_status_msg or "Auto log download (waiting)")
             if self._flight_log_download_active:
-                bits.append(self._flight_log_download_label or "LOG_REQUEST_DATA log transfer")
+                bits.append(self._flight_log_download_label or "MAVFTP log transfer")
             detail = " — ".join(bits) if bits else ""
         return {
             "busy": busy,
@@ -432,7 +457,7 @@ class FlightControllerLogService:
                 "is_latest": log_id == latest_id,
                 "cached": cached_path.exists() and (entry["size"] == 0 or cached_path.stat().st_size == entry["size"]),
                 "cached_name": file_name,
-                "transfer_method": "qgc_log_request_data",
+                "transfer_method": "mavftp",
             })
         return payload
 
@@ -446,93 +471,78 @@ class FlightControllerLogService:
     def download_latest_log(self):
         print("Not doing it")
 
-    def _download_entry_via_log_request(self, entry, file_path):
-        """
-        QGC-style LOG_REQUEST_DATA download: 512 LOG_DATA bins per chunk,
-        retrying the first missing contiguous range until the chunk is complete.
-        """
+    def _download_entry_via_mavftp(self, entry, file_path):
         log_id = entry["id"]
         expected = int(entry["size"])
-        print(
-            f"[LOG SERVICE] Downloading FC log {log_id} via QGC LOG_REQUEST_DATA chunks -> {file_path}"
-        )
-        fh = file_path.open("wb")
-        fh.truncate(expected)
+        print(f"[LOG SERVICE] Downloading FC log {log_id} via MAVFTP -> {file_path}")
+        
         now = time.time()
         st = {
             "log_id": log_id,
             "expected_size": expected,
             "bytes_written": 0,
-            "fh": fh,
+            "fh": None,
             "path": file_path,
-            "current_chunk": 0,
-            "chunk_table": [False] * self._qgc_chunk_bins(expected, 0),
-            "missing_bins": self._qgc_chunk_bins(expected, 0),
-            "written_offsets": set(),
-            "written_ranges": [],
             "rate_bytes": 0,
             "rate_packets": 0,
             "current_rate_bps": 0.0,
             "average_rate_bps": 0.0,
             "packet_rate": 0.0,
-            "retries": 0,
             "start_ts": now,
             "last_rate_ts": now,
             "last_ts": now,
-            "last_request_ts": 0.0,
             "complete": False,
-            "transfer_method": "qgc_log_request_data",
+            "transfer_method": "mavftp",
         }
         with self._stream_cv:
             self._stream_state = st
+            
+        settings = MAVFTPSettings([
+            ("debug", int, 0),
+            ("pkt_loss_tx", int, 0),
+            ("pkt_loss_rx", int, 0),
+            ("max_backlog", int, 40),
+            ("burst_read_size", int, 300),
+            ("write_size", int, 300),
+            ("write_qsize", int, 5),
+            ("idle_detection_time", float, 3.7),
+            ("read_retry_time", float, 1.0),
+            ("retry_time", float, 0.5),
+        ])
+        
         try:
-            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
-                self._set_telemetry_streams(0)
-            with self._stream_cv:
-                self._qgc_request_missing_range_locked(st)
-            deadline = time.monotonic() + self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC
-            while time.monotonic() < deadline:
+            ftp = MAVFTP(self.ftp_master, settings, self.ftp_master.target_system, self.ftp_master.target_component)
+            remote_path = f"/APM/LOGS/{int(log_id):08d}.BIN"
+            
+            def ftp_progress_callback(percentage):
+                now_cb = time.time()
                 with self._stream_cv:
-                    if st["complete"]:
-                        break
-                    self._stream_cv.wait(timeout=0.05)
-                    if st["complete"]:
-                        break
-                    if time.time() - st["last_request_ts"] >= self.QGC_DATA_TIMEOUT_SEC:
-                        self._qgc_request_missing_range_locked(st)
-                        st["last_ts"] = time.time()
-                    self._qgc_update_rates_locked(st)
+                    dt = max(now_cb - st["last_rate_ts"], 0.000001)
+                    bytes_diff = ftp.read_total - st["bytes_written"]
+                    st["bytes_written"] = ftp.read_total
+                    if dt >= 1.0 or ftp.read_total >= expected:
+                        st["current_rate_bps"] = bytes_diff / dt
+                        st["last_rate_ts"] = now_cb
+                        st["average_rate_bps"] = ftp.read_total / max(now_cb - st["start_ts"], 0.000001)
+
+            # clear queue
+            while not self.ftp_master.msg_queue.empty():
+                self.ftp_master.msg_queue.get()
+                
+            res = ftp.cmd_get([remote_path, str(file_path)], progress_callback=ftp_progress_callback)
+            if res.error != FtpError.Success:
+                raise RuntimeError(f"MAVFTP download failed: {res.error}")
+                
             with self._stream_cv:
-                ok = st["complete"]
-                unique_bytes = sum(count for _ofs, count in st["written_ranges"])
-            if not ok:
-                raise RuntimeError(
-                    f"Log {log_id} download incomplete or timed out "
-                    f"(got {unique_bytes} of {expected} B, chunk {st['current_chunk']}, "
-                    f"missing {st['missing_bins']} bins)"
-                )
+                st["complete"] = True
+                
         finally:
-            fh.flush()
-            fh.close()
-            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
-                self._set_telemetry_streams(4)
             with self._stream_cv:
                 self._stream_state = None
-            self._send_log_request_end()
-
+                
         file_size = file_path.stat().st_size
-        unique_bytes = sum(count for _ofs, count in st["written_ranges"])
-        if file_size != expected or unique_bytes != expected:
-            raise RuntimeError(
-                f"Log {log_id} failed size check: file_size={file_size}, "
-                f"unique_payload_bytes={unique_bytes}, expected={expected}"
-            )
         elapsed = max(time.time() - st["start_ts"], 0.000001)
-        print(
-            f"[LOG SERVICE] QGC download complete: log {log_id}, "
-            f"{self._qgc_num_chunks(expected)} chunks, {len(st['written_offsets'])} LOG_DATA packets, "
-            f"{expected / elapsed / 1024.0:.1f} KB/s"
-        )
+        print(f"[LOG SERVICE] MAVFTP download complete: log {log_id}, size {file_size}, {file_size / elapsed / 1024.0:.1f} KB/s")
 
     def _download_entry(self, entry):
         with self._download_lock:
@@ -552,7 +562,7 @@ class FlightControllerLogService:
                 if file_path.exists():
                     file_path.unlink()
                 try:
-                    self._download_entry_via_log_request(entry, file_path)
+                    self._download_entry_via_mavftp(entry, file_path)
                 except Exception:
                     if file_path.exists():
                         file_path.unlink()
@@ -581,7 +591,7 @@ class FlightControllerLogService:
             "url": f"/logs/{file_path.name}",
             "size": stat.st_size,
             "modified_at": int(stat.st_mtime),
-            "transfer_method": "qgc_log_request_data",
+            "transfer_method": "mavftp",
         }
         if entry is not None:
             payload["log_id"] = entry["id"]
