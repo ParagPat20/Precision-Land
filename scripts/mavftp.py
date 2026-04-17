@@ -1855,7 +1855,7 @@ def create_argument_parser() -> ArgumentParser:
     parser.add_argument(
         "--burst_read_size",
         type=int,
-        default=80,
+        default=239,
         help="Burst read size. Default is %(default)s",
     )
     parser.add_argument(
