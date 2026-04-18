@@ -1067,12 +1067,20 @@ while True:
     # Determine the target LED state based on priorities
     target_led_state = DroneLEDController.STATE_DISARMED # Default
     
+    # Determine if we are actively in Precision Landing
+    # Conditions: High confidence marker tracking AND (LAND mode OR GUIDED mode with detection)
+    is_precision_landing = (confidence_score >= confidence_threshold) and (vehicle.mode.name in ['LAND', 'GUIDED', 'AUTO'])
+    
     # Check for Failsafes first (Highest Priority)
     if battery_failsafe_active:
         target_led_state = DroneLEDController.STATE_BAT_FAILSAFE
     elif other_failsafe_active:
         target_led_state = DroneLEDController.STATE_FAILSAFE
     
+    # Check for Precision Landing
+    elif is_precision_landing:
+        target_led_state = DroneLEDController.STATE_PRECISION_LAND
+        
     # Check Flight Modes
     elif vehicle.mode.name == 'LAND':
         target_led_state = DroneLEDController.STATE_LAND
@@ -1083,13 +1091,8 @@ while True:
     elif not vehicle.armed:
         target_led_state = DroneLEDController.STATE_DISARMED
     else:
-        # Armed
-        if vehicle.location.global_relative_frame.alt < 0.3: # Below 30cm -> Considered on Ground? Or verify logic
-            # "ARMED and on the ground"
-            # Detecting "on ground" reliably without a sensor can be tricky. 
-            # Using altitude < 0.5m as a proxy or if motors are spinning but not taking off.
-            # Ideally use vehicle.system_status.state or similar if available, 
-            # but altitude is a common simple check.
+        # Armed and Flying or on Ground
+        if vehicle.location.global_relative_frame.alt < 0.4: # below 40cm
             target_led_state = DroneLEDController.STATE_ARMED_GROUND
         else:
             target_led_state = DroneLEDController.STATE_FLYING
