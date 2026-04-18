@@ -9,7 +9,7 @@ S2_PIN         = board.D12    # Right Ring
 S3_PIN         = board.D13    # Eyes
 RING_COUNT     = 8
 EYE_COUNT      = 8            # Total pixels — left 0..3, right 4..7
-LED_BRIGHTNESS = 0.5          # Set to 0.0 to 1.0
+LED_BRIGHTNESS = 0.9          # Set to 0.0 to 1.0
 LED_ORDER      = neopixel.GRB  # Standard for WS2812B
 
 # Colors (R, G, B) Tuples
