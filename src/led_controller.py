@@ -37,6 +37,11 @@ class DroneLEDController(threading.Thread):
         self.stop_event = threading.Event()
         self.current_state = self.STATE_DISARMED
         self.lock = threading.Lock()
+        # Prevent concurrent access to NeoPixel C-extension objects.
+        # Only one thread should touch `fill()`, pixel assignment, or `show()` at a time.
+        self.strip_lock = threading.Lock()
+        # State changes can request an immediate clear on the next LED loop tick.
+        self._clear_requested = False
         
         # Initialize Strips
         try:
@@ -60,22 +65,26 @@ class DroneLEDController(threading.Thread):
         with self.lock:
             if self.current_state != new_state:
                 self.current_state = new_state
-                self.clear_all()
+                # Don't touch hardware from outside the LED thread.
+                # Request a clear that will be executed safely inside `run()`.
+                self._clear_requested = True
 
     def get_state(self):
         with self.lock:
             return self.current_state
 
     def clear_all(self):
-        for strip in self.strips:
-            if strip:
-                strip.fill(OFF)
-                strip.show()
+        with self.strip_lock:
+            for strip in self.strips:
+                if strip:
+                    strip.fill(OFF)
+                    strip.show()
 
     def show_all(self):
-        for strip in self.strips:
-            if strip:
-                strip.show()
+        with self.strip_lock:
+            for strip in self.strips:
+                if strip:
+                    strip.show()
 
     def _get_breathe_color(self, base_color, phase):
         # phase varies 0 to 1
@@ -103,29 +112,43 @@ class DroneLEDController(threading.Thread):
 
             # Update animation phase (0 to 1 cycle)
             phase = (phase + dt) % 2.0 # 2 second cycle for defaults
+
+            # Apply any pending "clear" requests caused by state transitions.
+            # This keeps all NeoPixel IO inside this thread, preventing crashes in rpi_ws281x.
+            if self._clear_requested:
+                with self.lock:
+                    self._clear_requested = False
+                self.clear_all()
             
             if state == self.STATE_DISARMED:
                 # Breathing BLUE on everything
                 breathe_phase = (now % 2.0) / 2.0
                 color = self._get_breathe_color(BLUE, breathe_phase)
-                for strip in self.strips:
-                    if strip: strip.fill(color)
-                self.show_all()
+                with self.strip_lock:
+                    for strip in self.strips:
+                        if strip:
+                            strip.fill(color)
+                    for strip in self.strips:
+                        if strip:
+                            strip.show()
                 time.sleep(0.05)
 
             elif state in [self.STATE_ARMED_GROUND, self.STATE_FLYING]:
                 # Flash Red (Left) and Green (Right) - 2Hz (0.5s cycle)
                 is_on = (now % 0.5) < 0.25
-                if is_on:
-                    if self.left_ring: self.left_ring.fill(RED)
-                    if self.right_ring: self.right_ring.fill(GREEN)
-                    # Eyes: Keep solid blue or purple? Keeping purple as flight indicator
-                    if self.eyes: self.eyes.fill(PURPLE)
-                else:
-                    if self.left_ring: self.left_ring.fill(OFF)
-                    if self.right_ring: self.right_ring.fill(OFF)
-                    if self.eyes: self.eyes.fill(OFF)
-                self.show_all()
+                with self.strip_lock:
+                    if is_on:
+                        if self.left_ring: self.left_ring.fill(RED)
+                        if self.right_ring: self.right_ring.fill(GREEN)
+                        # Eyes: Keeping purple as flight indicator
+                        if self.eyes: self.eyes.fill(PURPLE)
+                    else:
+                        if self.left_ring: self.left_ring.fill(OFF)
+                        if self.right_ring: self.right_ring.fill(OFF)
+                        if self.eyes: self.eyes.fill(OFF)
+                    if self.left_ring: self.left_ring.show()
+                    if self.right_ring: self.right_ring.show()
+                    if self.eyes: self.eyes.show()
                 time.sleep(0.05)
 
             elif state in [self.STATE_PRECISION_LAND, self.STATE_LAND, self.STATE_RTL]:
@@ -133,35 +156,45 @@ class DroneLEDController(threading.Thread):
                 # 8 LEDs, cycle every 0.8s
                 chaser_idx = int((now % 0.8) / 0.1) % 8
                 
-                if self.left_ring:
-                    self.left_ring.fill(OFF)
-                    self.left_ring[chaser_idx] = RED
-                if self.right_ring:
-                    self.right_ring.fill(OFF)
-                    self.right_ring[chaser_idx] = GREEN
-                if self.eyes:
-                    # Alternating eyes? Or just steady yellow for landing
-                    self.eyes.fill(YELLOW)
-                
-                self.show_all()
+                with self.strip_lock:
+                    if self.left_ring:
+                        self.left_ring.fill(OFF)
+                        self.left_ring[chaser_idx] = RED
+                    if self.right_ring:
+                        self.right_ring.fill(OFF)
+                        self.right_ring[chaser_idx] = GREEN
+                    if self.eyes:
+                        # Steady yellow for landing/RTL indicators
+                        self.eyes.fill(YELLOW)
+                    if self.left_ring: self.left_ring.show()
+                    if self.right_ring: self.right_ring.show()
+                    if self.eyes: self.eyes.show()
                 time.sleep(0.05)
 
             elif state == self.STATE_FAILSAFE:
                 # Fast Flash RED on all - 5Hz
                 is_on = (now % 0.2) < 0.1
                 color = RED if is_on else OFF
-                for strip in self.strips:
-                    if strip: strip.fill(color)
-                self.show_all()
+                with self.strip_lock:
+                    for strip in self.strips:
+                        if strip:
+                            strip.fill(color)
+                    for strip in self.strips:
+                        if strip:
+                            strip.show()
                 time.sleep(0.02)
 
             elif state == self.STATE_BAT_FAILSAFE:
                 # Oscillate Red/Blue quickly
                 is_red = (now % 0.4) < 0.2
                 color = RED if is_red else BLUE
-                for strip in self.strips:
-                    if strip: strip.fill(color)
-                self.show_all()
+                with self.strip_lock:
+                    for strip in self.strips:
+                        if strip:
+                            strip.fill(color)
+                    for strip in self.strips:
+                        if strip:
+                            strip.show()
                 time.sleep(0.05)
             
             else:
