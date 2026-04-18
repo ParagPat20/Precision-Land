@@ -4,8 +4,8 @@ import board
 import neopixel
 
 # LED strip configuration
-S1_PIN         = board.D18    # Left Ring
-S2_PIN         = board.D13    # Right Ring
+S1_PIN         = board.D13    # Left Ring
+S2_PIN         = board.D18    # Right Ring
 S3_PIN         = board.D12    # Eyes
 RING_COUNT     = 8
 EYE_COUNT      = 8            # Total pixels — left 0..3, right 4..7
