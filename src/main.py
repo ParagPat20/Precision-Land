@@ -913,9 +913,9 @@ def sys_status_battery_listener(self, name, message):
         latest_battery_remaining = remaining
 
 #--------------------------------------------------
-#-------------- FLIGHT CONTROLLER LOG SERVICE
+#-------------- FLIGHT CONTROLLER LOG/PARAM SERVICE
 #--------------------------------------------------
-# HTTP log browser + DataFlash download via QGC-style LOG_REQUEST_DATA chunks (fc_log_service.py).
+# HTTP log browser, DataFlash download, and CUAV parameter viewer/write endpoints (fc_log_service.py).
 # Optional env: JECH_FC_LOG_CACHE_DIR, JECH_FC_LOG_PORT, JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC, etc.
 # No extra wiring here beyond start_log_services + disarm hook below.
 # Single DroneKit Vehicle instance: pass-through only — fc_log_service does NOT call connect().

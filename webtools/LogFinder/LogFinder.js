@@ -84,6 +84,12 @@ function startLogDownloadStatusPolling() {
     logDownloadPollTimer = window.setInterval(refreshLogDownloadBanner, 2000)
 }
 
+function open_param_viewer() {
+    const origin = fcLogApiOrigin() || window.location.origin
+    const url = new URL("/webtools/ParamViewer/index.html", origin)
+    window.open(url.toString(), "_blank", "noopener")
+}
+
 async function load_file_source(source) {
     if (source == null) {
         throw new Error("No file source provided")
@@ -1184,6 +1190,11 @@ let board_types = {}
 async function initial_load() {
 
     document.getElementById("reload").disabled = true
+
+    const paramViewerButton = document.getElementById("open_param_viewer")
+    if (paramViewerButton != null) {
+        paramViewerButton.addEventListener("click", open_param_viewer)
+    }
 
     const fieldset = document.getElementById("param_diff_ignore")
     for (let i=0; i<param_diff_ignore.length; i++) {

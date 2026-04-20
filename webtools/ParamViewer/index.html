@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<base href="/webtools/ParamViewer/">
+<title>CUAV Parameter Viewer</title>
+<link rel="icon" href="/webtools/images/AP_favicon.png">
+<link href="/webtools/modules/tabulator/dist/css/tabulator.min.css" rel="stylesheet">
+<script src="/webtools/modules/tabulator/dist/js/tabulator.min.js"></script>
+<script type="text/javascript" src="/webtools/Libraries/Param_Helpers.js"></script>
+<script type="text/javascript" src="/webtools/ParamViewer/paramViewer.js"></script>
+<style>
+  body {
+    margin: 18px;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #1f2933;
+    background: #f6f8fa;
+  }
+  header {
+    max-width: 1280px;
+  }
+  h1 {
+    margin: 0 0 12px 0;
+    font-size: 28px;
+  }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 12px 0;
+  }
+  button {
+    border: 1px solid #8a98a8;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #111827;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+  button.primary {
+    border-color: #2364aa;
+    background: #2364aa;
+    color: #ffffff;
+  }
+  button.danger {
+    border-color: #b42318;
+    background: #b42318;
+    color: #ffffff;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  input[type="search"] {
+    min-width: 280px;
+    padding: 8px;
+    border: 1px solid #8a98a8;
+    border-radius: 6px;
+  }
+  #status {
+    margin: 10px 0;
+    padding: 10px 12px;
+    border: 1px solid #b9c3cf;
+    border-radius: 6px;
+    background: #ffffff;
+    max-width: 1280px;
+  }
+  #table {
+    max-width: 1280px;
+    background: #ffffff;
+  }
+  dialog {
+    width: min(920px, 92vw);
+    border: 1px solid #8a98a8;
+    border-radius: 8px;
+    padding: 0;
+  }
+  dialog::backdrop {
+    background: rgba(15, 23, 42, 0.45);
+  }
+  .dialog-body {
+    padding: 16px;
+  }
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid #d7dee8;
+    background: #f6f8fa;
+  }
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+  }
+  .compare-table th,
+  .compare-table td {
+    padding: 7px;
+    border-bottom: 1px solid #d7dee8;
+    text-align: left;
+  }
+  .muted {
+    color: #5f6b7a;
+  }
+</style>
+</head>
+<body onload="initialLoad()">
+<header>
+  <h1>CUAV Parameter Viewer</h1>
+  <div class="toolbar">
+    <button id="refresh_params" class="primary" type="button" onclick="refreshParams()">Refresh Params</button>
+    <button id="write_params" class="danger" type="button" onclick="confirmEditedParams()" disabled>Write Params</button>
+    <button id="load_param_file" type="button" onclick="document.getElementById('param_file').click()">Load .param File</button>
+    <input id="param_file" type="file" accept=".param,text/plain" onchange="loadParamFile(event)" hidden>
+    <input id="search" type="search" placeholder="Filter by parameter name" oninput="applyFilter()">
+    <span id="summary" class="muted"></span>
+  </div>
+  <div id="status">Loading CUAV parameters...</div>
+</header>
+
+<div id="table"></div>
+
+<dialog id="confirm_dialog">
+  <div class="dialog-body">
+    <h2 id="dialog_title">Confirm Parameter Write</h2>
+    <p id="dialog_message"></p>
+    <div id="dialog_changes"></div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" onclick="closeDialog()">Cancel</button>
+    <button id="dialog_confirm" class="danger" type="button">Write Params</button>
+  </div>
+</dialog>
+
+</body>
+</html>

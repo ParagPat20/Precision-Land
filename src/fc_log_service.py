@@ -8,7 +8,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 import mimetypes
 import queue
 from pymavlink import mavutil
@@ -61,6 +61,10 @@ class FlightControllerLogService:
         self._flight_log_download_started_mono = 0.0
         self._flight_log_download_label = ""
         self._auto_download_status_msg = ""
+        self._param_cache = {}
+        self._param_cache_loaded_at = 0.0
+        self._param_value_waiters = {}
+        self._param_value_lock = threading.Lock()
 
         # Streaming download state (QGC-style chunk table).
         self._stream_cv = threading.Condition(threading.RLock())
@@ -71,9 +75,26 @@ class FlightControllerLogService:
         self.vehicle.add_message_listener("LOG_ENTRY", self._on_log_entry)
         self.vehicle.add_message_listener("LOG_DATA", self._on_log_data)
         self.vehicle.add_message_listener("FILE_TRANSFER_PROTOCOL", self._on_ftp)
+        self.vehicle.add_message_listener("PARAM_VALUE", self._on_param_value)
 
     def _on_ftp(self, vehicle, name, message):
         self.ftp_master.msg_queue.put(message)
+
+    def _on_param_value(self, vehicle, name, message):
+        raw_id = getattr(message, "param_id", "")
+        if isinstance(raw_id, bytes):
+            param_id = raw_id.decode("ascii", errors="ignore")
+        else:
+            param_id = str(raw_id)
+        param_id = param_id.rstrip("\x00")
+        value = float(getattr(message, "param_value", 0.0))
+        ptype = int(getattr(message, "param_type", 0))
+        with self._param_value_lock:
+            waiter = self._param_value_waiters.get(param_id)
+            if waiter is not None:
+                waiter["value"] = value
+                waiter["type"] = ptype
+                waiter["event"].set()
 
     def _set_auto_download_msg(self, msg: str) -> None:
         with self._client_activity_lock:
@@ -172,6 +193,15 @@ class FlightControllerLogService:
                     self._send_json(service.log_download_public_status())
                     return
 
+                if parsed.path == "/api/params":
+                    try:
+                        query = parse_qs(parsed.query)
+                        refresh = query.get("refresh", ["0"])[0] in {"1", "true", "yes"}
+                        self._send_json(service.get_params(refresh=refresh))
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
                 if parsed.path == "/api/logs/latest":
                     try:
                         metadata = service.download_latest_log()
@@ -258,13 +288,45 @@ class FlightControllerLogService:
 
                 self._send_json({"error": "Not found"}, status=404)
 
+            def do_POST(self):
+                parsed = urlparse(self.path)
+                if parsed.path == "/api/params/write":
+                    try:
+                        body = self._read_json_body()
+                        changes = body.get("changes", [])
+                        if not isinstance(changes, list):
+                            raise ValueError("changes must be a list")
+                        self._send_json(service.write_params(changes))
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path == "/api/params/compare":
+                    try:
+                        body = self._read_json_body()
+                        text = body.get("text", "")
+                        if not isinstance(text, str):
+                            raise ValueError("text must be a string")
+                        self._send_json(service.compare_param_text(text))
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                self._send_json({"error": "Not found"}, status=404)
+
             def log_message(self, fmt, *args):
                 print(f"[LOG SERVICE] {self.address_string()} - {fmt % args}")
 
             def _cors(self):
                 self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
                 self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+            def _read_json_body(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0:
+                    return {}
+                return json.loads(self.rfile.read(length).decode("utf-8"))
 
             def _send_json(self, payload, status=200):
                 body = json.dumps(payload).encode("utf-8")
@@ -351,6 +413,196 @@ class FlightControllerLogService:
     def _send_log_request_end(self):
         master = self.vehicle._master
         master.mav.log_request_end_send(master.target_system, master.target_component)
+
+    @staticmethod
+    def _param_type_to_mavlink(ptype):
+        mapping = {
+            1: mavutil.mavlink.MAV_PARAM_TYPE_INT8,
+            2: mavutil.mavlink.MAV_PARAM_TYPE_INT16,
+            3: mavutil.mavlink.MAV_PARAM_TYPE_INT32,
+            4: mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+        }
+        return mapping.get(int(ptype or 0), mavutil.mavlink.MAV_PARAM_TYPE_REAL32)
+
+    @staticmethod
+    def _mavlink_type_to_pack_type(ptype):
+        mapping = {
+            mavutil.mavlink.MAV_PARAM_TYPE_INT8: 1,
+            mavutil.mavlink.MAV_PARAM_TYPE_UINT8: 1,
+            mavutil.mavlink.MAV_PARAM_TYPE_INT16: 2,
+            mavutil.mavlink.MAV_PARAM_TYPE_UINT16: 2,
+            mavutil.mavlink.MAV_PARAM_TYPE_INT32: 3,
+            mavutil.mavlink.MAV_PARAM_TYPE_UINT32: 3,
+            mavutil.mavlink.MAV_PARAM_TYPE_REAL32: 4,
+        }
+        return mapping.get(int(ptype or 0), 4)
+
+    @staticmethod
+    def _param_close_enough(a, b):
+        return abs(float(a) - float(b)) <= max(1.0e-6, abs(float(b)) * 1.0e-6)
+
+    @staticmethod
+    def parse_param_text(text):
+        params = {}
+        for lineno, raw_line in enumerate(text.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "#" in line:
+                line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if "," in line:
+                parts = [part.strip() for part in line.split(",", 1)]
+            else:
+                parts = line.split()
+            if len(parts) < 2:
+                raise ValueError(f"Invalid .param line {lineno}: {raw_line}")
+            name = parts[0].strip()
+            if not name:
+                raise ValueError(f"Invalid .param line {lineno}: missing parameter name")
+            try:
+                value = float(parts[1])
+            except ValueError as exc:
+                raise ValueError(f"Invalid value for {name} on line {lineno}") from exc
+            params[name] = value
+        if not params:
+            raise ValueError("No parameters found in uploaded file")
+        return params
+
+    def _build_ftp_settings(self):
+        return MAVFTPSettings([
+            ("debug", int, 0),
+            ("pkt_loss_tx", int, 0),
+            ("pkt_loss_rx", int, 0),
+            ("max_backlog", int, 40),
+            ("burst_read_size", int, 239),
+            ("write_size", int, 239),
+            ("write_qsize", int, 5),
+            ("idle_detection_time", float, 3.7),
+            ("read_retry_time", float, 1.0),
+            ("retry_time", float, 0.5),
+        ])
+
+    def refresh_params_from_fc(self):
+        with self._download_lock:
+            print("[PARAM SERVICE] Fetching CUAV parameters via MAVFTP param pack")
+            while not self.ftp_master.msg_queue.empty():
+                self.ftp_master.msg_queue.get()
+
+            ftp = MAVFTP(self.ftp_master, self.ftp_master.target_system, self.ftp_master.target_component, self._build_ftp_settings())
+            pack_path = self.cache_dir / "cuav_param.pck"
+            res = ftp.cmd_get(["@PARAM/param.pck", str(pack_path)])
+            if res.error_code != FtpError.Success:
+                raise RuntimeError(f"MAVFTP parameter fetch initiation failed: {res.error_code}")
+            res = ftp.process_ftp_reply("getparams", timeout=float(os.environ.get("JECH_PARAM_DOWNLOAD_TIMEOUT_SEC", "180")))
+            if res.error_code != FtpError.Success:
+                raise RuntimeError(f"MAVFTP parameter fetch failed: {res.error_code}")
+
+            data = pack_path.read_bytes()
+            pdata = MAVFTP.ftp_param_decode(data)
+            if pdata is None:
+                raise RuntimeError("Could not decode parameter pack")
+            values = {}
+            for name, value, ptype in pdata.params:
+                values[name.decode("utf-8")] = (value, ptype)
+            params = {
+                name: {"value": float(value), "type": int(ptype)}
+                for name, (value, ptype) in sorted(values.items(), key=lambda item: item[0].split("_"))
+            }
+            if not params:
+                raise RuntimeError("No parameters decoded from CUAV")
+            self._param_cache = params
+            self._param_cache_loaded_at = time.time()
+            print(f"[PARAM SERVICE] Loaded {len(params)} CUAV parameters")
+            return self.get_params(refresh=False)
+
+    def get_params(self, refresh=False):
+        if refresh or not self._param_cache:
+            return self.refresh_params_from_fc()
+        return {
+            "params": self._param_cache,
+            "count": len(self._param_cache),
+            "loaded_at": int(self._param_cache_loaded_at),
+        }
+
+    def compare_param_text(self, text):
+        current = self.get_params(refresh=False)["params"]
+        uploaded = self.parse_param_text(text)
+        changes = []
+        missing = []
+        unchanged = 0
+        for name in sorted(uploaded.keys(), key=lambda item: item.split("_")):
+            target = uploaded[name]
+            if name not in current:
+                missing.append({"name": name, "to": target})
+                continue
+            old = float(current[name]["value"])
+            if self._param_close_enough(old, target):
+                unchanged += 1
+                continue
+            changes.append({
+                "name": name,
+                "from": old,
+                "to": target,
+                "type": int(current[name].get("type", 4)),
+            })
+        return {
+            "changes": changes,
+            "missing": missing,
+            "unchanged": unchanged,
+            "uploaded_count": len(uploaded),
+            "current_count": len(current),
+        }
+
+    def write_params(self, changes):
+        with self._download_lock:
+            if not self._param_cache:
+                self.refresh_params_from_fc()
+            results = []
+            for item in changes:
+                name = str(item.get("name", "")).strip()
+                if not name:
+                    raise ValueError("Parameter name is required")
+                if len(name.encode("ascii", errors="ignore")) > 16:
+                    raise ValueError(f"Parameter name is too long for MAVLink PARAM_SET: {name}")
+                if "to" not in item:
+                    raise ValueError(f"Missing target value for {name}")
+                target_value = float(item["to"])
+                cached = self._param_cache.get(name, {})
+                pack_type = int(item.get("type") or cached.get("type") or 4)
+                mav_type = self._param_type_to_mavlink(pack_type)
+                ack = self._write_one_param(name, target_value, mav_type)
+                ack_pack_type = self._mavlink_type_to_pack_type(ack.get("type", mav_type))
+                self._param_cache[name] = {"value": float(ack["value"]), "type": ack_pack_type}
+                results.append({
+                    "name": name,
+                    "from": item.get("from", cached.get("value")),
+                    "to": target_value,
+                    "verified": self._param_close_enough(ack["value"], target_value),
+                    "actual": float(ack["value"]),
+                    "type": ack_pack_type,
+                })
+                time.sleep(float(os.environ.get("JECH_PARAM_WRITE_GAP_SEC", "0.05")))
+            self._param_cache_loaded_at = time.time()
+            return {"written": results, "count": len(results)}
+
+    def _write_one_param(self, name, value, mav_type):
+        master = self.vehicle._master
+        pid = name.encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
+        waiter = {"event": threading.Event(), "value": None, "type": None}
+        with self._param_value_lock:
+            self._param_value_waiters[name] = waiter
+        try:
+            for attempt in range(3):
+                master.mav.param_set_send(master.target_system, master.target_component, pid, float(value), int(mav_type))
+                if waiter["event"].wait(timeout=float(os.environ.get("JECH_PARAM_ACK_TIMEOUT_SEC", "2.0"))):
+                    return {"value": float(waiter["value"]), "type": int(waiter["type"] or mav_type)}
+                print(f"[PARAM SERVICE] PARAM_SET retry {attempt + 1} for {name}")
+            raise RuntimeError(f"No PARAM_VALUE acknowledgement for {name}")
+        finally:
+            with self._param_value_lock:
+                self._param_value_waiters.pop(name, None)
 
     def _set_telemetry_streams(self, rate_hz):
         master = self.vehicle._master
