@@ -626,6 +626,12 @@ function add_param_sets() {
         item.setAttribute('title', param_string)
     }
 
+    // Add Actions column
+    let actionsHeader = document.createElement("th")
+    actionsHeader.appendChild(document.createTextNode("Live Actions"))
+    set_cell_style(actionsHeader)
+    header.appendChild(actionsHeader)
+
     // Add line for each param set
     const num_sets = PID.params.sets.length
 
@@ -696,6 +702,16 @@ function add_param_sets() {
                 item.appendChild(text)
             }
         }
+
+        // Add Actions cell
+        let actionsCell = document.createElement("td")
+        set_cell_style(actionsCell, color)
+        let pushBtn = document.createElement("button")
+        pushBtn.textContent = "\u21E8 Load to Live" // Right arrow
+        pushBtn.title = "Copy these values to the Live Tuning panel"
+        pushBtn.onclick = () => update_fc_from_set(i)
+        actionsCell.appendChild(pushBtn)
+        row.appendChild(actionsCell)
     }
 
     // Enable/Disable plot types as required
@@ -1617,4 +1633,137 @@ function setup_axis() {
 
     // Plot
     redraw()
+
+    // Refresh live tuning for this axis
+    refresh_live_tuning()
+}
+
+// --- Live Tuning Implementation ---
+var live_param_cache = null;
+
+async function refresh_live_tuning() {
+    const statusDiv = document.getElementById("live_tuning_status");
+    const logDiv = document.getElementById("live_tuning_log");
+    if (!statusDiv) return;
+
+    try {
+        statusDiv.innerText = "Fetching parameters from FC...";
+        const response = await fetch("/api/params");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const data = await response.json();
+        live_param_cache = data.params;
+        
+        const timestamp = new Date().toLocaleTimeString();
+        statusDiv.innerText = `Connected (Updated: ${timestamp})`;
+        statusDiv.style.color = "green";
+        
+        populate_live_tuning_inputs();
+    } catch (err) {
+        statusDiv.innerText = "Drone not reachable via RPi: " + err.message;
+        statusDiv.style.color = "#c00";
+    }
+}
+
+function get_current_live_prefix() {
+    try {
+        const axisIndex = get_axis_index();
+        const PID = PID_log_messages[axisIndex];
+        return PID.prefixes[0]; 
+    } catch (e) {
+        return "ATC_RAT_RLL_"; // Fallback
+    }
+}
+
+function populate_live_tuning_inputs() {
+    if (!live_param_cache) return;
+    
+    const prefix = get_current_live_prefix();
+    const names = get_PID_param_names(prefix);
+    
+    const pValue = (live_param_cache[names.KP] || {}).value || 0;
+    const iValue = (live_param_cache[names.KI] || {}).value || 0;
+    const dValue = (live_param_cache[names.KD] || {}).value || 0;
+    const ffValue = (live_param_cache[names.FF] || {}).value || 0;
+
+    document.getElementById("live_p").value = pValue;
+    document.getElementById("live_i").value = iValue;
+    document.getElementById("live_d").value = dValue;
+    document.getElementById("live_ff").value = ffValue;
+
+    // Track original values to show changes
+    document.getElementById("live_p").dataset.orig = pValue;
+    document.getElementById("live_i").dataset.orig = iValue;
+    document.getElementById("live_d").dataset.orig = dValue;
+    document.getElementById("live_ff").dataset.orig = ffValue;
+}
+
+async function write_live_tuning() {
+    if (!confirm("Are you sure you want to write these PID values to the Flight Controller?")) return;
+    
+    const prefix = get_current_live_prefix();
+    const names = get_PID_param_names(prefix);
+    const logDiv = document.getElementById("live_tuning_log");
+    const statusDiv = document.getElementById("live_tuning_status");
+
+    const p = parseFloat(document.getElementById("live_p").value);
+    const i = parseFloat(document.getElementById("live_i").value);
+    const d = parseFloat(document.getElementById("live_d").value);
+    const ff = parseFloat(document.getElementById("live_ff").value);
+
+    const changes = [];
+    if (p !== parseFloat(document.getElementById("live_p").dataset.orig)) changes.push({ name: names.KP, to: p });
+    if (i !== parseFloat(document.getElementById("live_i").dataset.orig)) changes.push({ name: names.KI, to: i });
+    if (d !== parseFloat(document.getElementById("live_d").dataset.orig)) changes.push({ name: names.KD, to: d });
+    if (ff !== parseFloat(document.getElementById("live_ff").dataset.orig)) changes.push({ name: names.FF, to: ff });
+
+    if (changes.length === 0) {
+        alert("No changes detected.");
+        return;
+    }
+
+    try {
+        statusDiv.innerText = "Writing parameters...";
+        const response = await fetch("/api/params/write", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ changes })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+        
+        const timestamp = new Date().toLocaleTimeString();
+        let logHtml = `<div>[${timestamp}] <b>Success:</b> Updated ${result.count} params:`;
+        result.written.forEach(r => {
+            logHtml += `<br>&nbsp;- ${r.name}: ${r.from} -> ${r.actual}`;
+        });
+        logHtml += `</div>`;
+        logDiv.innerHTML = logHtml + logDiv.innerHTML;
+        
+        await refresh_live_tuning();
+    } catch (err) {
+        alert("Write failed: " + err.message);
+        statusDiv.innerText = "Write failed: " + err.message;
+    }
+}
+
+function update_fc_from_set(setIndex) {
+    const axisIndex = get_axis_index();
+    const PID = PID_log_messages[axisIndex];
+    const set = PID.params.sets[setIndex];
+    if (!set) return;
+    
+    document.getElementById("live_p").value = set.KP || 0;
+    document.getElementById("live_i").value = set.KI || 0;
+    document.getElementById("live_d").value = set.KD || 0;
+    document.getElementById("live_ff").value = set.FF || 0;
+    
+    // Visual feedback
+    const fields = ["live_p", "live_i", "live_d", "live_ff"];
+    fields.forEach(id => {
+        const el = document.getElementById(id);
+        el.style.transition = "background-color 0.5s";
+        el.style.backgroundColor = "#fff9c4";
+        setTimeout(() => el.style.backgroundColor = "", 1000);
+    });
 }

@@ -202,6 +202,26 @@
                 <legend>Tests</legend>
             </fieldset>
         </td>
+        <td>
+            <fieldset style="width:250px; min-height:300px" id="live_tuning">
+                <legend>Live Tuning (on Drone)</legend>
+                <div id="live_tuning_status" style="font-size: 0.8em; margin-bottom: 8px; color: #666;">Not connected to RPi</div>
+                <table style="width: 100%">
+                    <tr><td>P:</td><td><input type="number" id="live_p" step="0.001" style="width: 80px"></td></tr>
+                    <tr><td>I:</td><td><input type="number" id="live_i" step="0.001" style="width: 80px"></td></tr>
+                    <tr><td>D:</td><td><input type="number" id="live_d" step="0.0001" style="width: 80px"></td></tr>
+                    <tr><td>FF:</td><td><input type="number" id="live_ff" step="0.001" style="width: 80px"></td></tr>
+                </table>
+                <br>
+                <div style="text-align: center">
+                    <button id="live_read_btn" onclick="refresh_live_tuning()" style="padding: 5px 10px">Read from FC</button>
+                    &nbsp;
+                    <button id="live_write_btn" onclick="write_live_tuning()" style="padding: 5px 10px; background-color: #ffebeb; border: 1px solid #c00;">Write to FC</button>
+                </div>
+                <hr>
+                <div id="live_tuning_log" style="font-size: 0.8em; height: 100px; overflow-y: auto; background: #f9f9f9; padding: 5px; border: 1px inset #eee;"></div>
+            </fieldset>
+        </td>
     </tr>
 </table>
 
