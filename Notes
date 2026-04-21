@@ -9,3 +9,56 @@ journalctl -u precision-land.service -f
 #If you change the service or script later
 sudo systemctl daemon-reload
 sudo systemctl restart precision-land.service
+
+
+# Precision-Land unified controller (preferred)
+# File: scripts/pl_service.py
+# - Installs/updates the systemd service
+# - Controls the service (start/stop/restart/status/logs)
+# - Controls the tmux session (status/logs/kill/attach)
+#
+# Install/update the service unit (requires sudo).
+# This writes: /etc/systemd/system/precision-land.service
+sudo -E python3 scripts/pl_service.py install
+
+# Install/update and start immediately
+sudo -E python3 scripts/pl_service.py install --start
+
+# Service controls
+python3 scripts/pl_service.py status
+sudo python3 scripts/pl_service.py start
+sudo python3 scripts/pl_service.py stop
+sudo python3 scripts/pl_service.py restart
+sudo python3 scripts/pl_service.py enable
+sudo python3 scripts/pl_service.py disable
+
+# Service logs (journalctl)
+python3 scripts/pl_service.py logs -n 200
+python3 scripts/pl_service.py logs -n 200 -f
+
+# Tmux session controls (session name: precision_land)
+python3 scripts/pl_service.py session status
+python3 scripts/pl_service.py session logs -n 200
+python3 scripts/pl_service.py session kill
+# Interactive attach (takes over terminal)
+python3 scripts/pl_service.py session attach
+
+
+
+
+Camera Setup : 64MP
+Open the configuration file:
+
+
+sudo nano /boot/firmware/config.txt
+Set camera_auto_detect=0.
+
+Add the dtoverlay line under [all], choosing your desired speed mode.
+
+For Low-Speed: dtoverlay=ov64a40,link-frequency=360000000
+For High-Speed: dtoverlay=ov64a40,link-frequency=456000000
+Save the file and reboot.
+
+Using CAM0 on Compute Modules
+
+If you are using a Compute Module (CM3/4) and have the camera connected to the CAM0 interface, append ,cam0 to your chosen dtoverlay line.
