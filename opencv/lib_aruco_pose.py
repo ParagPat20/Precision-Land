@@ -40,6 +40,7 @@ import numpy as np
 import cv2
 import cv2.aruco as aruco
 import sys, time, math
+import threading
 
 # Optional Raspberry Pi camera support via Picamera2, with graceful fallback
 try:
@@ -71,6 +72,12 @@ class ArucoSingleTracker():
         
         self.is_detected    = False
         self._kill          = False
+
+        # Latest captured frame (BGR) for external consumers (e.g., video recording).
+        # This avoids re-opening the camera from another thread/process.
+        self._frame_lock = threading.Lock()
+        self.last_frame = None
+        self.last_frame_ts = 0.0
         
         #--- 180 deg rotation matrix around the x axis
         self._R_flip      = np.zeros((3,3), dtype=np.float32)
@@ -222,6 +229,15 @@ class ArucoSingleTracker():
 
             if not ret or frame is None:
                 continue
+
+            # Expose the most recent frame to callers (copy to avoid accidental mutation).
+            # Keeping this inside the capture loop ensures it's set even when loop=False.
+            try:
+                with self._frame_lock:
+                    self.last_frame = frame.copy()
+                    self.last_frame_ts = time.time()
+            except Exception:
+                pass
 
             self._update_fps_read()
             

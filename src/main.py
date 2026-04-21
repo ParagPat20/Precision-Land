@@ -50,10 +50,13 @@ import threading
 from os import path
 from collections import deque  # For rolling stability buffer
 from datetime import datetime
+import queue
+from typing import Optional, Tuple
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
 from pymavlink import mavutil
 import numpy as np
+import cv2
 import firebase_admin
 from firebase_admin import credentials, db
 
@@ -97,6 +100,142 @@ mission_active = False  # Track if a mission is currently active (IN_PROGRESS)
 latest_battery_voltage = 0.0
 latest_battery_current = 0.0
 latest_battery_remaining = -1
+
+
+# --------------------------------------------------
+# -------------- VIDEO RECORDING (ARMED ONLY)
+# --------------------------------------------------
+class ArmedVideoRecorder:
+    """
+    Non-blocking recorder that starts when the vehicle arms and stops when it disarms.
+
+    Design goals:
+    - Never block the marker tracking loop or DroneKit callbacks
+    - Reuse the already-open camera frames (provided by ArucoSingleTracker.last_frame)
+    - If encoding falls behind, drop frames instead of building latency
+    """
+
+    def __init__(self, recordings_root_dir: str, drone_id: str):
+        # Root folder where dated folders will be created (DDMMYYYY).
+        self.recordings_root_dir = recordings_root_dir
+        self.drone_id = drone_id
+
+        self._armed = False
+        self._stop_evt = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=300)
+        self._writer = None
+        self._active_path = None
+
+        # Tune with env vars if needed.
+        self.target_fps = float(os.environ.get("PL_RECORD_FPS", "30"))
+
+    def is_active(self) -> bool:
+        return bool(self._armed) and self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        """Start background writer thread (idempotent)."""
+        if self.is_active():
+            return
+        os.makedirs(self.recordings_root_dir, exist_ok=True)
+        self._armed = True
+        self._stop_evt.clear()
+
+        # Clear any stale frames so the file starts "now".
+        try:
+            while True:
+                self._q.get_nowait()
+        except queue.Empty:
+            pass
+
+        self._thread = threading.Thread(target=self._run, name="armed-video-recorder", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Request stop and close the writer (non-blocking)."""
+        self._armed = False
+        self._stop_evt.set()
+
+    def submit(self, frame_bgr: np.ndarray) -> None:
+        """
+        Submit a frame for recording.
+        Drops frames when the queue is full to avoid impacting other processes/threads.
+        """
+        if not self._armed or frame_bgr is None:
+            return
+        try:
+            self._q.put_nowait(frame_bgr)
+        except queue.Full:
+            # Drop frame to keep the system real-time.
+            pass
+
+    def _open_writer(self, frame_shape: "Tuple[int, int, int]") -> None:
+        h, w = int(frame_shape[0]), int(frame_shape[1])
+        now = datetime.now()
+        date_folder = now.strftime("%d%m%Y")   # DDMMYYYY
+        time_folder = now.strftime("%H%M%S")   # HHMMSS (start time)
+
+        # Create dated folder under Videos/Precision-Land
+        target_dir = os.path.join(self.recordings_root_dir, date_folder)
+        os.makedirs(target_dir, exist_ok=True)
+
+        # Prefer mp4; fallback to avi if codec fails.
+        mp4_path = os.path.join(target_dir, f"{self.drone_id}_{time_folder}.mp4")
+        avi_path = os.path.join(target_dir, f"{self.drone_id}_{time_folder}.avi")
+
+        fourcc_mp4 = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(mp4_path, fourcc_mp4, self.target_fps, (w, h))
+        if writer is None or not writer.isOpened():
+            try:
+                if writer is not None:
+                    writer.release()
+            except Exception:
+                pass
+            fourcc_avi = cv2.VideoWriter_fourcc(*"XVID")
+            writer = cv2.VideoWriter(avi_path, fourcc_avi, self.target_fps, (w, h))
+            self._active_path = avi_path
+        else:
+            self._active_path = mp4_path
+
+        self._writer = writer
+        print(f"[VIDEO] Recording started: {self._active_path}")
+
+    def _close_writer(self) -> None:
+        try:
+            if self._writer is not None:
+                self._writer.release()
+        except Exception:
+            pass
+        self._writer = None
+        if self._active_path:
+            print(f"[VIDEO] Recording stopped: {self._active_path}")
+        self._active_path = None
+
+    def _run(self) -> None:
+        """
+        Writer loop:
+        - Waits for the first frame to open the writer with the correct resolution
+        - Writes frames until stop is requested
+        """
+        try:
+            while not self._stop_evt.is_set():
+                try:
+                    frame = self._q.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+
+                if frame is None:
+                    continue
+
+                if self._writer is None:
+                    self._open_writer(frame.shape)
+
+                try:
+                    self._writer.write(frame)
+                except Exception as e:
+                    print(f"[VIDEO] Write error: {e}")
+        finally:
+            self._close_writer()
 
 def build_telemetry_payload():
     """Build the latest telemetry snapshot for Firebase consumers."""
@@ -927,6 +1066,13 @@ fc_log_service = start_log_services(vehicle)
 led_controller = DroneLEDController()
 led_controller.start()
 
+# Video recordings go under ~/Videos/Precision-Land/<DDMMYYYY>/
+_videos_dir = os.path.expanduser(os.environ.get("PL_VIDEOS_DIR", "~/Videos"))
+video_recorder = ArmedVideoRecorder(
+    recordings_root_dir=os.path.join(_videos_dir, "Precision-Land"),
+    drone_id=DRONE_ID,
+)
+
 battery_failsafe_active = False
 other_failsafe_active = False
 
@@ -948,11 +1094,21 @@ def armed_listener(self, attr_name, value):
         battery_failsafe_active = False
         other_failsafe_active = False
         print("[LED] Armed - Resetting Failsafe Flags")
+        # Start video recording in the background (non-blocking).
+        try:
+            video_recorder.start()
+        except Exception as e:
+            print(f"[VIDEO] Could not start recording: {e}")
     else:
         # Disarmed: background thread in fc_log_service waits briefly, then pulls the latest .bin
         # over QGC-style LOG_REQUEST_DATA chunks (same stack as HTTP /api/logs/latest).
         print("[LOG SERVICE] Disarm detected - triggering auto log download...")
         fc_log_service.auto_download_latest_log()
+        # Stop recording (background thread will close the file).
+        try:
+            video_recorder.stop()
+        except Exception as e:
+            print(f"[VIDEO] Could not stop recording: {e}")
 
 
 #--------------------------------------------------
@@ -1027,6 +1183,16 @@ print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_th
 while True:                
     # Detect marker in current frame
     marker_found, x_cm, y_cm, z_cm = aruco_tracker.track(loop=False)
+
+    # If armed, record the latest camera frame without blocking the tracking loop.
+    # The tracker exposes the last frame so we don't open the camera twice.
+    if getattr(vehicle, "armed", False) and video_recorder is not None:
+        try:
+            frame = getattr(aruco_tracker, "last_frame", None)
+            if frame is not None:
+                video_recorder.submit(frame)
+        except Exception:
+            pass
     
     # Update detection buffer
     if marker_found:
