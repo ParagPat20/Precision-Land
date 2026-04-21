@@ -22,7 +22,6 @@
 
 # NumPy 2.x (matches OpenCV wheel ABI)
 numpy>=2.0.0,<3
-
 # OpenCV with contrib (ArUco, etc.). Do not also install opencv-python — same cv2 module.
 # Use a minimum version (latest within major version 4), but keep <5 to avoid
 # unexpected breaking changes when OpenCV 5 lands.
