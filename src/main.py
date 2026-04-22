@@ -1075,6 +1075,81 @@ video_recorder = ArmedVideoRecorder(
 
 battery_failsafe_active = False
 other_failsafe_active = False
+confidence_score = 0.0
+camera_active = False
+
+# LED state updates must not depend on camera/Aruco execution.
+# The main tracking loop can be removed/disabled during bring-up, but we still want
+# LEDs to reflect basic vehicle state (armed, flight mode, altitude, failsafes).
+def led_state_updater():
+    """Continuously compute and push LED state from vehicle telemetry."""
+    global confidence_score, camera_active
+    last_state = None
+    while True:
+        try:
+            #--------------------------------------------------
+            #-------------- LED CONTROL UPDATE (independent loop)
+            #--------------------------------------------------
+            # Determine the target LED state based on priorities
+            target_led_state = DroneLEDController.STATE_DISARMED  # Default
+
+            # Precision landing indicator is only meaningful when the camera pipeline is active.
+            # If the camera is removed/disabled, this will stay False and will not override ARMED.
+            # `confidence_threshold` is defined later in the file as part of the vision pipeline.
+            # Use a safe fallback here so this thread works even when the camera code is removed
+            # or initialization order changes.
+            _confidence_threshold = globals().get("confidence_threshold", 20.0)
+            is_precision_landing = (
+                camera_active
+                and (confidence_score >= _confidence_threshold)
+                and (vehicle.mode.name in ['LAND', 'GUIDED', 'AUTO'])
+            )
+
+            # Check for Failsafes first (Highest Priority)
+            if battery_failsafe_active:
+                target_led_state = DroneLEDController.STATE_BAT_FAILSAFE
+            elif other_failsafe_active:
+                target_led_state = DroneLEDController.STATE_FAILSAFE
+
+            # Check for Precision Landing
+            elif is_precision_landing:
+                target_led_state = DroneLEDController.STATE_PRECISION_LAND
+
+            # Check Flight Modes
+            elif vehicle.mode.name == 'LAND':
+                target_led_state = DroneLEDController.STATE_LAND
+            elif vehicle.mode.name == 'RTL':
+                target_led_state = DroneLEDController.STATE_RTL
+
+            # Check Armed Status
+            elif not vehicle.armed:
+                target_led_state = DroneLEDController.STATE_DISARMED
+            else:
+                # Armed and Flying or on Ground
+                # Some firmwares can transiently report alt as None; treat that as ground.
+                alt = getattr(getattr(vehicle.location, "global_relative_frame", None), "alt", None)
+                try:
+                    alt = float(alt) if alt is not None else 0.0
+                except Exception:
+                    alt = 0.0
+
+                if alt < 0.4:  # below 40cm
+                    target_led_state = DroneLEDController.STATE_ARMED_GROUND
+                else:
+                    target_led_state = DroneLEDController.STATE_FLYING
+
+            # Update LED Controller only on changes to reduce SPI/PIO churn.
+            if target_led_state != last_state:
+                last_state = target_led_state
+                led_controller.set_state(target_led_state)
+        except Exception as e:
+            # Keep LEDs alive even if a telemetry attribute read glitches.
+            print(f"[LED] State updater error: {e}")
+
+        time.sleep(0.1)
+
+# Start the independent LED updater thread.
+threading.Thread(target=led_state_updater, daemon=True).start()
 
 @vehicle.on_message('STATUSTEXT')
 def listener(self, name, message):
@@ -1158,10 +1233,24 @@ calib_path          = cwd+"/../opencv/"
 # Using 1920x1080@45fps for optimal balance between resolution and frame rate for precision landing
 # Higher resolution allows marker detection from greater altitudes with continuous autofocus
 camera_resolution   = [1920, 1080]  # 16:9 aspect ratio, 45fps with link-frequency=360000000
-camera_matrix       = np.loadtxt(calib_path+'cameraMatrix_webcam.txt', delimiter=',')
-camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_webcam.txt', delimiter=',')                                      
-aruco_tracker       = ArucoSingleTracker(id_to_find=id_to_find, marker_size=marker_size, show_video=True, axis_scale=0.01,
-                camera_matrix=camera_matrix, camera_distortion=camera_distortion, camera_size=camera_resolution)
+try:
+    camera_matrix = np.loadtxt(calib_path + 'cameraMatrix_webcam.txt', delimiter=',')
+    camera_distortion = np.loadtxt(calib_path + 'cameraDistortion_webcam.txt', delimiter=',')
+    aruco_tracker = ArucoSingleTracker(
+        id_to_find=id_to_find,
+        marker_size=marker_size,
+        show_video=True,
+        axis_scale=0.01,
+        camera_matrix=camera_matrix,
+        camera_distortion=camera_distortion,
+        camera_size=camera_resolution,
+    )
+    camera_active = True
+except Exception as e:
+    # Camera is optional during bring-up; LEDs and telemetry should still run without it.
+    aruco_tracker = None
+    camera_active = False
+    print(f"[CAMERA] Disabled/unavailable, skipping ArUco tracking: {e}")
                 
                 
 time_0 = time.time()
@@ -1182,7 +1271,12 @@ print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_th
 
 while True:                
     # Detect marker in current frame
-    marker_found, x_cm, y_cm, z_cm = aruco_tracker.track(loop=False)
+    if aruco_tracker is None:
+        # Camera disabled/unavailable: keep loop alive for telemetry / other services.
+        marker_found, x_cm, y_cm, z_cm = (False, 0.0, 0.0, 0.0)
+        time.sleep(0.05)
+    else:
+        marker_found, x_cm, y_cm, z_cm = aruco_tracker.track(loop=False)
 
     # If armed, record the latest camera frame without blocking the tracking loop.
     # The tracker exposes the last frame so we don't open the camera twice.
@@ -1227,42 +1321,5 @@ while True:
         # No print statements to avoid log spam
         pass
     
-    #--------------------------------------------------
-    #-------------- LED CONTROL UPDATE
-    #--------------------------------------------------
-    # Determine the target LED state based on priorities
-    target_led_state = DroneLEDController.STATE_DISARMED # Default
-    
-    # Determine if we are actively in Precision Landing
-    # Conditions: High confidence marker tracking AND (LAND mode OR GUIDED mode with detection)
-    is_precision_landing = (confidence_score >= confidence_threshold) and (vehicle.mode.name in ['LAND', 'GUIDED', 'AUTO'])
-    
-    # Check for Failsafes first (Highest Priority)
-    if battery_failsafe_active:
-        target_led_state = DroneLEDController.STATE_BAT_FAILSAFE
-    elif other_failsafe_active:
-        target_led_state = DroneLEDController.STATE_FAILSAFE
-    
-    # Check for Precision Landing
-    elif is_precision_landing:
-        target_led_state = DroneLEDController.STATE_PRECISION_LAND
-        
-    # Check Flight Modes
-    elif vehicle.mode.name == 'LAND':
-        target_led_state = DroneLEDController.STATE_LAND
-    elif vehicle.mode.name == 'RTL':
-        target_led_state = DroneLEDController.STATE_RTL
-        
-    # Check Armed Status
-    elif not vehicle.armed:
-        target_led_state = DroneLEDController.STATE_DISARMED
-    else:
-        # Armed and Flying or on Ground
-        if vehicle.location.global_relative_frame.alt < 0.4: # below 40cm
-            target_led_state = DroneLEDController.STATE_ARMED_GROUND
-        else:
-            target_led_state = DroneLEDController.STATE_FLYING
-            
-    # Update LED Controller
-    led_controller.set_state(target_led_state)
+    # LED state is now driven by `led_state_updater()` (telemetry-only thread).
       
