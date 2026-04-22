@@ -34,10 +34,7 @@ function get_open_in(get_file_fun) {
                           { name:"Hardware Report", path:"../HardwareReport",                hook_load:true,  enable: (msgs) => { return enable_all(msgs) || enable_hardware_report(msgs)} },
                           { name:"Filter Review",   path:"../FilterReview",                  hook_load:true,  enable: (msgs) => { return enable_all(msgs) || enable_filter_review(msgs)} },
                           { name:"MAGFit",          path:"../MAGFit",                        hook_load:true,  enable: (msgs) => { return enable_all(msgs) || enable_magfit(msgs)} },
-                          { name:"PID Review",      path:"../PIDReview",                     hook_load:true,  enable: (msgs) => { return enable_all(msgs) || enable_pid_review(msgs)} },
-                          // Pi-side render: compute analysis on the server and return ready HTML.
-                          // Requires the log to be served from the same Pi (LogFinder uses /logs-open/…).
-                          { name:"PID Review (Pi Rendered)", path:"/api/pid-review/render",   hook_load:false, enable: (msgs) => { return enable_all(msgs) || enable_pid_review(msgs)}, pi_render:true }]
+                          { name:"PID Review",      path:"../PIDReview",                     hook_load:true,  enable: (msgs) => { return enable_all(msgs) || enable_pid_review(msgs)} }]
 
     // Get own path
     const path_segments = window.location.pathname.split('/');
@@ -95,16 +92,6 @@ function get_open_in(get_file_fun) {
             }
 
             if (file.url != null) {
-                if (dest.pi_render) {
-                    // For Pi-rendered PID review, pass the cached log filename so the server can load it.
-                    const rel = (file.rel_path || file.relativePath || file.name || "")
-                    const url = dest.path + "?log=" + encodeURIComponent(rel)
-                    const newWindow = window.open(url)
-                    if (!newWindow) {
-                        alert("Popup blocked. Please allow popups for this site to open the tool.");
-                    }
-                    return
-                }
                 if (dest.hook_load) {
                     const newWindow = window.open(dest.path)
                     sendToChildWhenReady(newWindow, { type: 'remoteUrl', data: file });
