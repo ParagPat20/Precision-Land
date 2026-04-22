@@ -50,16 +50,21 @@ function renderBatteryBanner(status) {
     const tStr = (typeof t === "number") ? `${t.toFixed(1)} °C` : "— °C"
 
     el.style.display = "block"
-    el.textContent = `Live Battery: ${vStr} | ${cStr} | ${tStr}  (age ${age})`
-    if (status.ok !== true) {
-        el.style.background = "#fff8e1"
-        el.style.borderColor = "#e0c040"
-        el.title = "Battery telemetry is stale or missing."
-    } else {
-        el.style.background = "#f3fff3"
-        el.style.borderColor = "#5ab55a"
-        el.title = ""
-    }
+
+    const ok = status.ok === true
+    el.classList.toggle("stale", !ok)
+    el.title = ok ? "" : "Battery telemetry is stale or missing."
+
+    // Minimal themed content + a few clear emojis.
+    el.innerHTML =
+        `<span class="dot" aria-hidden="true"></span>` +
+        `<strong>🔋 Battery</strong> ` +
+        `<span> ${vStr}</span>` +
+        `<span class="muted"> · </span>` +
+        `<span><strong>⚡</strong> ${cStr}</span>` +
+        `<span class="muted"> · </span>` +
+        `<span><strong>🌡️</strong> ${tStr}</span>` +
+        `<span class="muted"> · age ${age}</span>`
 }
 
 async function refreshBatteryBanner() {
