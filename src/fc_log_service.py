@@ -66,6 +66,15 @@ class FlightControllerLogService:
         self._param_value_waiters = {}
         self._param_value_lock = threading.Lock()
 
+        # Live battery telemetry (for LogFinder header).
+        self._battery_lock = threading.Lock()
+        self._battery_status = {
+            "updated_mono": 0.0,
+            "voltage_v": None,
+            "current_a": None,
+            "temperature_c": None,
+        }
+
         # Streaming download state (QGC-style chunk table).
         self._stream_cv = threading.Condition(threading.RLock())
         self._stream_state = None
@@ -76,6 +85,49 @@ class FlightControllerLogService:
         self.vehicle.add_message_listener("LOG_DATA", self._on_log_data)
         self.vehicle.add_message_listener("FILE_TRANSFER_PROTOCOL", self._on_ftp)
         self.vehicle.add_message_listener("PARAM_VALUE", self._on_param_value)
+        self.vehicle.add_message_listener("SYS_STATUS", self._on_sys_status)
+        self.vehicle.add_message_listener("BATTERY_STATUS", self._on_battery_status)
+
+    def _battery_update(self, **kwargs):
+        with self._battery_lock:
+            self._battery_status["updated_mono"] = time.monotonic()
+            for k, v in kwargs.items():
+                if v is not None:
+                    self._battery_status[k] = v
+
+    def _on_sys_status(self, vehicle, name, message):
+        # SYS_STATUS provides voltage_battery (mV) and current_battery (cA) for the main battery.
+        try:
+            voltage_mv = int(getattr(message, "voltage_battery", -1))
+            current_ca = int(getattr(message, "current_battery", -1))
+            voltage_v = (voltage_mv / 1000.0) if voltage_mv > 0 else None
+            current_a = (current_ca / 100.0) if current_ca >= 0 else None
+            self._battery_update(voltage_v=voltage_v, current_a=current_a)
+        except Exception:
+            return
+
+    def _on_battery_status(self, vehicle, name, message):
+        # BATTERY_STATUS temperature is in centi-degC; may be 32767 if unknown.
+        try:
+            temp_cdeg = int(getattr(message, "temperature", 32767))
+            temperature_c = None
+            if temp_cdeg != 32767:
+                temperature_c = temp_cdeg / 100.0
+            self._battery_update(temperature_c=temperature_c)
+        except Exception:
+            return
+
+    def battery_public_status(self):
+        with self._battery_lock:
+            st = dict(self._battery_status)
+        age = time.monotonic() - float(st.get("updated_mono") or 0.0)
+        return {
+            "ok": age < 5.0,
+            "age_sec": round(age, 2),
+            "voltage_v": st.get("voltage_v"),
+            "current_a": st.get("current_a"),
+            "temperature_c": st.get("temperature_c"),
+        }
 
     def _on_ftp(self, vehicle, name, message):
         self.ftp_master.msg_queue.put(message)
@@ -191,6 +243,10 @@ class FlightControllerLogService:
 
                 if parsed.path == "/api/log-download-status":
                     self._send_json(service.log_download_public_status())
+                    return
+
+                if parsed.path == "/api/telemetry/battery":
+                    self._send_json(service.battery_public_status())
                     return
 
                 if parsed.path == "/api/params":

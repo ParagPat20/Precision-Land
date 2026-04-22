@@ -6,6 +6,7 @@ var dirHandle
 let remoteSourceUrl = null
 let remoteInventoryUrl = null
 let logDownloadPollTimer = null
+let batteryPollTimer = null
 
 function fcLogApiOrigin() {
     const s = document.getElementById("server_url").value.trim() || document.getElementById("inventory_url").value.trim()
@@ -13,6 +14,69 @@ function fcLogApiOrigin() {
         return null
     }
     return new URL(s, window.location.href).origin
+}
+
+async function fetchBatteryStatus() {
+    const origin = fcLogApiOrigin()
+    if (!origin) {
+        return null
+    }
+    const url = new URL("/api/telemetry/battery", origin)
+    const response = await fetch(url.toString())
+    if (!response.ok) {
+        return null
+    }
+    return await response.json()
+}
+
+function renderBatteryBanner(status) {
+    const el = document.getElementById("battery_status_banner")
+    if (!el) {
+        return
+    }
+    if (!status) {
+        el.style.display = "none"
+        el.textContent = ""
+        return
+    }
+
+    const v = status.voltage_v
+    const c = status.current_a
+    const t = status.temperature_c
+    const age = status.age_sec != null ? `${status.age_sec}s` : "?"
+
+    const vStr = (typeof v === "number") ? `${v.toFixed(2)} V` : "— V"
+    const cStr = (typeof c === "number") ? `${c.toFixed(2)} A` : "— A"
+    const tStr = (typeof t === "number") ? `${t.toFixed(1)} °C` : "— °C"
+
+    el.style.display = "block"
+    el.textContent = `Live Battery: ${vStr} | ${cStr} | ${tStr}  (age ${age})`
+    if (status.ok !== true) {
+        el.style.background = "#fff8e1"
+        el.style.borderColor = "#e0c040"
+        el.title = "Battery telemetry is stale or missing."
+    } else {
+        el.style.background = "#f3fff3"
+        el.style.borderColor = "#5ab55a"
+        el.title = ""
+    }
+}
+
+async function refreshBatteryBanner() {
+    try {
+        const st = await fetchBatteryStatus()
+        renderBatteryBanner(st)
+    } catch (_e) {
+        /* ignore poll errors */
+    }
+}
+
+function startBatteryPolling() {
+    if (batteryPollTimer != null) {
+        return
+    }
+    refreshBatteryBanner()
+    batteryPollTimer = window.setInterval(refreshBatteryBanner, 1000)
 }
 
 async function fetchLogDownloadStatus() {
@@ -313,6 +377,7 @@ async function load_inventory_from_server(url = null) {
     render_inventory(manifest.logs || [], resolvedSource, transferStatus)
     renderLogDownloadBanner(transferStatus)
     startLogDownloadStatusPolling()
+    startBatteryPolling()
 }
 
 async function load_from_server(url = null) {
