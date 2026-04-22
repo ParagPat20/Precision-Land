@@ -4,6 +4,7 @@
 
 import json
 import os
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -210,6 +211,26 @@ class FlightControllerLogService:
                         self._send_json({"error": str(error)}, status=500)
                     return
 
+                # Pi-side PID Review: compute analysis server-side and return a ready-to-display HTML page.
+                # Example: /api/pid-review/render?log=log_00001.bin
+                if parsed.path == "/api/pid-review/render":
+                    try:
+                        query = parse_qs(parsed.query)
+                        rel = (query.get("log", [""])[0] or "").strip()
+                        if not rel:
+                            raise ValueError("Missing query param: log=<cached_log_name.bin>")
+                        html = service.render_pid_review_html(rel)
+                        body = html.encode("utf-8")
+                        self.send_response(200)
+                        self._cors()
+                        self.send_header("Content-Type", "text/html; charset=utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
                 if parsed.path.startswith("/api/fc-logs/download/"):
                     try:
                         log_id = int(parsed.path.rsplit("/", 1)[-1])
@@ -339,6 +360,162 @@ class FlightControllerLogService:
 
         httpd = ThreadingHTTPServer((self.host, self.port), Handler)
         httpd.serve_forever()
+
+    def render_pid_review_html(self, relative_name: str) -> str:
+        """
+        Compute PIDReview analysis on the Pi and return a single self-contained HTML response
+        that renders the plots from precomputed arrays.
+        """
+        log_path = self.resolve_log_path(relative_name)
+
+        # Run Node-based compute script (reuses the WebTools math to match browser behavior).
+        script_path = (self.web_root / "PIDReview" / "pidreview_compute.mjs").resolve()
+        if not script_path.exists():
+            raise FileNotFoundError(f"Missing compute script: {script_path}")
+
+        try:
+            proc = subprocess.run(
+                ["node", str(script_path), str(log_path)],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError("Node.js not found. Install node on the Pi to enable Pi-side PID Review.") from e
+
+        if proc.returncode != 0:
+            stderr = (proc.stderr or "").strip()
+            stdout = (proc.stdout or "").strip()
+            detail = stderr or stdout or f"exit_code={proc.returncode}"
+            raise RuntimeError(f"PIDReview compute failed: {detail}")
+
+        data_json = proc.stdout.strip()
+        # Basic validation
+        parsed = json.loads(data_json)
+
+        # Render a minimal page: time response + step response (per axis in tabs).
+        title = f"PID Review (Pi Rendered): {relative_name}"
+        # Note: Plotly is served from /webtools/ because web_root is webtools/
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <link rel="icon" href="/webtools/images/AP_favicon.png">
+  <script src="/webtools/modules/plotly.js/dist/plotly.min.js"></script>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 16px; }}
+    .row {{ display: flex; gap: 12px; flex-wrap: wrap; }}
+    .card {{ border: 1px solid #ddd; border-radius: 8px; padding: 12px; }}
+    .axisBtn {{ margin-right: 8px; margin-bottom: 8px; }}
+    .muted {{ color: #666; }}
+  </style>
+</head>
+<body>
+  <h2>{title}</h2>
+  <div class="muted">Computed on Pi at {parsed.get("generated_at_utc","")} · window={parsed.get("window_size","")}</div>
+
+  <div id="axis_buttons" style="margin-top: 12px;"></div>
+
+  <div class="row">
+    <div class="card" style="flex: 1 1 680px;">
+      <h3 style="margin-top:0">PID Time Response Analysis</h3>
+      <div id="time_plot" style="width:100%;height:420px;"></div>
+    </div>
+    <div class="card" style="flex: 1 1 680px;">
+      <h3 style="margin-top:0">Step Response Analysis</h3>
+      <div id="step_plot" style="width:100%;height:420px;"></div>
+    </div>
+  </div>
+
+  <script id="pidreview_data" type="application/json">{json.dumps(parsed)}</script>
+  <script>
+    // Descriptive: build plots from Pi-computed arrays (no browser-side FFT needed).
+    const data = JSON.parse(document.getElementById("pidreview_data").textContent);
+    const axes = Array.isArray(data.axes) ? data.axes : [];
+    const axisButtons = document.getElementById("axis_buttons");
+    let current = 0;
+
+    function axisLabel(ax) {{
+      if (!ax || !Array.isArray(ax.id)) return "Axis";
+      return ax.id.join("_");
+    }}
+
+    function renderButtons() {{
+      axisButtons.replaceChildren();
+      axes.forEach((ax, idx) => {{
+        const b = document.createElement("button");
+        b.className = "axisBtn";
+        b.textContent = axisLabel(ax);
+        b.disabled = idx === current;
+        b.addEventListener("click", () => {{ current = idx; render(); }});
+        axisButtons.appendChild(b);
+      }});
+    }}
+
+    function renderTime(ax) {{
+      const ts = ax && ax.time_series;
+      const plot = document.getElementById("time_plot");
+      if (!ts || !Array.isArray(ts.t)) {{
+        Plotly.newPlot(plot, [], {{ title: "No time-series data available" }}, {{displaylogo:false}});
+        return;
+      }}
+      const traces = [
+        {{ x: ts.t, y: ts.tar, name: "Target", mode: "lines" }},
+        {{ x: ts.t, y: ts.act, name: "Actual", mode: "lines" }},
+        {{ x: ts.t, y: ts.out, name: "Output", mode: "lines", yaxis: "y2" }},
+      ];
+      const layout = {{
+        xaxis: {{ title: "Time (s)" }},
+        yaxis: {{ title: "Rate (deg/s)" }},
+        yaxis2: {{ title: "Output", overlaying: "y", side: "right" }},
+        margin: {{ t: 20, l: 50, r: 50, b: 50 }},
+        legend: {{ orientation: "h" }}
+      }};
+      Plotly.newPlot(plot, traces, layout, {{displaylogo:false}});
+    }}
+
+    function renderStep(ax) {{
+      const plot = document.getElementById("step_plot");
+      const sr = ax && ax.step_response;
+      if (!Array.isArray(sr) || sr.length === 0) {{
+        Plotly.newPlot(plot, [], {{ title: "No step-response data available" }}, {{displaylogo:false}});
+        return;
+      }}
+      const traces = [];
+      sr.forEach((set) => {{
+        // Mean line
+        traces.push({{
+          x: set.time,
+          y: set.mean,
+          name: `Set ${set.set_index + 1} (mean, n=${set.count})`,
+          mode: "lines",
+          line: {{ width: 3 }},
+        }});
+      }});
+      const layout = {{
+        xaxis: {{ title: "Time (s)" }},
+        yaxis: {{ title: "Response", range: [0,2] }},
+        margin: {{ t: 20, l: 50, r: 50, b: 50 }},
+        shapes: [{{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 1, y1: 1, line: {{ dash: "dot" }} }}],
+        legend: {{ orientation: "h" }}
+      }};
+      Plotly.newPlot(plot, traces, layout, {{displaylogo:false}});
+    }}
+
+    function render() {{
+      renderButtons();
+      const ax = axes[current] || null;
+      renderTime(ax);
+      renderStep(ax);
+    }}
+
+    render();
+  </script>
+</body>
+</html>"""
 
     def _on_log_entry(self, vehicle, name, message):
         entry = {

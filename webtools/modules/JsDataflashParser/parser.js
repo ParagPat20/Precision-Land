@@ -1090,19 +1090,23 @@ class DataflashParser {
 
 }
 
-self.addEventListener('message', function (event) {
-    let parser
-    if (event.data === null) {
-        console.log('got bad file message!')
-    } else if (event.data.action === 'parse') {
-        parser = new DataflashParser(true)
-        const data = event.data.file
-        parser.processData(data)
-    } else if (event.data.action === 'loadType') {
-        parser.loadType(event.data.type.split('[')[0])
-    } else if (event.data.action === 'trimFile') {
-        parser.trimFile(event.data.time)
-    }
-})
+// Browser WebWorker hook (guarded so the parser can also be imported under Node.js for
+// Pi-side analysis without crashing on missing `self`).
+if (typeof self !== "undefined" && typeof self.addEventListener === "function") {
+    self.addEventListener('message', function (event) {
+        let parser
+        if (event.data === null) {
+            console.log('got bad file message!')
+        } else if (event.data.action === 'parse') {
+            parser = new DataflashParser(true)
+            const data = event.data.file
+            parser.processData(data)
+        } else if (event.data.action === 'loadType') {
+            parser.loadType(event.data.type.split('[')[0])
+        } else if (event.data.action === 'trimFile') {
+            parser.trimFile(event.data.time)
+        }
+    })
+}
 
 export default DataflashParser
