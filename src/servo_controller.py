@@ -69,6 +69,8 @@ def resolve_servo_port(manual_port=None):
 class ServoController:
     """
     Manages ST3215 and SC09 servos for Precision Landing.
+    The working servo_tool.py setup uses the STS packet handler for all IDs,
+    so this controller follows that bus protocol unless changed later.
     ID 1: ST3215
     ID 2 & 3: SC09
     """
@@ -91,6 +93,7 @@ class ServoController:
         self.sc09_ids = [2, 3]
         self.st_config = {"min": 0, "max": 4095, "home": 0}
         self.sc09_configs = {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
+        self.servo_protocols = {1: "sts", 2: "sts", 3: "sts"}
         
         self._running = False
         self._thread = None
@@ -124,13 +127,12 @@ class ServoController:
             self.connected = False
 
     def _handler_for(self, sid):
-        if sid == self.st3215_id:
-            return self.stsHandler
-        if sid in self.sc09_ids:
-            return self.scsHandler
-        return self.stsHandler
+        return self.scsHandler if self.servo_protocols.get(int(sid)) == "scscl" else self.stsHandler
 
     def _is_sts(self, sid):
+        return self.servo_protocols.get(int(sid), "sts") == "sts"
+
+    def _is_st3215(self, sid):
         return int(sid) == self.st3215_id
 
     def _servo_ids(self):
@@ -144,13 +146,13 @@ class ServoController:
 
     def _home_position_for(self, sid):
         cfg = self._config_for(sid)
-        if self._is_sts(sid):
+        if self._is_st3215(sid):
             return 2048
         return (int(cfg.get("min", 0)) + int(cfg.get("max", 1023))) // 2
 
     def _clamp_position(self, sid, position):
         cfg = self._config_for(sid)
-        default_max = 4095 if self._is_sts(sid) else 1023
+        default_max = 4095 if self._is_st3215(sid) else 1023
         low = int(cfg.get("min", 0))
         high = int(cfg.get("max", default_max))
         if low > high:
@@ -177,6 +179,7 @@ class ServoController:
             "st3215": dict(self.st_config),
             "sc09_2": dict(self.sc09_configs.get(2, {"min": 0, "max": 1023})),
             "sc09_3": dict(self.sc09_configs.get(3, {"min": 0, "max": 1023})),
+            "protocols": dict(self.servo_protocols),
         }
 
     def _result_ok(self, sid, operation, result, error, handler=None):
@@ -240,12 +243,12 @@ class ServoController:
             try:
                 with self._io_lock:
                     handler = self._handler_for(sid)
-                    is_sts = sid == self.st3215_id
+                    is_sts = self._is_sts(sid)
                     torque_addr = STS_TORQUE_ENABLE if is_sts else SCSCL_TORQUE_ENABLE
                     min_addr = STS_MIN_ANGLE_LIMIT_L if is_sts else SCSCL_MIN_ANGLE_LIMIT_L
                     max_addr = STS_MAX_ANGLE_LIMIT_L if is_sts else SCSCL_MAX_ANGLE_LIMIT_L
                     
-                    if is_sts:
+                    if self._is_st3215(sid):
                         sid_min = self.st_config.get("min", 0)
                         sid_max = self.st_config.get("max", 4095)
                         home_offset = self.st_config.get("home", 0)
@@ -266,7 +269,7 @@ class ServoController:
                         self._lock_eprom(sid)
                         continue
 
-                    if is_sts:
+                    if self._is_st3215(sid):
                         val = handler.sts_toscs(home_offset, 11)
                         if not self._write2(sid, STS_OFS_L, val, "write home offset"):
                             self._lock_eprom(sid)
@@ -299,7 +302,7 @@ class ServoController:
         state = 1 if enable else 0
         try:
             with self._io_lock:
-                torque_addr = STS_TORQUE_ENABLE if sid == self.st3215_id else SCSCL_TORQUE_ENABLE
+                torque_addr = STS_TORQUE_ENABLE if self._is_sts(sid) else SCSCL_TORQUE_ENABLE
                 ok = self._write1(sid, torque_addr, state, "set torque")
             return {"ok": ok, "id": sid, "torque": bool(enable)}
         except Exception as e:
@@ -347,7 +350,7 @@ class ServoController:
         ids = self._servo_ids() if sid in (None, "all") else [int(sid)]
         results = []
         for item in ids:
-            if self._is_sts(item):
+            if self._is_st3215(item):
                 self.st_config["home"] = 0
                 try:
                     with self._io_lock:
@@ -403,9 +406,10 @@ class ServoController:
                 }
                 volts = self._read1(sid, voltage_addr)
                 payload["voltage_v"] = None if volts is None else volts / 10.0
-                if is_sts:
+                if self._is_st3215(sid):
                     ofs = self._read2(sid, STS_OFS_L)
                     payload["home_offset"] = None if ofs is None else handler.sts_tohost(ofs, 11)
+                if is_sts:
                     payload["mode"] = self._read1(sid, STS_MODE)
                 return payload
         except Exception as e:

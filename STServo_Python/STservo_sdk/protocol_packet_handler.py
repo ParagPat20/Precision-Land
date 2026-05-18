@@ -72,6 +72,33 @@ class protocol_packet_handler(object):
             return (w >> 8) & 0xFF
         else:
             return w & 0xFF
+
+    # The SCSCL helper classes in this SDK call the same byte/word helpers
+    # with an scs_* prefix. Keep aliases here so STS and SCSCL handlers share
+    # the same endian-aware implementation.
+    def scs_tohost(self, a, b):
+        return self.sts_tohost(a, b)
+
+    def scs_toscs(self, a, b):
+        return self.sts_toscs(a, b)
+
+    def scs_makeword(self, a, b):
+        return self.sts_makeword(a, b)
+
+    def scs_makedword(self, a, b):
+        return self.sts_makedword(a, b)
+
+    def scs_loword(self, l):
+        return self.sts_loword(l)
+
+    def scs_hiword(self, h):
+        return self.sts_hiword(h)
+
+    def scs_lobyte(self, w):
+        return self.sts_lobyte(w)
+
+    def scs_hibyte(self, w):
+        return self.sts_hibyte(w)
         
     def getProtocolVersion(self):
         return 1.0
