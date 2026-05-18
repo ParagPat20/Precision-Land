@@ -1057,7 +1057,7 @@ def start_log_services(vehicle):
     try:
         host_bind = socket.gethostbyname(host_public)
     except Exception:
-        host_bind = host_public
+        host_bind = "0.0.0.0"
     port = int(os.environ.get("JECH_FC_LOG_PORT", "8765"))
 
     service = FlightControllerLogService(

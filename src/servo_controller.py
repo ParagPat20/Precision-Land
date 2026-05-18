@@ -224,6 +224,9 @@ class ServoController:
                 print(f"[SERVO] Servo ID {sid} initialized.")
             except Exception as e:
                 print(f"[SERVO] Error initializing servo ID {sid}: {e}")
+                # Prevent "Port is in use!" subsequent errors
+                if hasattr(self, "portHandler") and self.portHandler:
+                    self.portHandler.is_using = False
 
     def set_torque(self, sid, enable):
         if not self.connected:
