@@ -4,6 +4,7 @@
 
 import json
 import os
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,12 +43,14 @@ class FlightControllerLogService:
     LOG_DOWNLOAD_WALL_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC", "7200"))
     PAUSE_TELEMETRY_DURING_DOWNLOAD = os.environ.get("JECH_FC_LOG_PAUSE_TELEMETRY", "1") != "0"
 
-    def __init__(self, vehicle, cache_dir, web_root, host="0.0.0.0", port=8765):
+    def __init__(self, vehicle, cache_dir, web_root, host="0.0.0.0", port=8765, public_host=None):
         self.vehicle = vehicle
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.web_root = Path(web_root)
         self.host = host
+        # Hostname/address to display in log messages (bind host may be resolved IP).
+        self.public_host = public_host or host
         self.port = port
 
         self._download_lock = threading.RLock()
@@ -80,8 +83,16 @@ class FlightControllerLogService:
         self._stream_state = None
 
         self.ftp_master = FTPMasterWrapper(self.vehicle._master)
+        
+        # Link to external ServoController to allow live web config updates
+        self.servo_controller = None
 
         self.vehicle.add_message_listener("LOG_ENTRY", self._on_log_entry)
+
+    @property
+    def servo_config_path(self):
+        return self.web_root.parent / "servo-config.json"
+
         self.vehicle.add_message_listener("LOG_DATA", self._on_log_data)
         self.vehicle.add_message_listener("FILE_TRANSFER_PROTOCOL", self._on_ftp)
         self.vehicle.add_message_listener("PARAM_VALUE", self._on_param_value)
@@ -211,7 +222,7 @@ class FlightControllerLogService:
 
         self._http_thread = threading.Thread(target=self._serve_http, name="FCLogHTTPServer", daemon=True)
         self._http_thread.start()
-        print(f"[LOG SERVICE] HTTP server listening on http://{self.host}:{self.port}")
+        print(f"[LOG SERVICE] HTTP server listening on http://{self.public_host}:{self.port}")
 
     def _serve_http(self):
         service = self
@@ -247,6 +258,23 @@ class FlightControllerLogService:
 
                 if parsed.path == "/api/telemetry/battery":
                     self._send_json(service.battery_public_status())
+                    return
+
+                if parsed.path == "/api/servo-config":
+                    try:
+                        cfg_path = service.servo_config_path
+                        if cfg_path.exists():
+                            with open(cfg_path, "r") as f:
+                                config = json.load(f)
+                        else:
+                            config = {
+                                "st3215": {"min": 0, "max": 4095, "home": 0},
+                                "sc09_2": {"min": 0, "max": 1023},
+                                "sc09_3": {"min": 0, "max": 1023}
+                            }
+                        self._send_json(config)
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
                     return
 
                 if parsed.path == "/api/params":
@@ -364,6 +392,29 @@ class FlightControllerLogService:
                         if not isinstance(text, str):
                             raise ValueError("text must be a string")
                         self._send_json(service.compare_param_text(text))
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path == "/api/servo-config":
+                    try:
+                        body = self._read_json_body()
+                        cfg_path = service.servo_config_path
+                        with open(cfg_path, "w") as f:
+                            json.dump(body, f, indent=4)
+                        
+                        # Apply live if controller is linked
+                        if service.servo_controller:
+                            st = body.get("st3215", {})
+                            sc09_configs = {
+                                2: body.get("sc09_2", {"min": 0, "max": 1023}),
+                                3: body.get("sc09_3", {"min": 0, "max": 1023})
+                            }
+                            service.servo_controller.initialize_servos(
+                                st_config=st,
+                                sc09_configs=sc09_configs
+                            )
+                        self._send_json({"status": "ok"})
                     except Exception as error:
                         self._send_json({"error": str(error)}, status=500)
                     return
@@ -999,9 +1050,23 @@ def start_log_services(vehicle):
         "JECH_WEBTOOLS_DIR",
         str(Path(__file__).resolve().parent.parent / "webtools"),
     )
-    host = os.environ.get("JECH_FC_LOG_HOST", "0.0.0.0")
+    # The UI expects to reach the Pi at `victoris.local` by default.
+    # We still bind to a resolved IP (if possible) to avoid issues on systems
+    # where binding to a hostname is less reliable.
+    host_public = os.environ.get("JECH_FC_LOG_HOST", "victoris.local")
+    try:
+        host_bind = socket.gethostbyname(host_public)
+    except Exception:
+        host_bind = host_public
     port = int(os.environ.get("JECH_FC_LOG_PORT", "8765"))
 
-    service = FlightControllerLogService(vehicle, cache_dir=cache_dir, web_root=web_root, host=host, port=port)
+    service = FlightControllerLogService(
+        vehicle,
+        cache_dir=cache_dir,
+        web_root=web_root,
+        host=host_bind,
+        port=port,
+        public_host=host_public,
+    )
     service.start()
     return service

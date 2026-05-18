@@ -66,6 +66,7 @@ from opencv.lib_aruco_pose import *
 from led_controller import DroneLEDController
 from fc_log_service import start_log_services
 from core.mission_generator import DeliveryTemplate, LatLng
+from servo_controller import ServoController
 
 # Backoff configuration for Firebase reconnections
 FIREBASE_INITIAL_BACKOFF = 5  # seconds
@@ -960,6 +961,7 @@ def resolve_vehicle_connection_path(manual_path=None):
 parser = argparse.ArgumentParser()
 parser.add_argument('--connect', default = 'udpout:192.168.144.14:14551', help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0. Overridden to UDP by default.")
 parser.add_argument('--baud', type=int, default=int(os.environ.get("JECH_MAVLINK_BAUD", "921600")), help="Vehicle serial baud rate. Default: %(default)s")
+parser.add_argument('--servo-port', default=None, help="Serial port for ST3215 and SC09 servos. Defaults to JECH_SERVO_PORT, then auto-detects common RPi serial devices.")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
 
@@ -1065,6 +1067,47 @@ fc_log_service = start_log_services(vehicle)
 #--------------------------------------------------
 led_controller = DroneLEDController()
 led_controller.start()
+
+#--------------------------------------------------
+#-------------- SERVO CONTROLLER
+#--------------------------------------------------
+try:
+    servo_controller = ServoController(
+        vehicle=vehicle,
+        port_name=args.servo_port,
+        baudrate=1000000,
+        is_mission_active_cb=lambda: mission_active
+    )
+    
+    # Load servo config from JSON
+    import json
+    servo_config_path = os.path.join(os.path.dirname(__file__), "..", "servo-config.json")
+    st_config = {"min": 0, "max": 4095, "home": 0}
+    sc09_configs = {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
+    
+    try:
+        if os.path.exists(servo_config_path):
+            with open(servo_config_path, "r") as f:
+                cfg = json.load(f)
+                st_config = cfg.get("st3215", st_config)
+                sc09_configs = {
+                    2: cfg.get("sc09_2", sc09_configs[2]),
+                    3: cfg.get("sc09_3", sc09_configs[3])
+                }
+    except Exception as ce:
+        print(f"[SERVO] Failed to load config, using defaults: {ce}")
+
+    # ST3215 uses 0-4095; SC09/SCSCL uses 0-1023.
+    servo_controller.initialize_servos(st_config=st_config, sc09_configs=sc09_configs)
+    servo_controller.start_monitoring()
+    
+    # Link to web service
+    if fc_log_service:
+        fc_log_service.servo_controller = servo_controller
+        print("[SERVO] Web API endpoints activated.")
+
+except Exception as e:
+    print(f"[SERVO] Failed to initialize servo controller: {e}")
 
 # Video recordings go under ~/Videos/Precision-Land/<DDMMYYYY>/
 _videos_dir = os.path.expanduser(os.environ.get("PL_VIDEOS_DIR", "~/Videos"))

@@ -60,13 +60,14 @@
 <button id="get_dir" type="button" onclick="loading_call(get_dir_then_load)">Search directory</button>
 <button id="reload" type="button" onclick="loading_call(reload_current_source)">Reload</button>
 <button id="open_param_viewer" type="button">Open Param Viewer</button>
+<button id="open_servo_config" type="button" onclick="openServoConfigModal()">Configure Servos</button>
 </P>
 <P>
-<input id="server_url" type="text" style="width:900px" placeholder="Server log manifest URL, for example http://rpi.local:8765/api/logs">
+<input id="server_url" type="text" style="width:900px" placeholder="Server log manifest URL, for example http://victoris.local:8765/api/logs">
 <button id="load_server" type="button" onclick="loading_call(load_from_server)">Load server logs</button>
 </P>
 <P>
-<input id="inventory_url" type="text" style="width:900px" placeholder="Flight controller log inventory URL, for example http://rpi.local:8765/api/fc-logs">
+<input id="inventory_url" type="text" style="width:900px" placeholder="Flight controller log inventory URL, for example http://victoris.local:8765/api/fc-logs">
 <button id="load_inventory" type="button" onclick="loading_call(load_inventory_from_server)">Show FC logs</button>
 </P>
 <P>
@@ -145,6 +146,142 @@
 
   init_loading_overlay()
 
+</script>
+
+<!-- Servo Configuration Modal -->
+<style>
+  #servo_config_modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.4);
+  }
+  .servo-modal-content {
+    background-color: #fefefe;
+    margin: 10% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 400px;
+    border-radius: 8px;
+    font-family: sans-serif;
+  }
+  .servo-modal-content h2 { margin-top: 0; }
+  .servo-form-group { margin-bottom: 12px; }
+  .servo-form-group label { display: inline-block; width: 150px; font-weight: bold; }
+  .servo-form-group input { width: 100px; padding: 4px; }
+  .servo-actions { margin-top: 20px; text-align: right; }
+  .servo-actions button { padding: 6px 12px; margin-left: 8px; cursor: pointer; }
+</style>
+
+<div id="servo_config_modal">
+  <div class="servo-modal-content">
+    <h2>Configure Servos</h2>
+    <div style="color:#666; margin-bottom: 15px; font-size:12px;">Live updates applied instantly on Save.</div>
+    
+    <h3>ST3215</h3>
+    <div class="servo-form-group"><label>Min Angle:</label><input type="number" id="st_min" value="0"></div>
+    <div class="servo-form-group"><label>Max Angle:</label><input type="number" id="st_max" value="4095"></div>
+    <div class="servo-form-group"><label>Home Offset:</label><input type="number" id="st_home" value="0"></div>
+
+    <h3>SC09 (ID 2)</h3>
+    <div class="servo-form-group"><label>Min Angle:</label><input type="number" id="sc09_2_min" value="0"></div>
+    <div class="servo-form-group"><label>Max Angle:</label><input type="number" id="sc09_2_max" value="1023"></div>
+
+    <h3>SC09 (ID 3)</h3>
+    <div class="servo-form-group"><label>Min Angle:</label><input type="number" id="sc09_3_min" value="0"></div>
+    <div class="servo-form-group"><label>Max Angle:</label><input type="number" id="sc09_3_max" value="1023"></div>
+
+    <div class="servo-actions">
+      <button onclick="closeServoConfigModal()">Cancel</button>
+      <button onclick="saveServoConfig()" style="background:#22c55e; color:white; border:none; border-radius:4px;">Save & Apply</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function openServoConfigModal() {
+    document.getElementById('servo_config_modal').style.display = 'block';
+    // Fetch current settings
+    var apiUrl = '/api/servo-config';
+    // Try to use the server URL if provided
+    var srvInput = document.getElementById('server_url');
+    if (srvInput && srvInput.value) {
+       try {
+           var url = new URL(srvInput.value);
+           apiUrl = url.origin + '/api/servo-config';
+       } catch(e) {}
+    }
+
+    fetch(apiUrl)
+      .then(r => r.json())
+      .then(data => {
+        if(data.st3215) {
+          document.getElementById('st_min').value = data.st3215.min;
+          document.getElementById('st_max').value = data.st3215.max;
+          document.getElementById('st_home').value = data.st3215.home;
+        }
+        if(data.sc09_2) {
+          document.getElementById('sc09_2_min').value = data.sc09_2.min;
+          document.getElementById('sc09_2_max').value = data.sc09_2.max;
+        }
+        if(data.sc09_3) {
+          document.getElementById('sc09_3_min').value = data.sc09_3.min;
+          document.getElementById('sc09_3_max').value = data.sc09_3.max;
+        }
+      }).catch(err => {
+        console.error("Failed to load servo config:", err);
+      });
+  }
+
+  function closeServoConfigModal() {
+    document.getElementById('servo_config_modal').style.display = 'none';
+  }
+
+  function saveServoConfig() {
+    var data = {
+      st3215: {
+        min: parseInt(document.getElementById('st_min').value) || 0,
+        max: parseInt(document.getElementById('st_max').value) || 4095,
+        home: parseInt(document.getElementById('st_home').value) || 0
+      },
+      sc09_2: {
+        min: parseInt(document.getElementById('sc09_2_min').value) || 0,
+        max: parseInt(document.getElementById('sc09_2_max').value) || 1023
+      },
+      sc09_3: {
+        min: parseInt(document.getElementById('sc09_3_min').value) || 0,
+        max: parseInt(document.getElementById('sc09_3_max').value) || 1023
+      }
+    };
+
+    var apiUrl = '/api/servo-config';
+    var srvInput = document.getElementById('server_url');
+    if (srvInput && srvInput.value) {
+       try {
+           var url = new URL(srvInput.value);
+           apiUrl = url.origin + '/api/servo-config';
+       } catch(e) {}
+    }
+
+    fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    .then(r => r.json())
+    .then(res => {
+      if(res.error) alert("Error saving: " + res.error);
+      else closeServoConfigModal();
+    })
+    .catch(err => {
+      alert("Network error while saving.");
+      console.error(err);
+    });
+  }
 </script>
 
 </body>
