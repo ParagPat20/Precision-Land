@@ -89,6 +89,8 @@ class ServoController:
         
         self.st3215_id = 1
         self.sc09_ids = [2, 3]
+        self.st_config = {"min": 0, "max": 4095, "home": 0}
+        self.sc09_configs = {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
         
         self._running = False
         self._thread = None
@@ -128,6 +130,55 @@ class ServoController:
             return self.scsHandler
         return self.stsHandler
 
+    def _is_sts(self, sid):
+        return int(sid) == self.st3215_id
+
+    def _servo_ids(self):
+        return [self.st3215_id] + list(self.sc09_ids)
+
+    def _config_for(self, sid):
+        sid = int(sid)
+        if self._is_sts(sid):
+            return self.st_config
+        return self.sc09_configs.get(sid, {"min": 0, "max": 1023})
+
+    def _home_position_for(self, sid):
+        cfg = self._config_for(sid)
+        if self._is_sts(sid):
+            return 2048
+        return (int(cfg.get("min", 0)) + int(cfg.get("max", 1023))) // 2
+
+    def _clamp_position(self, sid, position):
+        cfg = self._config_for(sid)
+        default_max = 4095 if self._is_sts(sid) else 1023
+        low = int(cfg.get("min", 0))
+        high = int(cfg.get("max", default_max))
+        if low > high:
+            low, high = high, low
+        return max(low, min(high, int(position)))
+
+    def _normalize_config(self, st_config=None, sc09_configs=None):
+        st_src = st_config or {}
+        sc_src = sc09_configs or {}
+        self.st_config = {
+            "min": int(st_src.get("min", self.st_config.get("min", 0))),
+            "max": int(st_src.get("max", self.st_config.get("max", 4095))),
+            "home": int(st_src.get("home", self.st_config.get("home", 0))),
+        }
+        for sid in self.sc09_ids:
+            src = sc_src.get(sid, sc_src.get(str(sid), self.sc09_configs.get(sid, {})))
+            self.sc09_configs[sid] = {
+                "min": int(src.get("min", self.sc09_configs.get(sid, {}).get("min", 0))),
+                "max": int(src.get("max", self.sc09_configs.get(sid, {}).get("max", 1023))),
+            }
+
+    def get_config(self):
+        return {
+            "st3215": dict(self.st_config),
+            "sc09_2": dict(self.sc09_configs.get(2, {"min": 0, "max": 1023})),
+            "sc09_3": dict(self.sc09_configs.get(3, {"min": 0, "max": 1023})),
+        }
+
     def _result_ok(self, sid, operation, result, error, handler=None):
         handler = handler or self._handler_for(sid)
         if result != COMM_SUCCESS:
@@ -158,6 +209,20 @@ class ServoController:
         result, error = handler.LockEprom(sid)
         return self._result_ok(sid, "EEPROM lock", result, error, handler)
 
+    def _read1(self, sid, address):
+        handler = self._handler_for(sid)
+        value, result, error = handler.read1ByteTxRx(sid, address)
+        if not self._result_ok(sid, f"read address {address}", result, error, handler):
+            return None
+        return value
+
+    def _read2(self, sid, address):
+        handler = self._handler_for(sid)
+        value, result, error = handler.read2ByteTxRx(sid, address)
+        if not self._result_ok(sid, f"read address {address}", result, error, handler):
+            return None
+        return value
+
     def initialize_servos(self, st_config=None, sc09_configs=None):
         """
         Sets the home position offset, max and min positions for all servos.
@@ -168,8 +233,7 @@ class ServoController:
             print("[SERVO] Cannot initialize: Not connected.")
             return
 
-        st_config = st_config or {"min": 0, "max": 4095, "home": 0}
-        sc09_configs = sc09_configs or {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
+        self._normalize_config(st_config, sc09_configs)
 
         print(f"[SERVO] Initializing Servos...")
         for sid in [self.st3215_id] + self.sc09_ids:
@@ -182,11 +246,11 @@ class ServoController:
                     max_addr = STS_MAX_ANGLE_LIMIT_L if is_sts else SCSCL_MAX_ANGLE_LIMIT_L
                     
                     if is_sts:
-                        sid_min = st_config.get("min", 0)
-                        sid_max = st_config.get("max", 4095)
-                        home_offset = st_config.get("home", 0)
+                        sid_min = self.st_config.get("min", 0)
+                        sid_max = self.st_config.get("max", 4095)
+                        home_offset = self.st_config.get("home", 0)
                     else:
-                        sc_cfg = sc09_configs.get(sid, sc09_configs.get(str(sid), {"min": 0, "max": 1023}))
+                        sc_cfg = self.sc09_configs.get(sid, {"min": 0, "max": 1023})
                         sid_min = sc_cfg.get("min", 0)
                         sid_max = sc_cfg.get("max", 1023)
 
@@ -215,9 +279,9 @@ class ServoController:
                     if is_sts:
                         if not self._write1(sid, STS_MODE, 0, "set position mode"):
                             continue
-                        result, error = handler.WritePosEx(sid, 2048, 2400, 50)
+                        result, error = handler.WritePosEx(sid, self._home_position_for(sid), 2400, 50)
                     else:
-                        result, error = handler.WritePos(sid, (sid_min + sid_max) // 2, 0, 500)
+                        result, error = handler.WritePos(sid, self._home_position_for(sid), 0, 500)
                     if not self._result_ok(sid, "move to center", result, error, handler):
                         continue
 
@@ -230,14 +294,124 @@ class ServoController:
 
     def set_torque(self, sid, enable):
         if not self.connected:
-            return
+            return {"ok": False, "error": "not connected"}
+        sid = int(sid)
         state = 1 if enable else 0
         try:
             with self._io_lock:
                 torque_addr = STS_TORQUE_ENABLE if sid == self.st3215_id else SCSCL_TORQUE_ENABLE
-                self._write1(sid, torque_addr, state, "set torque")
+                ok = self._write1(sid, torque_addr, state, "set torque")
+            return {"ok": ok, "id": sid, "torque": bool(enable)}
         except Exception as e:
             print(f"[SERVO] Error setting torque for ID {sid}: {e}")
+            return {"ok": False, "id": sid, "error": str(e)}
+
+    def set_all_torque(self, enable):
+        results = [self.set_torque(sid, enable) for sid in self._servo_ids()]
+        return {"ok": all(item.get("ok") for item in results), "results": results}
+
+    def move_servo(self, sid, position, speed=None, acc=50):
+        if not self.connected:
+            return {"ok": False, "error": "not connected"}
+        sid = int(sid)
+        position = self._clamp_position(sid, position)
+        speed = int(speed if speed is not None else (2400 if self._is_sts(sid) else 500))
+        acc = int(acc)
+        handler = self._handler_for(sid)
+        try:
+            with self._io_lock:
+                if self._is_sts(sid):
+                    if not self._write1(sid, STS_MODE, 0, "set position mode"):
+                        return {"ok": False, "id": sid, "error": "failed to set position mode"}
+                    result, error = handler.WritePosEx(sid, position, speed, acc)
+                else:
+                    result, error = handler.WritePos(sid, position, 0, speed)
+                ok = self._result_ok(sid, "move", result, error, handler)
+            return {"ok": ok, "id": sid, "position": position, "speed": speed, "acc": acc}
+        except Exception as e:
+            if self.portHandler:
+                self.portHandler.is_using = False
+            print(f"[SERVO] Error moving ID {sid}: {e}")
+            return {"ok": False, "id": sid, "error": str(e)}
+
+    def move_home(self, sid=None):
+        ids = self._servo_ids() if sid in (None, "all") else [int(sid)]
+        results = [self.move_servo(item, self._home_position_for(item)) for item in ids]
+        return {"ok": all(item.get("ok") for item in results), "results": results}
+
+    def reset_home_position(self, sid=None):
+        """
+        Reset saved home calibration. ST3215 supports a home offset register;
+        SC09 home is defined as the midpoint of its configured min/max range.
+        """
+        ids = self._servo_ids() if sid in (None, "all") else [int(sid)]
+        results = []
+        for item in ids:
+            if self._is_sts(item):
+                self.st_config["home"] = 0
+                try:
+                    with self._io_lock:
+                        self._write1(item, STS_TORQUE_ENABLE, 0, "disable torque")
+                        unlocked = self._unlock_eprom(item)
+                        ok = False
+                        if unlocked:
+                            ok = self._write2(item, STS_OFS_L, 0, "reset home offset")
+                            time.sleep(0.1)
+                            self._lock_eprom(item)
+                    move = self.move_servo(item, self._home_position_for(item))
+                    results.append({"ok": ok and move.get("ok", False), "id": item, "home": 0, "move": move})
+                except Exception as e:
+                    if self.portHandler:
+                        self.portHandler.is_using = False
+                    results.append({"ok": False, "id": item, "error": str(e)})
+            else:
+                move = self.move_servo(item, self._home_position_for(item))
+                results.append({"ok": move.get("ok", False), "id": item, "home": self._home_position_for(item), "move": move})
+        return {"ok": all(item.get("ok") for item in results), "results": results}
+
+    def read_status(self, sid=None):
+        ids = self._servo_ids() if sid in (None, "all") else [int(sid)]
+        return {"ok": True, "servos": [self._read_status_one(item) for item in ids], "config": self.get_config()}
+
+    def _read_status_one(self, sid):
+        sid = int(sid)
+        is_sts = self._is_sts(sid)
+        handler = self._handler_for(sid)
+        torque_addr = STS_TORQUE_ENABLE if is_sts else SCSCL_TORQUE_ENABLE
+        voltage_addr = STS_PRESENT_VOLTAGE if is_sts else SCSCL_PRESENT_VOLTAGE
+        temp_addr = STS_PRESENT_TEMPERATURE if is_sts else SCSCL_PRESENT_TEMPERATURE
+        load_addr = STS_PRESENT_LOAD_L if is_sts else SCSCL_PRESENT_LOAD_L
+        current_addr = STS_PRESENT_CURRENT_L if is_sts else SCSCL_PRESENT_CURRENT_L
+        moving_addr = STS_MOVING if is_sts else SCSCL_MOVING
+        try:
+            with self._io_lock:
+                pos, spd, result, error = handler.ReadPosSpeed(sid)
+                ok = self._result_ok(sid, "read position/speed", result, error, handler)
+                payload = {
+                    "ok": ok,
+                    "id": sid,
+                    "model": "ST3215" if is_sts else "SC09",
+                    "position": pos if ok else None,
+                    "speed": spd if ok else None,
+                    "home_position": self._home_position_for(sid),
+                    "torque": self._read1(sid, torque_addr),
+                    "voltage_v": None,
+                    "temperature_c": self._read1(sid, temp_addr),
+                    "load": self._read2(sid, load_addr),
+                    "current": self._read2(sid, current_addr),
+                    "moving": self._read1(sid, moving_addr),
+                }
+                volts = self._read1(sid, voltage_addr)
+                payload["voltage_v"] = None if volts is None else volts / 10.0
+                if is_sts:
+                    ofs = self._read2(sid, STS_OFS_L)
+                    payload["home_offset"] = None if ofs is None else handler.sts_tohost(ofs, 11)
+                    payload["mode"] = self._read1(sid, STS_MODE)
+                return payload
+        except Exception as e:
+            if self.portHandler:
+                self.portHandler.is_using = False
+            return {"ok": False, "id": sid, "error": str(e)}
 
     def start_monitoring(self):
         if self._running:

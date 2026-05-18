@@ -88,16 +88,15 @@ class FlightControllerLogService:
         self.servo_controller = None
 
         self.vehicle.add_message_listener("LOG_ENTRY", self._on_log_entry)
-
-    @property
-    def servo_config_path(self):
-        return self.web_root.parent / "servo-config.json"
-
         self.vehicle.add_message_listener("LOG_DATA", self._on_log_data)
         self.vehicle.add_message_listener("FILE_TRANSFER_PROTOCOL", self._on_ftp)
         self.vehicle.add_message_listener("PARAM_VALUE", self._on_param_value)
         self.vehicle.add_message_listener("SYS_STATUS", self._on_sys_status)
         self.vehicle.add_message_listener("BATTERY_STATUS", self._on_battery_status)
+
+    @property
+    def servo_config_path(self):
+        return self.web_root.parent / "servo-config.json"
 
     def _battery_update(self, **kwargs):
         with self._battery_lock:
@@ -216,6 +215,78 @@ class FlightControllerLogService:
             "transfer_method": transfer_method,
         }
 
+    def default_servo_config(self):
+        return {
+            "st3215": {"min": 0, "max": 4095, "home": 0},
+            "sc09_2": {"min": 0, "max": 1023},
+            "sc09_3": {"min": 0, "max": 1023},
+        }
+
+    def load_servo_config(self):
+        cfg_path = self.servo_config_path
+        if cfg_path.exists():
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+        else:
+            loaded = {}
+        config = self.default_servo_config()
+        for key, value in loaded.items():
+            if key in config and isinstance(value, dict):
+                config[key].update(value)
+        return config
+
+    def save_servo_config(self, config):
+        cfg_path = self.servo_config_path
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4)
+
+    def apply_servo_config(self, config):
+        if not self.servo_controller:
+            return {"ok": False, "error": "Servo controller is not connected"}
+        st = config.get("st3215", {})
+        sc09_configs = {
+            2: config.get("sc09_2", {"min": 0, "max": 1023}),
+            3: config.get("sc09_3", {"min": 0, "max": 1023}),
+        }
+        self.servo_controller.initialize_servos(st_config=st, sc09_configs=sc09_configs)
+        return {"ok": True, "config": self.servo_controller.get_config()}
+
+    def servo_status(self, sid=None):
+        if not self.servo_controller:
+            return {"ok": False, "error": "Servo controller is not connected", "config": self.load_servo_config()}
+        return self.servo_controller.read_status(sid=sid)
+
+    def servo_action(self, body):
+        if not self.servo_controller:
+            return {"ok": False, "error": "Servo controller is not connected"}
+        action = str(body.get("action", "")).strip().lower()
+        sid = body.get("id", body.get("sid", "all"))
+        if action == "move":
+            if sid in (None, "all"):
+                raise ValueError("move requires a specific servo id")
+            return self.servo_controller.move_servo(
+                sid=sid,
+                position=int(body.get("position")),
+                speed=body.get("speed"),
+                acc=int(body.get("acc", 50)),
+            )
+        if action == "home":
+            return self.servo_controller.move_home(sid=sid)
+        if action == "reset_home":
+            result = self.servo_controller.reset_home_position(sid=sid)
+            config = self.servo_controller.get_config()
+            self.save_servo_config(config)
+            result["config"] = config
+            return result
+        if action == "torque":
+            enable = bool(body.get("enable", body.get("torque", True)))
+            if sid in (None, "all"):
+                return self.servo_controller.set_all_torque(enable)
+            return self.servo_controller.set_torque(sid, enable)
+        if action == "status":
+            return self.servo_controller.read_status(sid=sid)
+        raise ValueError(f"Unknown servo action: {action}")
+
     def start(self):
         if self._http_thread is not None:
             return
@@ -262,17 +333,16 @@ class FlightControllerLogService:
 
                 if parsed.path == "/api/servo-config":
                     try:
-                        cfg_path = service.servo_config_path
-                        if cfg_path.exists():
-                            with open(cfg_path, "r") as f:
-                                config = json.load(f)
-                        else:
-                            config = {
-                                "st3215": {"min": 0, "max": 4095, "home": 0},
-                                "sc09_2": {"min": 0, "max": 1023},
-                                "sc09_3": {"min": 0, "max": 1023}
-                            }
-                        self._send_json(config)
+                        self._send_json(service.load_servo_config())
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path == "/api/servo-status":
+                    try:
+                        query = parse_qs(parsed.query)
+                        sid = query.get("id", [None])[0]
+                        self._send_json(service.servo_status(sid=sid))
                     except Exception as error:
                         self._send_json({"error": str(error)}, status=500)
                     return
@@ -399,22 +469,21 @@ class FlightControllerLogService:
                 if parsed.path == "/api/servo-config":
                     try:
                         body = self._read_json_body()
-                        cfg_path = service.servo_config_path
-                        with open(cfg_path, "w") as f:
-                            json.dump(body, f, indent=4)
-                        
-                        # Apply live if controller is linked
-                        if service.servo_controller:
-                            st = body.get("st3215", {})
-                            sc09_configs = {
-                                2: body.get("sc09_2", {"min": 0, "max": 1023}),
-                                3: body.get("sc09_3", {"min": 0, "max": 1023})
-                            }
-                            service.servo_controller.initialize_servos(
-                                st_config=st,
-                                sc09_configs=sc09_configs
-                            )
-                        self._send_json({"status": "ok"})
+                        config = service.default_servo_config()
+                        for key, value in body.items():
+                            if key in config and isinstance(value, dict):
+                                config[key].update(value)
+                        service.save_servo_config(config)
+                        apply_result = service.apply_servo_config(config)
+                        self._send_json({"ok": apply_result.get("ok", False), "status": "ok", "apply": apply_result, "config": config})
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path == "/api/servo-action":
+                    try:
+                        body = self._read_json_body()
+                        self._send_json(service.servo_action(body))
                     except Exception as error:
                         self._send_json({"error": str(error)}, status=500)
                     return

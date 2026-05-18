@@ -165,7 +165,7 @@
     margin: 10% auto;
     padding: 20px;
     border: 1px solid #888;
-    width: 400px;
+    width: 560px;
     border-radius: 8px;
     font-family: sans-serif;
   }
@@ -195,6 +195,29 @@
     <div class="servo-form-group"><label>Min Angle:</label><input type="number" id="sc09_3_min" value="0"></div>
     <div class="servo-form-group"><label>Max Angle:</label><input type="number" id="sc09_3_max" value="1023"></div>
 
+    <h3>Live Control</h3>
+    <div class="servo-form-group">
+      <label>Servo:</label>
+      <select id="servo_id" style="width:108px; padding:4px;">
+        <option value="1">ST3215 ID 1</option>
+        <option value="2">SC09 ID 2</option>
+        <option value="3">SC09 ID 3</option>
+        <option value="all">All</option>
+      </select>
+    </div>
+    <div class="servo-form-group"><label>Position:</label><input type="number" id="servo_position" value="2048"></div>
+    <div class="servo-form-group"><label>Speed:</label><input type="number" id="servo_speed" value="500"></div>
+    <div class="servo-form-group"><label>Acceleration:</label><input type="number" id="servo_acc" value="50"></div>
+    <div class="servo-actions" style="text-align:left;">
+      <button onclick="refreshServoStatus()">Read Status</button>
+      <button onclick="moveServo()">Move</button>
+      <button onclick="moveServoHome()">Home</button>
+      <button onclick="resetServoHome()">Reset Home</button>
+      <button onclick="setServoTorque(true)">Torque</button>
+      <button onclick="setServoTorque(false)">Untorque</button>
+    </div>
+    <pre id="servo_status" style="background:#0f172a;color:#e2e8f0;padding:10px;max-height:180px;overflow:auto;border-radius:6px;font-size:12px;">Status not loaded.</pre>
+
     <div class="servo-actions">
       <button onclick="closeServoConfigModal()">Cancel</button>
       <button onclick="saveServoConfig()" style="background:#22c55e; color:white; border:none; border-radius:4px;">Save & Apply</button>
@@ -203,20 +226,30 @@
 </div>
 
 <script>
-  function openServoConfigModal() {
-    document.getElementById('servo_config_modal').style.display = 'block';
-    // Fetch current settings
-    var apiUrl = '/api/servo-config';
-    // Try to use the server URL if provided
+  function servoApiUrl(path) {
+    var apiUrl = path;
     var srvInput = document.getElementById('server_url');
     if (srvInput && srvInput.value) {
        try {
            var url = new URL(srvInput.value);
-           apiUrl = url.origin + '/api/servo-config';
+           apiUrl = url.origin + path;
        } catch(e) {}
     }
+    return apiUrl;
+  }
 
-    fetch(apiUrl)
+  function selectedServoId() {
+    return document.getElementById('servo_id').value;
+  }
+
+  function showServoStatus(data) {
+    document.getElementById('servo_status').textContent = JSON.stringify(data, null, 2);
+  }
+
+  function openServoConfigModal() {
+    document.getElementById('servo_config_modal').style.display = 'block';
+
+    fetch(servoApiUrl('/api/servo-config'))
       .then(r => r.json())
       .then(data => {
         if(data.st3215) {
@@ -232,6 +265,7 @@
           document.getElementById('sc09_3_min').value = data.sc09_3.min;
           document.getElementById('sc09_3_max').value = data.sc09_3.max;
         }
+        refreshServoStatus();
       }).catch(err => {
         console.error("Failed to load servo config:", err);
       });
@@ -258,16 +292,7 @@
       }
     };
 
-    var apiUrl = '/api/servo-config';
-    var srvInput = document.getElementById('server_url');
-    if (srvInput && srvInput.value) {
-       try {
-           var url = new URL(srvInput.value);
-           apiUrl = url.origin + '/api/servo-config';
-       } catch(e) {}
-    }
-
-    fetch(apiUrl, {
+    fetch(servoApiUrl('/api/servo-config'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -275,12 +300,79 @@
     .then(r => r.json())
     .then(res => {
       if(res.error) alert("Error saving: " + res.error);
-      else closeServoConfigModal();
+      else {
+        showServoStatus(res);
+        refreshServoStatus();
+      }
     })
     .catch(err => {
       alert("Network error while saving.");
       console.error(err);
     });
+  }
+
+  function postServoAction(payload) {
+    return fetch(servoApiUrl('/api/servo-action'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+      showServoStatus(data);
+      if (data.error) {
+        alert(data.error);
+      }
+      return data;
+    })
+    .catch(err => {
+      alert("Servo command failed.");
+      console.error(err);
+    });
+  }
+
+  function refreshServoStatus() {
+    fetch(servoApiUrl('/api/servo-status'))
+      .then(r => r.json())
+      .then(showServoStatus)
+      .catch(err => {
+        document.getElementById('servo_status').textContent = "Failed to read status: " + err;
+      });
+  }
+
+  function moveServo() {
+    var id = selectedServoId();
+    if (id === 'all') {
+      alert("Select one servo for Move.");
+      return;
+    }
+    postServoAction({
+      action: 'move',
+      id: parseInt(id),
+      position: parseInt(document.getElementById('servo_position').value),
+      speed: parseInt(document.getElementById('servo_speed').value),
+      acc: parseInt(document.getElementById('servo_acc').value) || 50
+    }).then(refreshServoStatus);
+  }
+
+  function moveServoHome() {
+    postServoAction({ action: 'home', id: selectedServoId() }).then(refreshServoStatus);
+  }
+
+  function resetServoHome() {
+    if (!confirm("Reset home calibration for the selected servo?")) {
+      return;
+    }
+    postServoAction({ action: 'reset_home', id: selectedServoId() }).then(data => {
+      if (data && data.config && data.config.st3215) {
+        document.getElementById('st_home').value = data.config.st3215.home;
+      }
+      refreshServoStatus();
+    });
+  }
+
+  function setServoTorque(enable) {
+    postServoAction({ action: 'torque', id: selectedServoId(), enable: enable }).then(refreshServoStatus);
   }
 </script>
 
