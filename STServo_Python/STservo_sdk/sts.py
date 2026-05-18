@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from .stservo_def import *
+from .protocol_packet_handler import protocol_packet_handler
 from .protocol_packet_handler import *
 from .group_sync_read import *
 from .group_sync_write import *
@@ -108,4 +109,3 @@ class sts(protocol_packet_handler):
 
     def unLockEprom(self, sts_id):
         return self.write1ByteTxRx(sts_id, STS_LOCK, 0)
-

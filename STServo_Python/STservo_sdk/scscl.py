@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from .stservo_def import *
+from .protocol_packet_handler import protocol_packet_handler
 from .protocol_packet_handler import *
 from .group_sync_write import *
 
