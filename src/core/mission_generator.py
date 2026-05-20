@@ -45,26 +45,34 @@ class DeliveryTemplate:
                     'location': '{DELIVERY_LOCATION}'
                 }),
                 TemplateCommand('doSetServo', {
-                    'servo': '{SERVO_NUM}',
-                    'pwm': '{SERVO_OPEN_PWM}'
+                    'servo': 6,
+                    'pwm': '{LID_OPEN_PWM}'
                 }),
-                TemplateCommand('delay', {
-                    'seconds': '{DROP_DELAY}'
+                TemplateCommand('doSetServo', {
+                    'servo': 7,
+                    'pwm': '{LOCK_OPEN_PWM}'
                 }),
                 TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
                 TemplateCommand('doSetServo', {
-                    'servo': '{SERVO_NUM}',
-                    'pwm': '{SERVO_CLOSE_PWM}'
+                    'servo': 6,
+                    'pwm': '{LID_CLOSE_PWM}'
+                }),
+                TemplateCommand('delay', {
+                    'seconds': 2.0
+                }),
+                TemplateCommand('doSetServo', {
+                    'servo': 7,
+                    'pwm': '{LOCK_CLOSE_PWM}'
                 }),
                 TemplateCommand('rtl', {}),
             ],
             default_values={
                 'TAKEOFF_ALT': 30.0,
                 'CRUISE_ALT': 30.0,
-                'SERVO_NUM': 15,
-                'SERVO_OPEN_PWM': 1900,
-                'SERVO_CLOSE_PWM': 1000,
-                'DROP_DELAY': 10.0,
+                'LID_OPEN_PWM': 1900,
+                'LID_CLOSE_PWM': 1000,
+                'LOCK_OPEN_PWM': 1900,
+                'LOCK_CLOSE_PWM': 1000,
             }
         )
 
