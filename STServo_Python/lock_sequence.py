@@ -276,7 +276,8 @@ if __name__ == '__main__':
     print("Press '3' or 'q' to Exit")
     print("\nWaiting for input... (Servos are actively held in place)")
     
-    last_state = None
+    last_state = 'lock'
+    perform_locking(sts_handler, sc_handler)
     
     while True:
         if kbhit_safe():

@@ -127,8 +127,8 @@ class ServoController:
         # Lock / Unlock sequence state variables
         self.servo6_raw = 0
         self.sequence_active = False
-        self.last_triggered_state = None
-        self.last_state = None
+        self.last_triggered_state = 'lock'
+        self.last_state = 'lock'
 
         # Register MAVLink message listener for Servo Output Channel 6
         if self.vehicle:
@@ -314,13 +314,27 @@ class ServoController:
                     if not self._lock_eprom(sid):
                         continue
 
+                    # Initialize servos directly to their Lock sequence positions instead of mid/home
+                    if sid == 1:
+                        target_pos = LOCK_POS_1
+                        speed_val = 2400
+                    elif sid == 2:
+                        target_pos = LOCK_POS_2
+                        speed_val = 1500
+                    elif sid == 3:
+                        target_pos = LOCK_POS_3
+                        speed_val = 1500
+                    else:
+                        target_pos = self._home_position_for(sid)
+                        speed_val = 500
+
                     if is_sts:
                         if not self._write1(sid, STS_MODE, 0, "set position mode"):
                             continue
-                        result, error = handler.WritePosEx(sid, self._home_position_for(sid), 2400, 50)
+                        result, error = handler.WritePosEx(sid, target_pos, speed_val, 50)
                     else:
-                        result, error = handler.WritePos(sid, self._home_position_for(sid), 0, 500)
-                    if not self._result_ok(sid, "move to center", result, error, handler):
+                        result, error = handler.WritePos(sid, target_pos, 0, speed_val)
+                    if not self._result_ok(sid, "move to locking position", result, error, handler):
                         continue
 
                 print(f"[SERVO] Servo ID {sid} initialized.")
