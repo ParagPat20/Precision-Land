@@ -63,7 +63,7 @@ from firebase_admin import credentials, db
 # Setup path for local imports
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 from opencv.lib_aruco_pose import *
-from led_controller import DroneLEDController
+from led_controller import DroneLEDController, DroneAlarmController
 from fc_log_service import start_log_services
 from core.mission_generator import DeliveryTemplate, LatLng
 from servo_controller import ServoController
@@ -1067,6 +1067,8 @@ fc_log_service = start_log_services(vehicle)
 #--------------------------------------------------
 led_controller = DroneLEDController()
 led_controller.start()
+alarm_controller = DroneAlarmController()
+alarm_controller.start()
 
 #--------------------------------------------------
 #-------------- SERVO CONTROLLER
@@ -1118,6 +1120,7 @@ video_recorder = ArmedVideoRecorder(
 
 battery_failsafe_active = False
 other_failsafe_active = False
+crash_detected = False
 confidence_score = 0.0
 camera_active = False
 
@@ -1130,6 +1133,14 @@ def led_state_updater():
     last_state = None
     while True:
         try:
+            # Safely read relative altitude and update alarm controller every iteration
+            alt = getattr(getattr(vehicle.location, "global_relative_frame", None), "alt", None)
+            try:
+                alt = float(alt) if alt is not None else 0.0
+            except Exception:
+                alt = 0.0
+            alarm_controller.set_altitude(alt)
+
             #--------------------------------------------------
             #-------------- LED CONTROL UPDATE (independent loop)
             #--------------------------------------------------
@@ -1149,7 +1160,9 @@ def led_state_updater():
             )
 
             # Check for Failsafes first (Highest Priority)
-            if battery_failsafe_active:
+            if crash_detected:
+                target_led_state = DroneLEDController.STATE_CRASH
+            elif battery_failsafe_active:
                 target_led_state = DroneLEDController.STATE_BAT_FAILSAFE
             elif other_failsafe_active:
                 target_led_state = DroneLEDController.STATE_FAILSAFE
@@ -1169,13 +1182,6 @@ def led_state_updater():
                 target_led_state = DroneLEDController.STATE_DISARMED
             else:
                 # Armed and Flying or on Ground
-                # Some firmwares can transiently report alt as None; treat that as ground.
-                alt = getattr(getattr(vehicle.location, "global_relative_frame", None), "alt", None)
-                try:
-                    alt = float(alt) if alt is not None else 0.0
-                except Exception:
-                    alt = 0.0
-
                 if alt < 0.4:  # below 40cm
                     target_led_state = DroneLEDController.STATE_ARMED_GROUND
                 else:
@@ -1185,6 +1191,7 @@ def led_state_updater():
             if target_led_state != last_state:
                 last_state = target_led_state
                 led_controller.set_state(target_led_state)
+                alarm_controller.set_state(target_led_state)
         except Exception as e:
             # Keep LEDs alive even if a telemetry attribute read glitches.
             print(f"[LED] State updater error: {e}")
@@ -1196,9 +1203,12 @@ threading.Thread(target=led_state_updater, daemon=True).start()
 
 @vehicle.on_message('STATUSTEXT')
 def listener(self, name, message):
-    global battery_failsafe_active, other_failsafe_active
+    global battery_failsafe_active, other_failsafe_active, crash_detected
     text = message.text.upper()
-    if "BATTERY" in text and "FAILSAFE" in text:
+    if "CRASH" in text:
+        crash_detected = True
+        print(f"[ALARM] CRASH Detected: {text}")
+    elif "BATTERY" in text and "FAILSAFE" in text:
         battery_failsafe_active = True
         print("[LED] Battery Failsafe Detected!")
     elif "FAILSAFE" in text:
@@ -1207,10 +1217,11 @@ def listener(self, name, message):
 
 @vehicle.on_attribute('armed')
 def armed_listener(self, attr_name, value):
-    global battery_failsafe_active, other_failsafe_active
+    global battery_failsafe_active, other_failsafe_active, crash_detected
     if value:
         battery_failsafe_active = False
         other_failsafe_active = False
+        crash_detected = False
         print("[LED] Armed - Resetting Failsafe Flags")
         # Start video recording in the background (non-blocking).
         try:

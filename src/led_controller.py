@@ -30,6 +30,7 @@ class DroneLEDController(threading.Thread):
     STATE_RTL            = "RTL"
     STATE_BAT_FAILSAFE   = "BAT_FAILSAFE"
     STATE_FAILSAFE       = "FAILSAFE"
+    STATE_CRASH          = "CRASH"
 
     def __init__(self):
         super().__init__()
@@ -206,50 +207,164 @@ class DroneLEDController(threading.Thread):
         self.join()
         self.clear_all()
 
+# --- Buzzer Alarm Controller ---
+ALARM_PIN = board.D23
+
+class DroneAlarmController(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.stop_event = threading.Event()
+        self.current_state = DroneLEDController.STATE_DISARMED
+        self.current_alt = 0.0
+        self.takeoff_until = 0.0
+        self.buzzer_is_high = False
+        self.next_toggle_time = 0.0
+        self.lock = threading.Lock()
+        
+        try:
+            import digitalio
+            self.buzzer = digitalio.DigitalInOut(ALARM_PIN)
+            self.buzzer.direction = digitalio.Direction.OUTPUT
+            self.buzzer.value = False
+        except Exception as e:
+            print(f"[ALARM] Error initializing Buzzer on GPIO 23: {e}")
+            self.buzzer = None
+
+    def set_state(self, new_state):
+        with self.lock:
+            # Trigger takeoff buzzer for 5 seconds when transitioning to STATE_FLYING from GROUND/DISARMED
+            if new_state == DroneLEDController.STATE_FLYING and self.current_state in [
+                DroneLEDController.STATE_DISARMED,
+                DroneLEDController.STATE_ARMED_GROUND
+            ]:
+                self.takeoff_until = time.time() + 5.0
+            
+            # Reset takeoff timer if disarmed
+            if new_state == DroneLEDController.STATE_DISARMED:
+                self.takeoff_until = 0.0
+                
+            self.current_state = new_state
+
+    def get_state(self):
+        with self.lock:
+            return self.current_state
+
+    def set_altitude(self, alt):
+        with self.lock:
+            self.current_alt = alt
+
+    def get_altitude(self):
+        with self.lock:
+            return self.current_alt
+
+    def run(self):
+        print("[ALARM] Controller started on GPIO 23")
+        while not self.stop_event.is_set():
+            state = self.get_state()
+            now = time.time()
+            
+            if not self.buzzer:
+                time.sleep(1)
+                continue
+
+            # 1. Crash Alarm (Highest Priority)
+            if state == DroneLEDController.STATE_CRASH:
+                cycle_time = 0.3
+                is_high = (now % cycle_time) < 0.2
+                self.buzzer.value = is_high
+                self.buzzer_is_high = is_high
+                self.next_toggle_time = 0.0
+                time.sleep(0.05)
+
+            # 2. Failsafe Alarms
+            elif state in [DroneLEDController.STATE_FAILSAFE, DroneLEDController.STATE_BAT_FAILSAFE]:
+                cycle_time = 0.4
+                is_high = (now % cycle_time) < 0.1
+                self.buzzer.value = is_high
+                self.buzzer_is_high = is_high
+                self.next_toggle_time = 0.0
+                time.sleep(0.05)
+
+            # 3. Takeoff Sequence (5 seconds fast beep)
+            elif self.takeoff_until > now:
+                cycle_time = 0.2
+                is_high = (now % cycle_time) < 0.1
+                self.buzzer.value = is_high
+                self.buzzer_is_high = is_high
+                self.next_toggle_time = 0.0
+                time.sleep(0.05)
+
+            # 4. Landing/RTL proximity beep (ALT < 4m, stops at < 0.8m)
+            elif state in [DroneLEDController.STATE_PRECISION_LAND, DroneLEDController.STATE_LAND, DroneLEDController.STATE_RTL]:
+                alt = self.get_altitude()
+                if 0.8 <= alt < 4.0:
+                    if now >= self.next_toggle_time:
+                        self.buzzer_is_high = not self.buzzer_is_high
+                        if self.buzzer_is_high:
+                            # Fixed active beep duration
+                            self.buzzer.value = True
+                            self.next_toggle_time = now + 0.1
+                        else:
+                            # Dynamic gap length based on altitude
+                            self.buzzer.value = False
+                            clamped_alt = max(0.8, min(4.0, alt))
+                            # Interpolate gap (low time) from 0.1s (at 0.8m) to 1.0s (at 4.0m)
+                            low_time = 0.1 + (clamped_alt - 0.8) * (0.9 / 3.2)
+                            self.next_toggle_time = now + low_time
+                    time.sleep(0.01)
+                else:
+                    self.buzzer.value = False
+                    self.buzzer_is_high = False
+                    self.next_toggle_time = 0.0
+                    time.sleep(0.1)
+                
+            else:
+                self.buzzer.value = False
+                self.buzzer_is_high = False
+                self.next_toggle_time = 0.0
+                time.sleep(0.1)
+
+    def stop(self):
+        self.stop_event.set()
+        if self.buzzer:
+            self.buzzer.value = False
+        self.join()
+
 def run_test():
     # Helper to test the class independently
     print("Testing LED Controller (Adafruit NeoPixel)...")
     try:
         led = DroneLEDController()
+        alarm = DroneAlarmController()
         led.start()
+        alarm.start()
         
         try:
             print("Test: DISARMED (Breathing Blue)")
             led.set_state(DroneLEDController.STATE_DISARMED)
+            alarm.set_state(DroneLEDController.STATE_DISARMED)
             time.sleep(4)
             
             print("Test: ARMED_GROUND (Flashing Red/Green)")
             led.set_state(DroneLEDController.STATE_ARMED_GROUND)
             time.sleep(4)
             
-            print("Test: FLYING (Flashing Red/Green)")
-            led.set_state(DroneLEDController.STATE_FLYING)
-            time.sleep(4)
-            
-            print("Test: PRECISION_LAND (Chaser Red/Green)")
-            led.set_state(DroneLEDController.STATE_PRECISION_LAND)
-            time.sleep(5)
-            
-            print("Test: LAND (Chaser Red/Green)")
-            led.set_state(DroneLEDController.STATE_LAND)
-            time.sleep(3)
-            
-            print("Test: RTL (Chaser Red/Green)")
-            led.set_state(DroneLEDController.STATE_RTL)
-            time.sleep(3)
-            
-            print("Test: BAT_FAILSAFE (Red/Blue Oscillate)")
-            led.set_state(DroneLEDController.STATE_BAT_FAILSAFE)
-            time.sleep(5)
-            
-            print("Test: FAILSAFE (Fast Red Flash)")
+            print("Test: FAILSAFE (Fast Red Flash & Beep -___)")
             led.set_state(DroneLEDController.STATE_FAILSAFE)
+            alarm.set_state(DroneLEDController.STATE_FAILSAFE)
+            time.sleep(5)
+            
+            print("Test: CRASH (Beep --_--_)")
+            led.set_state(DroneLEDController.STATE_CRASH)
+            alarm.set_state(DroneLEDController.STATE_CRASH)
             time.sleep(5)
             
         except KeyboardInterrupt:
             print("Interrupted")
         finally:
             led.stop()
+            alarm.stop()
             print("Done")
     except Exception as e:
         print(f"Test Failed: {e}")
