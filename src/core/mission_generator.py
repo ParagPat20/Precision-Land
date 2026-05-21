@@ -46,33 +46,26 @@ class DeliveryTemplate:
                 }),
                 TemplateCommand('doSetServo', {
                     'servo': 6,
-                    'pwm': '{LID_OPEN_PWM}'
+                    'pwm': '{LID_UNLOCK_PWM}'
                 }),
-                TemplateCommand('doSetServo', {
-                    'servo': 7,
-                    'pwm': '{LOCK_OPEN_PWM}'
+                TemplateCommand('delay', {
+                    'seconds': 5.0
                 }),
                 TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
                 TemplateCommand('doSetServo', {
                     'servo': 6,
-                    'pwm': '{LID_CLOSE_PWM}'
+                    'pwm': '{LID_LOCK_PWM}'
                 }),
                 TemplateCommand('delay', {
-                    'seconds': 2.0
-                }),
-                TemplateCommand('doSetServo', {
-                    'servo': 7,
-                    'pwm': '{LOCK_CLOSE_PWM}'
+                    'seconds': 5.0
                 }),
                 TemplateCommand('rtl', {}),
             ],
             default_values={
                 'TAKEOFF_ALT': 30.0,
                 'CRUISE_ALT': 30.0,
-                'LID_OPEN_PWM': 1900,
-                'LID_CLOSE_PWM': 1000,
-                'LOCK_OPEN_PWM': 1900,
-                'LOCK_CLOSE_PWM': 1000,
+                'LID_UNLOCK_PWM': 1000,
+                'LID_LOCK_PWM': 1900,
             }
         )
 

@@ -6,9 +6,11 @@ import threading
 import traceback
 
 # Add STServo SDK to the path
-_SDK_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "STServo_Python"))
-if _SDK_ROOT not in sys.path:
-    sys.path.append(_SDK_ROOT)
+_SDK_ROOT_1 = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "STServo_Python"))
+_SDK_ROOT_2 = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+for path in [_SDK_ROOT_1, _SDK_ROOT_2]:
+    if path not in sys.path:
+        sys.path.append(path)
 
 _SDK_IMPORT_ERROR = None
 try:
@@ -18,6 +20,24 @@ except ImportError:
         from STServo_Python.STservo_sdk import *
     except ImportError as e:
         _SDK_IMPORT_ERROR = e
+
+# --- CONFIGURATION CONSTANTS FOR LOCK/UNLOCK SEQUENCE ---
+# Speeds & Accel
+ST_SPEED = 2400
+ST_ACC = 200
+SC_SPEED = 1500
+
+# Locking Targets
+LOCK_POS_1 = 150
+LOCK_POS_2 = 960
+LOCK_POS_3 = 520
+
+# Unlocking Targets
+UNLOCK_POS_1 = 2000
+UNLOCK_POS_2 = 790
+UNLOCK_POS_3 = 690
+UNLOCK_CHECK_3 = 630  # Threshold check for ID 3
+# --------------------------------------------------------
 
 
 def resolve_servo_port(manual_port=None):
@@ -93,7 +113,7 @@ class ServoController:
         self.sc09_ids = [2, 3]
         self.st_config = {"min": 0, "max": 4095, "home": 0}
         self.sc09_configs = {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
-        self.servo_protocols = {1: "sts", 2: "sts", 3: "sts"}
+        self.servo_protocols = {1: "sts", 2: "scscl", 3: "scscl"}
         
         self._running = False
         self._thread = None
@@ -102,6 +122,20 @@ class ServoController:
         # State tracking to avoid redundant writes
         self.st3215_locked = False
         self.sc09_locked = False
+
+        # Lock / Unlock sequence state variables
+        self.servo6_raw = 0
+        self.sequence_active = False
+        self.last_triggered_state = None
+        self.last_state = None
+
+        # Register MAVLink message listener for Servo Output Channel 6
+        if self.vehicle:
+            try:
+                self.vehicle.add_message_listener('SERVO_OUTPUT_RAW', self._servo_output_listener)
+                print("[SERVO] Registered SERVO_OUTPUT_RAW listener for Channel 6.")
+            except Exception as e:
+                print(f"[SERVO] Warning: Failed to add SERVO_OUTPUT_RAW message listener: {e}")
 
         self._connect()
 
@@ -417,13 +451,184 @@ class ServoController:
                 self.portHandler.is_using = False
             return {"ok": False, "id": sid, "error": str(e)}
 
+    def _servo_output_listener(self, vehicle, name, message):
+        self.servo6_raw = getattr(message, 'servo6_raw', 0)
+
+    def robust_move_st_single(self, sid, target, speed, acc, timeout=10.0):
+        print(f"[SERVO] Moving Servo {sid} to {target} (timeout {timeout}s)...")
+        start_time = time.time()
+        
+        with self._io_lock:
+            self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
+            self.stsHandler.WritePosEx(sid, target, speed, acc)
+        
+        last_pos = -1
+        stuck_count = 0
+        
+        while time.time() - start_time < timeout:
+            time.sleep(0.3)
+            
+            with self._io_lock:
+                pos, res, error = self.stsHandler.ReadPos(sid)
+            
+            if res == COMM_SUCCESS:
+                print(f"  [ID {sid}] Current Pos: {pos} | Target: {target}")
+                if abs(pos - target) <= 30:
+                    print(f"  -> Servo {sid} reached target!")
+                    return True
+                    
+                if abs(pos - last_pos) < 3:
+                    stuck_count += 1
+                    if stuck_count >= 2:
+                        with self._io_lock:
+                            self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
+                            self.stsHandler.WritePosEx(sid, target, speed, acc)
+                        stuck_count = 0
+                else:
+                    stuck_count = 0
+                last_pos = pos
+            else:
+                print(f"  [ID {sid}] Failed to read position (possibly resetting)...")
+                stuck_count = 5 # Force resend next successful read
+                
+        print(f"  -> Timeout reached for Servo {sid}! Did not reach {target}.")
+        return False
+
+    def robust_move_sc_pair(self, sid2, target2, sid3, target3, speed, timeout=15.0, check_target3=None, check_dir3='>='):
+        print(f"[SERVO] Moving Servo {sid2} to {target2} and Servo {sid3} to {target3} together...")
+        start_time = time.time()
+        reached2 = False
+        reached3 = False
+        
+        last_pos2 = -1
+        last_pos3 = -1
+        stuck_count2 = 0
+        stuck_count3 = 0
+        wiggle_dir2 = 1
+        wiggle_dir3 = 1
+        
+        # Send initial commands
+        with self._io_lock:
+            self._write1(sid2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+            self.scsHandler.WritePos(sid2, target2, 0, speed)
+            self._write1(sid3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+            self.scsHandler.WritePos(sid3, target3, 0, speed)
+            
+        while time.time() - start_time < timeout:
+            time.sleep(0.3)
+            
+            if not reached2:
+                with self._io_lock:
+                    pos2, res2, error2 = self.scsHandler.ReadPos(sid2)
+                if res2 == COMM_SUCCESS:
+                    print(f"  [ID {sid2}] Current Pos: {pos2} | Target: {target2}")
+                    if abs(pos2 - target2) <= 15:
+                        print(f"  -> Servo {sid2} reached target!")
+                        reached2 = True
+                    else:
+                        if abs(pos2 - last_pos2) < 3:
+                            stuck_count2 += 1
+                            if stuck_count2 >= 3:
+                                wiggle_target = target2 + (100 * wiggle_dir2)
+                                print(f"  [ID {sid2}] JAM DETECTED! Jiggling target to {wiggle_target} to build momentum...")
+                                with self._io_lock:
+                                    self._write1(sid2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                                    self.scsHandler.WritePos(sid2, int(wiggle_target), 0, speed)
+                                wiggle_dir2 *= -1
+                                stuck_count2 = 0
+                        else:
+                            stuck_count2 = 0
+                    last_pos2 = pos2
+                else:
+                    print(f"  [ID {sid2}] Read failed (possibly resetting)...")
+                    stuck_count2 = 5
+                    
+            if not reached3:
+                with self._io_lock:
+                    pos3, res3, error3 = self.scsHandler.ReadPos(sid3)
+                if res3 == COMM_SUCCESS:
+                    if check_target3 is not None:
+                        print(f"  [ID {sid3}] Current Pos: {pos3} | Target: {target3} (Checking {check_dir3} {check_target3})")
+                        if check_dir3 == '>=' and pos3 >= check_target3:
+                            print(f"  -> Servo {sid3} crossed threshold {check_target3}!")
+                            reached3 = True
+                        elif check_dir3 == '<=' and pos3 <= check_target3:
+                            print(f"  -> Servo {sid3} crossed threshold {check_target3}!")
+                            reached3 = True
+                    else:
+                        print(f"  [ID {sid3}] Current Pos: {pos3} | Target: {target3}")
+                        if abs(pos3 - target3) <= 20:
+                            print(f"  -> Servo {sid3} reached target!")
+                            reached3 = True
+                            
+                    if not reached3:
+                        if abs(pos3 - last_pos3) < 3:
+                            stuck_count3 += 1
+                            if stuck_count3 >= 3:
+                                wiggle_target = target3 + (100 * wiggle_dir3)
+                                print(f"  [ID {sid3}] JAM DETECTED! Jiggling target to {wiggle_target} to build momentum...")
+                                with self._io_lock:
+                                    self._write1(sid3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                                    self.scsHandler.WritePos(sid3, int(wiggle_target), 0, speed)
+                                wiggle_dir3 *= -1
+                                stuck_count3 = 0
+                        else:
+                            stuck_count3 = 0
+                    last_pos3 = pos3
+                else:
+                    print(f"  [ID {sid3}] Read failed (possibly resetting)...")
+                    stuck_count3 = 5
+                    
+            if reached2 and reached3:
+                return True
+                
+        print(f"  -> Timeout reached for SC servos! Did not fully complete.")
+        return False
+
+    def perform_locking(self):
+        self.sequence_active = True
+        try:
+            print("\n--- STARTING NATIVE LOCKING SEQUENCE ---")
+            print(f"Step 1: Servo 1 (ST) -> {LOCK_POS_1}")
+            self.robust_move_st_single(1, LOCK_POS_1, ST_SPEED, ST_ACC)
+            
+            print("\nWaiting 2s for mechanical settlement...")
+            time.sleep(2.0)
+            
+            print(f"\nStep 2: Servo 2 & 3 (SC) -> {LOCK_POS_2} & {LOCK_POS_3}")
+            self.robust_move_sc_pair(2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='<=')
+            print("\nLocking sequence complete!")
+            self.last_state = 'lock'
+        except Exception as e:
+            print(f"[SERVO] Locking sequence failed: {e}")
+            traceback.print_exc()
+        finally:
+            self.sequence_active = False
+
+    def perform_unlocking(self):
+        self.sequence_active = True
+        try:
+            print("\n--- STARTING NATIVE UNLOCKING SEQUENCE ---")
+            print(f"Step 1: Servo 2 & 3 (SC) -> {UNLOCK_POS_2} & {UNLOCK_POS_3} (Checking if >= {UNLOCK_CHECK_3})")
+            self.robust_move_sc_pair(2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='>=')
+            
+            print(f"\nStep 2: Servo 1 (ST) -> {UNLOCK_POS_1}")
+            self.robust_move_st_single(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
+            print("\nUnlocking sequence complete!")
+            self.last_state = 'unlock'
+        except Exception as e:
+            print(f"[SERVO] Unlocking sequence failed: {e}")
+            traceback.print_exc()
+        finally:
+            self.sequence_active = False
+
     def start_monitoring(self):
         if self._running:
             return
         self._running = True
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True, name="ServoMonitor")
         self._thread.start()
-        print("[SERVO] Servo RC channel monitoring started.")
+        print("[SERVO] Servo Output channel monitoring started.")
 
     def stop_monitoring(self):
         self._running = False
@@ -431,38 +636,56 @@ class ServoController:
             self._thread.join(timeout=1.0)
 
     def _monitor_loop(self):
+        print("[SERVO] Monitor loop started successfully.")
         while self._running:
             try:
-                if self.vehicle and self.vehicle.channels:
-                    # Check if mission is running
-                    mission_running = False
-                    if self.is_mission_active_cb:
-                        mission_running = self.is_mission_active_cb()
-                    else:
-                        # Fallback: check if vehicle is in AUTO mode
-                        mission_running = self.vehicle.mode.name == 'AUTO'
+                # Read target state from Channel 6
+                # Preference 1: MAVLink SERVO_OUTPUT_RAW message
+                # Preference 2: RC input channels fallback
+                ch6 = 0
+                if self.servo6_raw > 0:
+                    ch6 = self.servo6_raw
+                elif self.vehicle and self.vehicle.channels:
+                    ch6 = self.vehicle.channels.get('6', 0) or 0
+
+                if ch6 > 0:
+                    should_lock = ch6 > 1500
+                    target_state = 'lock' if should_lock else 'unlock'
                     
-                    if mission_running:
-                        # Read channel 6 and 7
-                        ch6 = self.vehicle.channels.get('6', 0)
-                        ch7 = self.vehicle.channels.get('7', 0)
-                        
-                        # Channel 6 controls SC09 (IDs 2 & 3)
-                        sc09_should_lock = ch6 > 1500
-                        if sc09_should_lock != self.sc09_locked:
-                            for sid in self.sc09_ids:
-                                self.set_torque(sid, sc09_should_lock)
-                            self.sc09_locked = sc09_should_lock
-                            state_str = "LOCKED" if sc09_should_lock else "UNLOCKED"
-                            print(f"[SERVO] SC09 Servos (IDs {self.sc09_ids}) {state_str} (CH6: {ch6})")
-                            
-                        # Channel 7 controls ST3215 (ID 1)
-                        st3215_should_lock = ch7 > 1500
-                        if st3215_should_lock != self.st3215_locked:
-                            self.set_torque(self.st3215_id, st3215_should_lock)
-                            self.st3215_locked = st3215_should_lock
-                            state_str = "LOCKED" if st3215_should_lock else "UNLOCKED"
-                            print(f"[SERVO] ST3215 Servo (ID {self.st3215_id}) {state_str} (CH7: {ch7})")
+                    if target_state != self.last_triggered_state and not self.sequence_active:
+                        self.last_triggered_state = target_state
+                        if target_state == 'lock':
+                            print(f"[SERVO] Triggering LOCK sequence (Ch6/Servo6 Raw: {ch6})")
+                            threading.Thread(target=self.perform_locking, daemon=True, name="LockSequenceThread").start()
+                        else:
+                            print(f"[SERVO] Triggering UNLOCK sequence (Ch6/Servo6 Raw: {ch6})")
+                            threading.Thread(target=self.perform_unlocking, daemon=True, name="UnlockSequenceThread").start()
+                
+                # Active Background Holding Loop
+                # If a sequence is NOT active, re-enforce the target state positions at 10Hz
+                if not self.sequence_active and self.last_state in ['lock', 'unlock']:
+                    with self._io_lock:
+                        if self.last_state == 'lock':
+                            # Servo 1 (ST)
+                            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                            self.stsHandler.WritePosEx(1, LOCK_POS_1, ST_SPEED, ST_ACC)
+                            # Servo 2 (SC)
+                            self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(2, LOCK_POS_2, 0, SC_SPEED)
+                            # Servo 3 (SC)
+                            self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(3, LOCK_POS_3, 0, SC_SPEED)
+                        elif self.last_state == 'unlock':
+                            # Servo 1 (ST)
+                            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                            self.stsHandler.WritePosEx(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
+                            # Servo 2 (SC)
+                            self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(2, UNLOCK_POS_2, 0, SC_SPEED)
+                            # Servo 3 (SC)
+                            self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(3, UNLOCK_POS_3, 0, SC_SPEED)
+
             except Exception as e:
                 print(f"[SERVO] Monitor loop error: {e}")
                 traceback.print_exc()
