@@ -114,6 +114,7 @@ def robust_move_st_single(sts_handler, sid, target, speed, acc, timeout=10.0):
     
     last_pos = -1
     stuck_count = 0
+    wiggle_dir = 1
     
     while time.time() - start_time < timeout:
         time.sleep(0.3)
@@ -128,8 +129,11 @@ def robust_move_st_single(sts_handler, sid, target, speed, acc, timeout=10.0):
             if abs(pos - last_pos) < 3:
                 stuck_count += 1
                 if stuck_count >= 2:
+                    wiggle_target = target + (100 * wiggle_dir)
+                    print(f"  [ID {sid}] JAM DETECTED! Jiggling target to {wiggle_target} to build momentum...")
                     sts_handler.write1ByteTxRx(sid, 40, 1) 
-                    sts_handler.WritePosEx(sid, target, speed, acc)
+                    sts_handler.WritePosEx(sid, int(wiggle_target), speed, acc)
+                    wiggle_dir *= -1
                     stuck_count = 0
             else:
                 stuck_count = 0
@@ -232,8 +236,8 @@ def perform_locking(sts_handler, sc_handler):
     print(f"Step 1: Servo 1 -> {LOCK_POS_1}")
     robust_move_st_single(sts_handler, 1, LOCK_POS_1, ST_SPEED, ST_ACC)
     
-    print("\nWaiting 2s for mechanical settlement...")
-    time.sleep(2.0)
+    print("\nWaiting 1s for mechanical settlement...")
+    time.sleep(1.0)
     
     print(f"\nStep 2: Servo 2 -> {LOCK_POS_2} & Servo 3 -> {LOCK_POS_3}")
     robust_move_sc_pair(sc_handler, 2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='<=')
