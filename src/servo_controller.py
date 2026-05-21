@@ -56,6 +56,7 @@ def resolve_servo_port(manual_port=None):
         return "COM21"
 
     by_id_patterns = [
+        "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14110734-if00",
         "/dev/serial/by-id/usb-1a86_USB_Single_Serial_*-if00",
         "/dev/serial/by-id/*1a86*USB*Single*Serial*",
         "/dev/serial/by-id/*CH340*",

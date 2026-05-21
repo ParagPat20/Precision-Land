@@ -32,7 +32,10 @@ else:
 # -----------------------------------------
 
 # --- CONFIGURATION ---
-DEVICENAME = 'COM21'
+if os.name == 'nt':
+    DEVICENAME = 'COM21'
+else:
+    DEVICENAME = '/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14110734-if00'
 BAUDRATE = 1000000
 
 # Speeds & Accel
