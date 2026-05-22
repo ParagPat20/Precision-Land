@@ -74,6 +74,10 @@ class DeliveryTemplate:
         if override_values:
             values.update(override_values)
 
+        # Enforce that takeoff altitude and waypoint/cruise altitude are the same
+        if 'TAKEOFF_ALT' in values:
+            values['CRUISE_ALT'] = values['TAKEOFF_ALT']
+
         mission_items = []
         seq = 0
         
