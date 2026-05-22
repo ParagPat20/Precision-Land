@@ -137,7 +137,8 @@ class DeliveryTemplate:
                 command_id=command_id,
                 x=x, y=y, z=z,
                 param1=p1, param2=p2, param3=p3, param4=p4,
-                frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                current=1 if seq == 1 else 0
             )
             mission_items.append(item)
             seq += 1

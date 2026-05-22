@@ -126,6 +126,8 @@ class ServoController:
 
         # Lock / Unlock sequence state variables
         self.servo6_raw = 0
+        self.last_servo6_raw_rx_time = 0
+        self.last_stream_request_time = 0
         self.sequence_active = False
         self.last_triggered_state = 'lock'
         self.last_state = 'lock'
@@ -466,8 +468,51 @@ class ServoController:
                 self.portHandler.is_using = False
             return {"ok": False, "id": sid, "error": str(e)}
 
+    def request_servo_output_raw_stream(self):
+        if not self.vehicle:
+            return
+        try:
+            print("[SERVO] Explicitly requesting SERVO_OUTPUT_RAW and RC_CHANNELS streams from Flight Controller...")
+            # Method 1: MAV_CMD_SET_MESSAGE_INTERVAL (preferred in MAVLink 2)
+            # Message ID 36 is SERVO_OUTPUT_RAW
+            # 100000 microseconds = 10Hz (100ms interval)
+            msg1 = self.vehicle.message_factory.command_long_encode(
+                0, 0,    # target system, target component
+                511,     # MAV_CMD_SET_MESSAGE_INTERVAL
+                0,       # confirmation
+                36,      # param 1: Message ID (36 for SERVO_OUTPUT_RAW)
+                100000,  # param 2: Interval in microseconds
+                0, 0, 0, 0, 0 # param 3-7
+            )
+            self.vehicle.send_mavlink(msg1)
+            
+            # Method 1b: Request RC_CHANNELS at 10Hz
+            msg1b = self.vehicle.message_factory.command_long_encode(
+                0, 0,
+                511,     # MAV_CMD_SET_MESSAGE_INTERVAL
+                0,
+                65,      # param 1: Message ID (65 for RC_CHANNELS)
+                100000,  # param 2: Interval in microseconds
+                0, 0, 0, 0, 0 # param 3-7
+            )
+            self.vehicle.send_mavlink(msg1b)
+            
+            # Method 2: Legacy REQUEST_DATA_STREAM (fallback for MAVLink 1)
+            # Stream ID 3 is MAV_DATA_STREAM_RAW_CONTROLLER (contains SERVO_OUTPUT_RAW and RC_CHANNELS)
+            # 10Hz, start/stop = 1 (start)
+            msg2 = self.vehicle.message_factory.request_data_stream_encode(
+                0, 0,    # target system, target component
+                3,       # MAV_DATA_STREAM_RAW_CONTROLLER
+                10,      # rate (Hz)
+                1        # start/stop (1 = start)
+            )
+            self.vehicle.send_mavlink(msg2)
+        except Exception as e:
+            print(f"[SERVO] Error requesting MAVLink streams: {e}")
+
     def _servo_output_listener(self, vehicle, name, message):
         self.servo6_raw = getattr(message, 'servo6_raw', 0)
+        self.last_servo6_raw_rx_time = time.time()
 
     def robust_move_st_single(self, sid, target, speed, acc, timeout=10.0):
         print(f"[SERVO] Moving Servo {sid} to {target} (timeout {timeout}s)...")
@@ -696,6 +741,12 @@ class ServoController:
         print("[SERVO] Monitor loop started successfully.")
         while self._running:
             try:
+                # Periodically request the stream if we haven't received a MAVLink update recently
+                current_time = time.time()
+                if (current_time - self.last_servo6_raw_rx_time > 3.0) and (current_time - self.last_stream_request_time > 5.0):
+                    self.request_servo_output_raw_stream()
+                    self.last_stream_request_time = current_time
+
                 # Read target state from Channel 6
                 # Preference 1: MAVLink SERVO_OUTPUT_RAW message
                 # Preference 2: RC input channels fallback
