@@ -581,6 +581,10 @@ def check_mission(command):
 
     # Handle abort requests (can come at any time)
     if status == 'ABORT_REQUESTED':
+        if not mission_active:
+            print("[FIREBASE DEBUG] [ABORT] Stale or inactive abort request received (no active mission is running). Ignoring.")
+            return
+
         print("[FIREBASE DEBUG] [ABORT] Abort request received from Firebase!")
         abort_requested = True
         mission_active = False  # Stop sending telemetry immediately
