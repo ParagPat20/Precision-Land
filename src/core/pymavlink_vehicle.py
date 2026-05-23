@@ -65,8 +65,20 @@ class MavlinkVehicle:
     Provides transparent API emulation for DroneKit properties, callbacks, and methods.
     """
     def __init__(self, connection_path, baud=921600):
-        print(f"[MAVLINK VEHICLE] Connecting to {connection_path} at {baud} baud...")
-        self._master = mavutil.mavlink_connection(connection_path, baud=baud)
+        # Parse connection path to see if it is a network connection
+        is_network = (
+            connection_path.startswith('udp') or
+            connection_path.startswith('tcp') or
+            connection_path.startswith('192.168.') or
+            (':' in connection_path and not connection_path.startswith('/dev/'))
+        )
+        
+        if is_network:
+            print(f"[MAVLINK VEHICLE] Connecting to network address {connection_path}...")
+            self._master = mavutil.mavlink_connection(connection_path)
+        else:
+            print(f"[MAVLINK VEHICLE] Connecting to serial port {connection_path} at {baud} baud...")
+            self._master = mavutil.mavlink_connection(connection_path, baud=baud)
         
         # Target details (populated on first heartbeat)
         self.target_system = 0
@@ -93,11 +105,31 @@ class MavlinkVehicle:
         # message factory compatibility
         self.message_factory = self._master.mav
         
-        # Wait for the initial heartbeat to set target IDs and mode maps
+        # Wait for the initial heartbeat to set target IDs and mode maps.
+        # If it is a network (especially udpout) connection, send GCS heartbeats
+        # periodically so that the autopilot can discover our IP and port.
         print("[MAVLINK VEHICLE] Waiting for heartbeat...")
-        hb = self._master.wait_heartbeat(timeout=15.0)
+        hb = None
+        start_wait = time.time()
+        while time.time() - start_wait < 15.0:
+            if is_network:
+                try:
+                    # Send a GCS heartbeat to let the autopilot discover us
+                    self._master.mav.heartbeat_send(
+                        mavutil.mavlink.MAV_TYPE_GCS,
+                        mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                        0, 0, 0
+                    )
+                except Exception:
+                    pass
+            # Try to receive a heartbeat
+            hb = self._master.recv_match(type='HEARTBEAT', blocking=True, timeout=1.0)
+            if hb is not None:
+                break
+
         if hb is None:
             raise TimeoutError("No heartbeat received from flight controller during startup!")
+            
         self.target_system = self._master.target_system
         self.target_component = self._master.target_component
         print(f"[MAVLINK VEHICLE] Heartbeat established: system={self.target_system}, component={self.target_component}")
