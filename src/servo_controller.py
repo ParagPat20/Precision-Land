@@ -35,8 +35,8 @@ LOCK_POS_3 = 520
 # Unlocking Targets
 UNLOCK_POS_1 = 2000
 UNLOCK_POS_2 = 790
-UNLOCK_POS_3 = 710
-UNLOCK_CHECK_3 = 690  # Threshold check for ID 3
+UNLOCK_POS_3 = 700
+UNLOCK_CHECK_3 = 680  # Threshold check for ID 3
 # --------------------------------------------------------
 
 
