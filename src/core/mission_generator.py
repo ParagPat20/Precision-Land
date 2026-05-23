@@ -138,7 +138,9 @@ class DeliveryTemplate:
                 
             elif cmd.type == 'takeoff':
                 loc = temp_params.get('location', last_nav_location)
-                if isinstance(loc, LatLng):
+                # For Copter, NAV_TAKEOFF should climb from the current position.
+                # Sending 0/0 avoids ArduPilot storing it as a normal waypoint.
+                if seq != 0 and isinstance(loc, LatLng):
                     x = loc.latitude
                     y = loc.longitude
                 z = float(temp_params.get('alt', 0))
@@ -156,10 +158,13 @@ class DeliveryTemplate:
                 command_id=command_id,
                 x=x, y=y, z=z,
                 param1=p1, param2=p2, param3=p3, param4=p4,
-                frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
                 current=1 if seq == 0 else 0
             )
             mission_items.append(item)
             seq += 1
-            
+
+        if not mission_items or mission_items[0].command_id != mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+            raise ValueError("Generated mission must start with MAV_CMD_NAV_TAKEOFF")
+
         return mission_items

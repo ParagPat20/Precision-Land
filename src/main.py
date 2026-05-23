@@ -378,6 +378,20 @@ def execute_mission_logic(mission_items, cmd_ref):
         vehicle.flush()
         print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
         print("[FIREBASE DEBUG] Mission start index reset to 0 (first item should be NAV_TAKEOFF)")
+
+        cmds.download()
+        cmds.wait_ready()
+        stored_mission = list(cmds)
+        print("[FIREBASE DEBUG] Mission stored on flight controller:")
+        for idx, cmd in enumerate(stored_mission):
+            print(
+                f"[FIREBASE DEBUG] FC item {idx}: "
+                f"cmd={cmd.command}, frame={cmd.frame}, current={cmd.current}, "
+                f"lat={cmd.x}, lon={cmd.y}, alt={cmd.z}"
+            )
+        if not stored_mission or stored_mission[0].command != mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+            found = stored_mission[0].command if stored_mission else "EMPTY"
+            raise RuntimeError(f"Flight controller stored mission starts with {found}, expected MAV_CMD_NAV_TAKEOFF")
         
         # Start telemetry loop immediately after mission upload (regardless of arming status)
         # This allows tracking mission progress even before arming
