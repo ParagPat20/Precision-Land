@@ -447,13 +447,25 @@ def upload_mission_items_int(mission_items):
     if missing:
         raise RuntimeError(f"Mission upload completed without FC requesting seq(s): {sorted(missing)}")
 
-    _send_with_optional_mission_type(
-        master.mav.mission_set_current_send,
-        target_system,
-        target_component,
-        start_seq,
-    )
-    print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq}")
+    # Guard manual index updates: only update if already armed or airborne.
+    # If the vehicle is disarmed and on the ground, let ArduPilot's native AUTO takeoff initialize the index.
+    is_on_ground = True
+    try:
+        if vehicle.armed or (vehicle.location.global_relative_frame and vehicle.location.global_relative_frame.alt > 1.0):
+            is_on_ground = False
+    except Exception as e:
+        print(f"[FIREBASE DEBUG] Error checking vehicle armed/alt state: {e}")
+
+    if not is_on_ground:
+        _send_with_optional_mission_type(
+            master.mav.mission_set_current_send,
+            target_system,
+            target_component,
+            start_seq,
+        )
+        print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq} (airborne/armed)")
+    else:
+        print(f"[FIREBASE DEBUG] Vehicle on ground and disarmed. Letting ArduPilot auto-initialize mission current index naturally.")
 
     return verify_uploaded_mission_int(expected_count=len(mission_items), expected_start_seq=start_seq)
 
@@ -549,9 +561,22 @@ def upload_mission_items_dronekit(mission_items):
         cmds.add(cmd)
 
     cmds.upload()
-    vehicle.commands.next = start_seq
-    vehicle.flush()
-    print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq}")
+    
+    # Guard manual index updates: only update if already armed or airborne.
+    # If the vehicle is disarmed and on the ground, let ArduPilot's native AUTO takeoff initialize the index.
+    is_on_ground = True
+    try:
+        if vehicle.armed or (vehicle.location.global_relative_frame and vehicle.location.global_relative_frame.alt > 1.0):
+            is_on_ground = False
+    except Exception as e:
+        print(f"[FIREBASE DEBUG] Error checking vehicle armed/alt state: {e}")
+
+    if not is_on_ground:
+        vehicle.commands.next = start_seq
+        vehicle.flush()
+        print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq} (airborne/armed)")
+    else:
+        print(f"[FIREBASE DEBUG] Vehicle on ground and disarmed. Letting ArduPilot auto-initialize mission current index naturally.")
 
     cmds.download()
     cmds.wait_ready()
@@ -800,33 +825,37 @@ processed_mission_ids = set()
 processed_mission_lock = threading.Lock()
 MAX_MISSION_CACHE = 100  # keep recent IDs to avoid unbounded growth
 
+# Track the last successfully processed command and its status to prevent log spam and duplicate trigger loops
+last_processed_cmd_id = None
+last_processed_status = None
+
 def check_mission(command):
     """
     Checks incoming Firebase commands and handles them appropriately.
     Handles PENDING missions and ABORT_REQUESTED status changes.
     """
     global abort_requested, active_mission_ref, mission_active, processed_mission_ids, processed_mission_lock
+    global last_processed_cmd_id, last_processed_status
 
     if not command or not isinstance(command, dict):
         print("[FIREBASE DEBUG] check_mission called with invalid command (None or not dict)")
         return
 
     status = command.get('status')
+    if not status:
+        # Unrelated update or telemetry event, skip silently to reduce log clutter
+        return
 
-    # Deduplicate based on command ID and Status
     cmd_id = command.get('id')
-    if cmd_id and status:
-        cache_key = f"{cmd_id}_{status}"
-        with processed_mission_lock:
-            if cache_key in processed_mission_ids:
-                print(f"[FIREBASE DEBUG] Command {cache_key} already processed – skipping")
-                return
-            # Add to cache and prune if needed
-            processed_mission_ids.add(cache_key)
-            if len(processed_mission_ids) > MAX_MISSION_CACHE:
-                # Remove oldest entry (convert to list for deterministic removal)
-                oldest = next(iter(processed_mission_ids))
-                processed_mission_ids.remove(oldest)
+
+    # Deduplicate based on command ID and Status to prevent duplicate trigger loops
+    with processed_mission_lock:
+        if cmd_id == last_processed_cmd_id and status == last_processed_status:
+            # Silently skip duplicate event triggers to prevent log flooding
+            return
+        last_processed_cmd_id = cmd_id
+        last_processed_status = status
+
     print(f"[FIREBASE DEBUG] check_mission called - Status: {status}")
 
     # Handle abort requests (can come at any time)

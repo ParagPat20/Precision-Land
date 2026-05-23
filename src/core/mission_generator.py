@@ -83,6 +83,9 @@ class DeliveryTemplate:
                 normalized_overrides['LID_LOCK_PWM'] = normalized_overrides['SERVO_CLOSE_PWM']
             values.update(normalized_overrides)
 
+        # Force SERVO_NUM to 6 as we only handle servo 6 on the drone
+        values['SERVO_NUM'] = 6
+
         mission_items = []
         seq = 0
         last_nav_location = home_location
