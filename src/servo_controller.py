@@ -30,7 +30,7 @@ SC_SPEED = 1500
 # Locking Targets
 LOCK_POS_1 = 180
 LOCK_POS_2 = 960
-LOCK_POS_3 = 530
+LOCK_POS_3 = 540
 
 # Unlocking Targets
 UNLOCK_POS_1 = 2000
@@ -42,7 +42,7 @@ UNLOCK_CHECK_3 = 680  # Threshold check for ID 3
 SERVO_LIMITS = {
     1: (150, 2000),  # Servo 1 (ST)
     2: (790, 960),   # Servo 2 (SC)
-    3: (520, 700)    # Servo 3 (SC)
+    3: (530, 700)    # Servo 3 (SC)
 }
 # --------------------------------------------------------
 
