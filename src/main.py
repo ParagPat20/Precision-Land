@@ -447,25 +447,13 @@ def upload_mission_items_int(mission_items):
     if missing:
         raise RuntimeError(f"Mission upload completed without FC requesting seq(s): {sorted(missing)}")
 
-    # Guard manual index updates: only update if already armed or airborne.
-    # If the vehicle is disarmed and on the ground, let ArduPilot's native AUTO takeoff initialize the index.
-    is_on_ground = True
-    try:
-        if vehicle.armed or (vehicle.location.global_relative_frame and vehicle.location.global_relative_frame.alt > 1.0):
-            is_on_ground = False
-    except Exception as e:
-        print(f"[FIREBASE DEBUG] Error checking vehicle armed/alt state: {e}")
-
-    if not is_on_ground:
-        _send_with_optional_mission_type(
-            master.mav.mission_set_current_send,
-            target_system,
-            target_component,
-            start_seq,
-        )
-        print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq} (airborne/armed)")
-    else:
-        print(f"[FIREBASE DEBUG] Vehicle on ground and disarmed. Letting ArduPilot auto-initialize mission current index naturally.")
+    _send_with_optional_mission_type(
+        master.mav.mission_set_current_send,
+        target_system,
+        target_component,
+        start_seq,
+    )
+    print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq}")
 
     return verify_uploaded_mission_int(expected_count=len(mission_items), expected_start_seq=start_seq)
 
@@ -562,21 +550,9 @@ def upload_mission_items_dronekit(mission_items):
 
     cmds.upload()
     
-    # Guard manual index updates: only update if already armed or airborne.
-    # If the vehicle is disarmed and on the ground, let ArduPilot's native AUTO takeoff initialize the index.
-    is_on_ground = True
-    try:
-        if vehicle.armed or (vehicle.location.global_relative_frame and vehicle.location.global_relative_frame.alt > 1.0):
-            is_on_ground = False
-    except Exception as e:
-        print(f"[FIREBASE DEBUG] Error checking vehicle armed/alt state: {e}")
-
-    if not is_on_ground:
-        vehicle.commands.next = start_seq
-        vehicle.flush()
-        print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq} (airborne/armed)")
-    else:
-        print(f"[FIREBASE DEBUG] Vehicle on ground and disarmed. Letting ArduPilot auto-initialize mission current index naturally.")
+    vehicle.commands.next = start_seq
+    vehicle.flush()
+    print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq}")
 
     cmds.download()
     cmds.wait_ready()
@@ -633,9 +609,13 @@ def execute_mission_logic(mission_items, cmd_ref):
                 f"params=({item.param1}, {item.param2}, {item.param3}, {item.param4})"
             )
 
-        upload_mission_items_dronekit(mission_items)
-        print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
+        # Use MISSION_ITEM_INT upload method to ensure precision and reliability
+        upload_mission_items_int(mission_items)
+        print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded using MISSION_ITEM_INT!")
         print("[FIREBASE DEBUG] Verified FC executable mission starts with NAV_TAKEOFF")
+        
+        # Give the flight controller a moment to process the newly uploaded mission and set current seq
+        time.sleep(1.0)
         
         # Start telemetry loop immediately after mission upload (regardless of arming status)
         # This allows tracking mission progress even before arming
