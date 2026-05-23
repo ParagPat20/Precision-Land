@@ -37,6 +37,7 @@ class DeliveryTemplate:
             commands=[
                 TemplateCommand('home', {'location': '{HOME_LOCATION}', 'alt': 0}),
                 TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
+                TemplateCommand('changeSpeed', {'speed': '{FLY_SPEED}'}),
                 TemplateCommand('waypoint', {
                     'location': '{DELIVERY_LOCATION}',
                     'alt': '{CRUISE_ALT}'
@@ -45,15 +46,15 @@ class DeliveryTemplate:
                     'location': '{DELIVERY_LOCATION}'
                 }),
                 TemplateCommand('doSetServo', {
-                    'servo': 6,
+                    'servo': '{SERVO_NUM}',
                     'pwm': '{LID_UNLOCK_PWM}'
                 }),
                 TemplateCommand('delay', {
-                    'seconds': 5.0
+                    'seconds': '{DROP_DELAY}'
                 }),
                 TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
                 TemplateCommand('doSetServo', {
-                    'servo': 6,
+                    'servo': '{SERVO_NUM}',
                     'pwm': '{LID_LOCK_PWM}'
                 }),
                 TemplateCommand('delay', {
@@ -66,21 +67,26 @@ class DeliveryTemplate:
                 'CRUISE_ALT': 30.0,
                 'LID_UNLOCK_PWM': 1000,
                 'LID_LOCK_PWM': 1900,
+                'SERVO_NUM': 6,
+                'DROP_DELAY': 5.0,
+                'FLY_SPEED': 0.0,
             }
         )
 
     def generate_mission(self, home_location, delivery_location, override_values=None):
         values = self.default_values.copy()
         if override_values:
-            values.update(override_values)
-
-        # Enforce that takeoff altitude and waypoint/cruise altitude are the same
-        if 'TAKEOFF_ALT' in values:
-            values['CRUISE_ALT'] = values['TAKEOFF_ALT']
+            normalized_overrides = override_values.copy()
+            if 'SERVO_OPEN_PWM' in normalized_overrides and 'LID_UNLOCK_PWM' not in normalized_overrides:
+                normalized_overrides['LID_UNLOCK_PWM'] = normalized_overrides['SERVO_OPEN_PWM']
+            if 'SERVO_CLOSE_PWM' in normalized_overrides and 'LID_LOCK_PWM' not in normalized_overrides:
+                normalized_overrides['LID_LOCK_PWM'] = normalized_overrides['SERVO_CLOSE_PWM']
+            values.update(normalized_overrides)
 
         mission_items = []
         seq = 0
         last_nav_location = home_location
+        first_executable_seq = 1
         
         # MAVLink Command Mapping
         CMD_MAP = {
@@ -91,18 +97,10 @@ class DeliveryTemplate:
             'rtl': mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH, # 20
             'doSetServo': mavutil.mavlink.MAV_CMD_DO_SET_SERVO, # 183
             'delay': mavutil.mavlink.MAV_CMD_CONDITION_DELAY, # 112
+            'changeSpeed': mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED, # 178
         }
 
         for cmd in self.commands:
-            # The template keeps "home" as planning metadata only. Uploading it as
-            # MAV_CMD_NAV_WAYPOINT makes ArduPilot execute a fake first waypoint
-            # before TAKEOFF on later missions.
-            if cmd.type == 'home':
-                loc = cmd.params.get('location')
-                if loc == '{HOME_LOCATION}' and home_location:
-                    last_nav_location = home_location
-                continue
-
             command_id = CMD_MAP.get(cmd.type, 16)
             
             # Init params
@@ -128,7 +126,7 @@ class DeliveryTemplate:
             # 2. Map params to MAVLink fields
             # Positional params depends on command type
             
-            if cmd.type in ['waypoint', 'land']:
+            if cmd.type in ['home', 'waypoint', 'land']:
                 loc = temp_params.get('location')
                 if isinstance(loc, LatLng):
                     x = loc.latitude
@@ -152,19 +150,36 @@ class DeliveryTemplate:
             elif cmd.type == 'delay':
                 p1 = float(temp_params.get('seconds', 0))
 
+            elif cmd.type == 'changeSpeed':
+                speed = float(temp_params.get('speed', 0))
+                if speed <= 0:
+                    continue
+                p1 = 1.0
+                p2 = speed
+
             # Create Item
             item = MissionItem(
                 seq=seq,
                 command_id=command_id,
                 x=x, y=y, z=z,
                 param1=p1, param2=p2, param3=p3, param4=p4,
-                frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                current=1 if seq == 0 else 0
+                frame=(
+                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                    if command_id in [
+                        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+                        mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                        mavutil.mavlink.MAV_CMD_NAV_LAND,
+                    ]
+                    else mavutil.mavlink.MAV_FRAME_MISSION
+                ),
+                current=1 if seq == first_executable_seq else 0
             )
             mission_items.append(item)
             seq += 1
 
-        if not mission_items or mission_items[0].command_id != mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
-            raise ValueError("Generated mission must start with MAV_CMD_NAV_TAKEOFF")
+        if len(mission_items) < 2 or mission_items[0].command_id != mavutil.mavlink.MAV_CMD_NAV_WAYPOINT:
+            raise ValueError("Generated mission must include ArduPilot home item at seq 0")
+        if mission_items[1].command_id != mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+            raise ValueError("Generated mission executable seq 1 must be MAV_CMD_NAV_TAKEOFF")
 
         return mission_items

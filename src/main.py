@@ -335,6 +335,183 @@ def telemetry_loop(cmd_ref):
     mission_active = False  # Mark mission as inactive when loop exits
     print("[FIREBASE DEBUG] Telemetry loop ended")
 
+def _send_with_optional_mission_type(send_fn, *args):
+    try:
+        send_fn(*args, mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+    except TypeError:
+        send_fn(*args)
+
+def _wait_mavlink_message(master, message_types, timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        msg = master.recv_match(type=message_types, blocking=True, timeout=0.5)
+        if msg is not None:
+            return msg
+    raise TimeoutError(f"Timed out waiting for MAVLink message {message_types}")
+
+def _mission_item_int_xy(item):
+    if item.frame in [
+        mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+        mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT_INT,
+    ]:
+        return int(round(float(item.x) * 1e7)), int(round(float(item.y) * 1e7))
+    return int(round(float(item.x))), int(round(float(item.y)))
+
+def _mission_start_seq(mission_items):
+    if (
+        len(mission_items) >= 2
+        and mission_items[0].command_id == mavutil.mavlink.MAV_CMD_NAV_WAYPOINT
+        and mission_items[1].command_id == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF
+    ):
+        return 1
+    if mission_items and mission_items[0].command_id == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+        return 0
+    raise ValueError("Mission must have MAV_CMD_NAV_TAKEOFF as the first executable item")
+
+def upload_mission_items_int(mission_items):
+    """
+    Upload using MAVLink MISSION_ITEM_INT.
+
+    DroneKit's vehicle.commands.upload() uses legacy MISSION_ITEM on this stack.
+    ArduPilot warns about that path and was storing the mission from item 1,
+    which removed our first NAV_TAKEOFF. This uploader follows the modern
+    request/response mission protocol and verifies the uploaded command order.
+    """
+    start_seq = _mission_start_seq(mission_items)
+
+    master = vehicle._master
+    target_system = master.target_system
+    target_component = master.target_component
+
+    print("[FIREBASE DEBUG] Clearing previous mission with MISSION_CLEAR_ALL...")
+    _send_with_optional_mission_type(
+        master.mav.mission_clear_all_send,
+        target_system,
+        target_component,
+    )
+    clear_ack = _wait_mavlink_message(master, ["MISSION_ACK"], timeout=5)
+    print(f"[FIREBASE DEBUG] Clear mission ACK: type={getattr(clear_ack, 'type', None)}")
+
+    print(f"[FIREBASE DEBUG] Uploading {len(mission_items)} mission items with MISSION_ITEM_INT...")
+    _send_with_optional_mission_type(
+        master.mav.mission_count_send,
+        target_system,
+        target_component,
+        len(mission_items),
+    )
+
+    sent_sequences = set()
+    while True:
+        msg = _wait_mavlink_message(master, ["MISSION_REQUEST_INT", "MISSION_REQUEST", "MISSION_ACK"], timeout=10)
+        msg_type = msg.get_type()
+
+        if msg_type == "MISSION_ACK":
+            ack_type = getattr(msg, "type", None)
+            print(f"[FIREBASE DEBUG] Mission upload ACK: type={ack_type}")
+            if ack_type != mavutil.mavlink.MAV_MISSION_ACCEPTED:
+                raise RuntimeError(f"Mission upload rejected by FC: ACK type {ack_type}")
+            break
+
+        seq = int(msg.seq)
+        if seq < 0 or seq >= len(mission_items):
+            raise RuntimeError(f"Flight controller requested invalid mission seq {seq}")
+
+        item = mission_items[seq]
+        x_int, y_int = _mission_item_int_xy(item)
+        print(
+            f"[FIREBASE DEBUG] Sending MISSION_ITEM_INT seq={seq}: "
+            f"cmd={item.command_id}, frame={item.frame}, current={item.current}, "
+            f"x={x_int}, y={y_int}, z={item.z}"
+        )
+        _send_with_optional_mission_type(
+            master.mav.mission_item_int_send,
+            target_system,
+            target_component,
+            seq,
+            item.frame,
+            item.command_id,
+            item.current,
+            item.autocontinue,
+            item.param1,
+            item.param2,
+            item.param3,
+            item.param4,
+            x_int,
+            y_int,
+            item.z,
+        )
+        sent_sequences.add(seq)
+
+    missing = set(range(len(mission_items))) - sent_sequences
+    if missing:
+        raise RuntimeError(f"Mission upload completed without FC requesting seq(s): {sorted(missing)}")
+
+    _send_with_optional_mission_type(
+        master.mav.mission_set_current_send,
+        target_system,
+        target_component,
+        start_seq,
+    )
+    print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq}")
+
+    return verify_uploaded_mission_int(expected_count=len(mission_items), expected_start_seq=start_seq)
+
+def verify_uploaded_mission_int(expected_count, expected_start_seq):
+    master = vehicle._master
+    target_system = master.target_system
+    target_component = master.target_component
+
+    _send_with_optional_mission_type(
+        master.mav.mission_request_list_send,
+        target_system,
+        target_component,
+    )
+    count_msg = _wait_mavlink_message(master, ["MISSION_COUNT"], timeout=10)
+    count = int(count_msg.count)
+    print(f"[FIREBASE DEBUG] FC reports {count} stored mission items")
+    if count != expected_count:
+        raise RuntimeError(f"FC stored {count} mission items, expected {expected_count}")
+
+    stored = []
+    for seq in range(count):
+        _send_with_optional_mission_type(
+            master.mav.mission_request_int_send,
+            target_system,
+            target_component,
+            seq,
+        )
+        msg = _wait_mavlink_message(master, ["MISSION_ITEM_INT", "MISSION_ITEM"], timeout=10)
+        command = int(msg.command)
+        frame = int(msg.frame)
+        x_raw = getattr(msg, "x", 0)
+        y_raw = getattr(msg, "y", 0)
+        if msg.get_type() == "MISSION_ITEM_INT" and frame in [
+            mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT_INT,
+        ]:
+            lat = float(x_raw) / 1e7
+            lon = float(y_raw) / 1e7
+        else:
+            lat = float(x_raw)
+            lon = float(y_raw)
+        alt = float(getattr(msg, "z", 0.0))
+        stored.append((command, frame, lat, lon, alt))
+        print(
+            f"[FIREBASE DEBUG] FC item {seq}: "
+            f"cmd={command}, frame={frame}, lat={lat}, lon={lon}, alt={alt}"
+        )
+
+    if len(stored) <= expected_start_seq or stored[expected_start_seq][0] != mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+        found = stored[expected_start_seq][0] if len(stored) > expected_start_seq else "EMPTY"
+        raise RuntimeError(
+            f"Flight controller executable mission starts with {found}, expected MAV_CMD_NAV_TAKEOFF "
+            f"at seq {expected_start_seq}"
+        )
+
+    return stored
+
 def execute_mission_logic(mission_items, cmd_ref):
     """
     Executes the mission logic: uploads mission, sets mode, arms, and starts telemetry.
@@ -348,11 +525,6 @@ def execute_mission_logic(mission_items, cmd_ref):
             print("[FIREBASE DEBUG] [ABORT] Abort requested before mission upload. Cancelling...")
             return False
             
-        cmds = vehicle.commands
-        cmds.clear()
-        vehicle.flush()
-        print("[FIREBASE DEBUG] Previous mission cleared from flight controller")
-        
         for item in mission_items:
             if abort_requested:
                 print("[ABORT] Abort requested during mission upload. Cancelling...")
@@ -363,35 +535,10 @@ def execute_mission_logic(mission_items, cmd_ref):
                 f"lat={item.x}, lon={item.y}, alt={item.z}, "
                 f"params=({item.param1}, {item.param2}, {item.param3}, {item.param4})"
             )
-            cmd = Command(
-                0, 0, 0, 
-                item.frame,
-                item.command_id,
-                item.current, item.autocontinue,
-                item.param1, item.param2, item.param3, item.param4,
-                item.x, item.y, item.z
-            )
-            cmds.add(cmd)
-            
-        cmds.upload()
-        vehicle.commands.next = 0
-        vehicle.flush()
-        print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
-        print("[FIREBASE DEBUG] Mission start index reset to 0 (first item should be NAV_TAKEOFF)")
 
-        cmds.download()
-        cmds.wait_ready()
-        stored_mission = list(cmds)
-        print("[FIREBASE DEBUG] Mission stored on flight controller:")
-        for idx, cmd in enumerate(stored_mission):
-            print(
-                f"[FIREBASE DEBUG] FC item {idx}: "
-                f"cmd={cmd.command}, frame={cmd.frame}, current={cmd.current}, "
-                f"lat={cmd.x}, lon={cmd.y}, alt={cmd.z}"
-            )
-        if not stored_mission or stored_mission[0].command != mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
-            found = stored_mission[0].command if stored_mission else "EMPTY"
-            raise RuntimeError(f"Flight controller stored mission starts with {found}, expected MAV_CMD_NAV_TAKEOFF")
+        upload_mission_items_int(mission_items)
+        print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
+        print("[FIREBASE DEBUG] Verified FC executable mission starts with NAV_TAKEOFF")
         
         # Start telemetry loop immediately after mission upload (regardless of arming status)
         # This allows tracking mission progress even before arming
