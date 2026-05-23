@@ -53,7 +53,7 @@ from datetime import datetime
 import queue
 from typing import Optional, Tuple
 
-from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
+from core.pymavlink_vehicle import MavlinkVehicle, VehicleMode, LocationGlobal, LocationGlobalRelative
 from pymavlink import mavutil
 import numpy as np
 import cv2
@@ -283,7 +283,7 @@ def telemetry_loop(cmd_ref):
         # 1. Check for Abort (check both global flag and Firebase status)
         try:
             current_status = cmd_ref.child('status').get()
-            print(f"[FIREBASE DEBUG] Telemetry loop - current status: {current_status}")
+            # Silently check abort status to prevent log spam
             if current_status == 'ABORT_REQUESTED' or abort_requested:
                 print("[ABORT] Received Abort Request! Stopping Mission...")
                 abort_requested = True
@@ -318,14 +318,8 @@ def telemetry_loop(cmd_ref):
                 telemetry = build_telemetry_payload()
                 if telemetry is not None:
                     cmd_ref.child('telemetry').update(telemetry)
-                    print(
-                        f"[FIREBASE DEBUG] [OK] Telemetry sent: "
-                        f"lat={loc.lat:.6f}, lng={loc.lon:.6f}, alt={loc.alt:.1f}m, "
-                        f"heading={vehicle.heading}, mode={vehicle.mode.name}, "
-                        f"batt={telemetry['batteryVoltage']:.2f}V, current={telemetry['current']:.2f}A"
-                    )
                 else:
-                    print("[FIREBASE DEBUG] Location data not available, skipping telemetry send")
+                    pass  # Location data not available, skip telemetry send silently
             except Exception as e:
                 print(f"[FIREBASE DEBUG] Telemetry Error: {e}")
                 traceback.print_exc()
@@ -341,270 +335,7 @@ def _send_with_optional_mission_type(send_fn, *args):
     except TypeError:
         send_fn(*args)
 
-def _wait_mavlink_message(master, message_types, timeout=10):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        msg = master.recv_match(type=message_types, blocking=True, timeout=0.5)
-        if msg is not None:
-            return msg
-    raise TimeoutError(f"Timed out waiting for MAVLink message {message_types}")
-
-def _mission_item_int_xy(item):
-    if item.frame in [
-        mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
-        mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT_INT,
-    ]:
-        return int(round(float(item.x) * 1e7)), int(round(float(item.y) * 1e7))
-    return int(round(float(item.x))), int(round(float(item.y)))
-
-def _mission_start_seq(mission_items):
-    if (
-        len(mission_items) >= 2
-        and mission_items[0].command_id == mavutil.mavlink.MAV_CMD_NAV_WAYPOINT
-        and mission_items[1].command_id == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF
-    ):
-        return 1
-    if mission_items and mission_items[0].command_id == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
-        return 0
-    raise ValueError("Mission must have MAV_CMD_NAV_TAKEOFF as the first executable item")
-
-def upload_mission_items_int(mission_items):
-    """
-    Upload using MAVLink MISSION_ITEM_INT.
-
-    DroneKit's vehicle.commands.upload() uses legacy MISSION_ITEM on this stack.
-    ArduPilot warns about that path and was storing the mission from item 1,
-    which removed our first NAV_TAKEOFF. This uploader follows the modern
-    request/response mission protocol and verifies the uploaded command order.
-    """
-    start_seq = _mission_start_seq(mission_items)
-
-    master = vehicle._master
-    target_system = master.target_system
-    target_component = master.target_component
-
-    print("[FIREBASE DEBUG] Clearing previous mission with MISSION_CLEAR_ALL...")
-    _send_with_optional_mission_type(
-        master.mav.mission_clear_all_send,
-        target_system,
-        target_component,
-    )
-    clear_ack = _wait_mavlink_message(master, ["MISSION_ACK"], timeout=5)
-    print(f"[FIREBASE DEBUG] Clear mission ACK: type={getattr(clear_ack, 'type', None)}")
-
-    print(f"[FIREBASE DEBUG] Uploading {len(mission_items)} mission items with MISSION_ITEM_INT...")
-    _send_with_optional_mission_type(
-        master.mav.mission_count_send,
-        target_system,
-        target_component,
-        len(mission_items),
-    )
-
-    sent_sequences = set()
-    while True:
-        msg = _wait_mavlink_message(master, ["MISSION_REQUEST_INT", "MISSION_REQUEST", "MISSION_ACK"], timeout=10)
-        msg_type = msg.get_type()
-
-        if msg_type == "MISSION_ACK":
-            ack_type = getattr(msg, "type", None)
-            print(f"[FIREBASE DEBUG] Mission upload ACK: type={ack_type}")
-            if ack_type != mavutil.mavlink.MAV_MISSION_ACCEPTED:
-                raise RuntimeError(f"Mission upload rejected by FC: ACK type {ack_type}")
-            break
-
-        seq = int(msg.seq)
-        if seq < 0 or seq >= len(mission_items):
-            raise RuntimeError(f"Flight controller requested invalid mission seq {seq}")
-
-        item = mission_items[seq]
-        x_int, y_int = _mission_item_int_xy(item)
-        print(
-            f"[FIREBASE DEBUG] Sending MISSION_ITEM_INT seq={seq}: "
-            f"cmd={item.command_id}, frame={item.frame}, current={item.current}, "
-            f"x={x_int}, y={y_int}, z={item.z}"
-        )
-        _send_with_optional_mission_type(
-            master.mav.mission_item_int_send,
-            target_system,
-            target_component,
-            seq,
-            item.frame,
-            item.command_id,
-            item.current,
-            item.autocontinue,
-            item.param1,
-            item.param2,
-            item.param3,
-            item.param4,
-            x_int,
-            y_int,
-            item.z,
-        )
-        sent_sequences.add(seq)
-
-    missing = set(range(len(mission_items))) - sent_sequences
-    if missing:
-        raise RuntimeError(f"Mission upload completed without FC requesting seq(s): {sorted(missing)}")
-
-    _send_with_optional_mission_type(
-        master.mav.mission_set_current_send,
-        target_system,
-        target_component,
-        start_seq,
-    )
-    print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq}")
-
-    return verify_uploaded_mission_int(expected_count=len(mission_items), expected_start_seq=start_seq)
-
-def verify_uploaded_mission_int(expected_count, expected_start_seq):
-    master = vehicle._master
-    target_system = master.target_system
-    target_component = master.target_component
-
-    _send_with_optional_mission_type(
-        master.mav.mission_request_list_send,
-        target_system,
-        target_component,
-    )
-    count_msg = _wait_mavlink_message(master, ["MISSION_COUNT"], timeout=10)
-    count = int(count_msg.count)
-    print(f"[FIREBASE DEBUG] FC reports {count} stored mission items")
-    if count != expected_count:
-        raise RuntimeError(f"FC stored {count} mission items, expected {expected_count}")
-
-    stored = []
-    for seq in range(count):
-        _send_with_optional_mission_type(
-            master.mav.mission_request_int_send,
-            target_system,
-            target_component,
-            seq,
-        )
-        msg = _wait_mavlink_message(master, ["MISSION_ITEM_INT", "MISSION_ITEM"], timeout=10)
-        command = int(msg.command)
-        frame = int(msg.frame)
-        x_raw = getattr(msg, "x", 0)
-        y_raw = getattr(msg, "y", 0)
-        if msg.get_type() == "MISSION_ITEM_INT" and frame in [
-            mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
-            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-            mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT_INT,
-        ]:
-            lat = float(x_raw) / 1e7
-            lon = float(y_raw) / 1e7
-        else:
-            lat = float(x_raw)
-            lon = float(y_raw)
-        alt = float(getattr(msg, "z", 0.0))
-        stored.append((command, frame, lat, lon, alt))
-        print(
-            f"[FIREBASE DEBUG] FC item {seq}: "
-            f"cmd={command}, frame={frame}, lat={lat}, lon={lon}, alt={alt}"
-        )
-
-    if len(stored) <= expected_start_seq or stored[expected_start_seq][0] != mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
-        found = stored[expected_start_seq][0] if len(stored) > expected_start_seq else "EMPTY"
-        raise RuntimeError(
-            f"Flight controller executable mission starts with {found}, expected MAV_CMD_NAV_TAKEOFF "
-            f"at seq {expected_start_seq}"
-        )
-
-    return stored
-
-def upload_mission_items_dronekit(mission_items):
-    """
-    Upload through DroneKit, keeping ArduPilot's hidden seq 0 home slot.
-
-    ArduPilot consumes seq 0 as home, so the first executable mission item must
-    be seq 1 TAKEOFF. With that layout, Mission Planner displays TAKEOFF first
-    while the FC still has the home location it requires.
-    """
-    start_seq = _mission_start_seq(mission_items)
-    if start_seq != 1:
-        raise ValueError("Expected ArduPilot home at seq 0 and TAKEOFF at executable seq 1")
-
-    master = vehicle._master
-    target_system = master.target_system
-    target_component = master.target_component
-
-    print("[FIREBASE DEBUG] Clearing previous mission with MISSION_CLEAR_ALL...")
-    _send_with_optional_mission_type(
-        master.mav.mission_clear_all_send,
-        target_system,
-        target_component,
-    )
-    # brief pause for flight controller to process clear
-    time.sleep(0.5)
-
-    cmds = vehicle.commands
-    cmds.clear()
-    vehicle.flush()
-    print("[FIREBASE DEBUG] Previous mission cleared from flight controller")
-
-    for item in mission_items:
-        cmd = Command(
-            0, 0, 0,
-            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
-            if item.frame == mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
-            else item.frame,
-            item.command_id,
-            item.current,
-            item.autocontinue,
-            item.param1,
-            item.param2,
-            item.param3,
-            item.param4,
-            item.x,
-            item.y,
-            item.z,
-        )
-        cmds.add(cmd)
-
-    cmds.upload()
-    
-    # Force MAVLink MISSION_SET_CURRENT to bypass DroneKit's broken caching on subsequent flights
-    _send_with_optional_mission_type(
-        master.mav.mission_set_current_send,
-        target_system,
-        target_component,
-        start_seq,
-    )
-    # Also update DroneKit's cache so it's aware
-    vehicle.commands.next = start_seq
-    vehicle.flush()
-    print(f"[FIREBASE DEBUG] Mission current index forced via MAVLink to seq {start_seq}")
-
-    cmds.download()
-    cmds.wait_ready()
-    stored_mission = list(cmds)
-    print("[FIREBASE DEBUG] Mission downloaded after upload:")
-    for idx, cmd in enumerate(stored_mission):
-        print(
-            f"[FIREBASE DEBUG] Downloaded item {idx}: "
-            f"cmd={cmd.command}, frame={cmd.frame}, current={cmd.current}, "
-            f"lat={cmd.x}, lon={cmd.y}, alt={cmd.z}"
-        )
-
-    if not stored_mission:
-        raise RuntimeError("Flight controller returned an empty mission after upload")
-    first_downloaded = stored_mission[0].command
-    if first_downloaded == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
-        print("[FIREBASE DEBUG] Downloaded mission displays TAKEOFF first")
-    elif (
-        first_downloaded == mavutil.mavlink.MAV_CMD_NAV_WAYPOINT
-        and len(stored_mission) > 1
-        and stored_mission[1].command == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF
-    ):
-        print("[FIREBASE DEBUG] First downloaded item is home slot; executable TAKEOFF is seq 1")
-    else:
-        second = stored_mission[1].command if len(stored_mission) > 1 else "MISSING"
-        raise RuntimeError(
-            f"Downloaded mission does not start with executable TAKEOFF: "
-            f"first={first_downloaded}, second={second}"
-        )
-
-    return stored_mission
+# MAVLink mission upload and verification is now handled internally and thread-safely by MavlinkVehicle.
 
 def execute_mission_logic(mission_items, cmd_ref):
     """
@@ -612,11 +343,11 @@ def execute_mission_logic(mission_items, cmd_ref):
     Checks for abort requests throughout the process.
     """
     global abort_requested
-    print("[FIREBASE DEBUG] Uploading mission via DroneKit...")
+    print("[FIREBASE] Uploading mission...")
     try:
         # Check for abort before starting
         if abort_requested:
-            print("[FIREBASE DEBUG] [ABORT] Abort requested before mission upload. Cancelling...")
+            print("[FIREBASE] [ABORT] Abort requested before mission upload. Cancelling...")
             return False
             
         for item in mission_items:
@@ -624,42 +355,42 @@ def execute_mission_logic(mission_items, cmd_ref):
                 print("[ABORT] Abort requested during mission upload. Cancelling...")
                 return False
             print(
-                f"[FIREBASE DEBUG] Mission item {item.seq}: "
+                f"[FIREBASE] Mission item {item.seq}: "
                 f"cmd={item.command_id}, current={item.current}, frame={item.frame}, "
                 f"lat={item.x}, lon={item.y}, alt={item.z}, "
                 f"params=({item.param1}, {item.param2}, {item.param3}, {item.param4})"
             )
 
-        upload_mission_items_dronekit(mission_items)
-        print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
-        print("[FIREBASE DEBUG] Verified FC executable mission starts with NAV_TAKEOFF")
+        # Upload the mission using robust pure PyMAVLink uploader
+        vehicle.upload_mission(mission_items)
+        print(f"[FIREBASE] Mission of {len(mission_items)} items Uploaded successfully!")
         
         # Start telemetry loop immediately after mission upload (regardless of arming status)
         # This allows tracking mission progress even before arming
-        print("[FIREBASE DEBUG] Starting telemetry transmission to Firebase...")
+        print("[FIREBASE] Starting telemetry transmission to Firebase...")
         telemetry_thread = threading.Thread(target=telemetry_loop, args=(cmd_ref,), name="TelemetryThread", daemon=True)
         telemetry_thread.start()
         
         # Check for abort before setting mode
         if abort_requested:
-            print("[FIREBASE DEBUG] [ABORT] Abort requested after mission upload. Cancelling...")
+            print("[FIREBASE] [ABORT] Abort requested after mission upload. Cancelling...")
             return False
         
-        print("[FIREBASE DEBUG] Setting Mode to AUTO...")
+        print("[FIREBASE] Setting Mode to AUTO...")
         vehicle.mode = VehicleMode("AUTO")
         
         # Check for abort before arming
         if abort_requested:
-            print("[FIREBASE DEBUG] [ABORT] Abort requested before arming. Cancelling...")
+            print("[FIREBASE] [ABORT] Abort requested before arming. Cancelling...")
             return False
         
-        print("[FIREBASE DEBUG] Arming...")
+        print("[FIREBASE] Arming...")
         vehicle.armed = True
         
         # Wait up to 5s for arming, checking for abort during wait
         for _ in range(5):
             if abort_requested:
-                print("[FIREBASE DEBUG] [ABORT] Abort requested during arming wait. Switching to RTL...")
+                print("[FIREBASE] [ABORT] Abort requested during arming wait. Switching to RTL...")
                 try:
                     vehicle.mode = VehicleMode("RTL")
                     print("[ABORT] Vehicle mode set to RTL")
@@ -670,16 +401,16 @@ def execute_mission_logic(mission_items, cmd_ref):
                 break
             time.sleep(1)
             
-        print(f"[FIREBASE DEBUG] ARMED Status: {vehicle.armed}")
+        print(f"[FIREBASE] ARMED Status: {vehicle.armed}")
         
         # If arming failed, return False so the mission is flagged as FAILED
         if not vehicle.armed:
-            print("[FIREBASE DEBUG] [ERROR] Arming failed – cancelling mission execution.")
+            print("[FIREBASE] [ERROR] Arming failed – cancelling mission execution.")
             return False
 
         # Final check for abort after arming wait
         if abort_requested:
-            print("[FIREBASE DEBUG] [ABORT] Abort requested. Switching to RTL...")
+            print("[FIREBASE] [ABORT] Abort requested. Switching to RTL...")
             try:
                 vehicle.mode = VehicleMode("RTL")
                 print("[ABORT] Vehicle mode set to RTL")
@@ -689,7 +420,7 @@ def execute_mission_logic(mission_items, cmd_ref):
             
         return True
     except Exception as e:
-        print(f"[FIREBASE DEBUG] Mission Execution Error: {e}")
+        print(f"[FIREBASE] Mission Execution Error: {e}")
         traceback.print_exc()
         return False
 
@@ -818,10 +549,6 @@ def run_mission_thread(command):
         active_mission_ref = None
         print("[FIREBASE DEBUG] ========== MISSION ENDED ==========")
 
-processed_mission_ids = set()
-processed_mission_lock = threading.Lock()
-MAX_MISSION_CACHE = 100  # keep recent IDs to avoid unbounded growth
-
 # Track the last successfully processed command and its status to prevent log spam and duplicate trigger loops
 last_processed_cmd_id = None
 last_processed_status = None
@@ -835,12 +562,10 @@ def check_mission(command):
     global last_processed_cmd_id, last_processed_status
 
     if not command or not isinstance(command, dict):
-        print("[FIREBASE DEBUG] check_mission called with invalid command (None or not dict)")
         return
 
     status = command.get('status')
     if not status:
-        # Unrelated update or telemetry event, skip silently to reduce log clutter
         return
 
     cmd_id = command.get('id')
@@ -848,27 +573,47 @@ def check_mission(command):
     # Deduplicate based on command ID and Status to prevent duplicate trigger loops
     with processed_mission_lock:
         if cmd_id == last_processed_cmd_id and status == last_processed_status:
-            # Silently skip duplicate event triggers to prevent log flooding
             return
         last_processed_cmd_id = cmd_id
         last_processed_status = status
 
-    print(f"[FIREBASE DEBUG] check_mission called - Status: {status}")
+    # Handle new PENDING missions
+    if status == 'PENDING':
+        # Verify this mission ID hasn't been processed yet to prevent duplicate trigger loops
+        with processed_mission_lock:
+            if cmd_id in processed_mission_ids:
+                return
+            processed_mission_ids.add(cmd_id)
+            if len(processed_mission_ids) > MAX_MISSION_CACHE:
+                try:
+                    # Pop the oldest item to keep memory bounded
+                    processed_mission_ids.remove(next(iter(processed_mission_ids)))
+                except Exception:
+                    pass
+
+        # Reset abort flag and mission active flag for new mission
+        abort_requested = False
+        mission_active = False
+        sender = command.get('sender_email', 'Unknown')
+        print(f"[FIREBASE] Received PENDING Mission from {sender} (ID: {cmd_id})")
+        t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread")
+        t.start()
+        print(f"[FIREBASE] Mission thread started: {t.name}")
+        return
 
     # Handle abort requests (can come at any time)
-    if status == 'ABORT_REQUESTED':
+    elif status == 'ABORT_REQUESTED':
         # Check if the vehicle is armed to allow abort safety overrides
         is_armed = False
         try:
             is_armed = vehicle.armed
         except Exception as e:
-            print(f"[FIREBASE DEBUG] Could not check vehicle armed state: {e}")
+            print(f"[FIREBASE] Could not check vehicle armed state: {e}")
 
         if not mission_active and not is_armed:
-            print("[FIREBASE DEBUG] [ABORT] Stale or inactive abort request received (no active mission and vehicle is disarmed). Ignoring.")
             return
 
-        print("[FIREBASE DEBUG] [ABORT] Abort request received from Firebase!")
+        print("[FIREBASE] [ABORT] Abort request received from Firebase!")
         abort_requested = True
         mission_active = False  # Stop sending telemetry immediately
         
@@ -879,36 +624,23 @@ def check_mission(command):
                 'status': 'ABORTED',
                 'aborted_at': int(time.time() * 1000)
             })
-            print("[FIREBASE DEBUG] Updated active mission status to ABORTED")
+            print("[FIREBASE] Updated active mission status to ABORTED")
         except Exception as e:
-            print(f"[FIREBASE DEBUG] Error updating abort status: {e}")
+            print(f"[FIREBASE] Error updating abort status: {e}")
 
         # Always try to switch to RTL mode (regardless of armed status)
         try:
-            print("[FIREBASE DEBUG] [ABORT] Switching vehicle to RTL mode...")
+            print("[FIREBASE] [ABORT] Switching vehicle to RTL mode...")
             vehicle.mode = VehicleMode("RTL")
             print("[ABORT] Vehicle mode set to RTL")
         except Exception as e:
-            print(f"[FIREBASE DEBUG] Error switching to RTL: {e}")
+            print(f"[FIREBASE] Error switching to RTL: {e}")
         return
 
-    # Handle new PENDING missions
-    if status == 'PENDING':
-        # Reset abort flag and mission active flag for new mission
-        abort_requested = False
-        mission_active = False
-        sender = command.get('sender_email', 'Unknown')
-        print(f"[FIREBASE DEBUG] ========================================")
-        print(f"[FIREBASE DEBUG] Received PENDING Mission from {sender}")
-        print(f"[FIREBASE DEBUG] Command data: {command}")
-        print(f"[FIREBASE DEBUG] ========================================")
-        t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread")
-        t.start()
-        print(f"[FIREBASE DEBUG] Mission thread started: {t.name}")
+    else:
+        # Silently ignore intermediate and final statuses (IN_PROGRESS, COMPLETED, FAILED, ABORTED)
+        # to avoid log clutter
         return
-
-    # Other statuses are ignored here
-    print(f"[FIREBASE DEBUG] Ignoring command with status '{status}'")
 
 def firebase_listener_thread():
     """
@@ -967,67 +699,53 @@ def firebase_listener_thread():
             def on_firebase_event(event):
                 """Handle Firebase real-time events"""
                 try:
-                    print(f"[FIREBASE DEBUG] ========== FIREBASE EVENT ==========")
-                    print(f"[FIREBASE DEBUG] Event path: {event.path}")
-                    print(f"[FIREBASE DEBUG] Event data: {event.data}")
-                    print(f"[FIREBASE DEBUG] ====================================")
-                    if event.data:
-                        check_mission(event.data)
-                    else:
-                        # Command was deleted/cleared
-                        print("[FIREBASE DEBUG] Active command cleared from Firebase.")
+                    # Ignore any telemetry updates to prevent infinite event loop playback and log spam
+                    if event.path and (event.path.startswith('/telemetry') or event.path.startswith('/status/telemetry')):
+                        return
+
+                    # Pull the full command dictionary to ensure clean and complete structure
+                    command_data = ref.get()
+                    if not command_data or not isinstance(command_data, dict):
+                        return
+
+                    check_mission(command_data)
                 except Exception as e:
-                    print(f"[FIREBASE DEBUG] Firebase event handler error: {e}")
+                    print(f"[FIREBASE] Firebase event handler error: {e}")
                     traceback.print_exc()
             
             print(f"[FIREBASE DEBUG] [TIMING] Setting up Firebase listener...")
-            print("[FIREBASE DEBUG] This may take 3-5 minutes due to network latency to Singapore...")
-            print("[FIREBASE DEBUG] System is fully operational during this time! ArUco tracking works!")
+            print("[FIREBASE DEBUG] System is fully operational! ArUco tracking works!")
 
             # Fetch initial command in background (don't block the main listener)
-            # This way the system is ready to receive new commands immediately
             def fetch_initial_command():
                 try:
-                    print(f"[FIREBASE DEBUG] [TIMING] Fetching initial command from Firebase (background)...")
-                    fetch_start = time.time()
+                    print(f"[FIREBASE] Fetching initial command from Firebase...")
                     initial_command = ref.get()
-                    print(f"[FIREBASE DEBUG] [TIMING] Initial command fetched in {time.time() - fetch_start:.2f}s")
-                    
-                    if initial_command:
+                    if initial_command and isinstance(initial_command, dict):
                         initial_status = initial_command.get('status')
-                        print("[FIREBASE DEBUG] Found existing command in Firebase:")
-                        print(f"[FIREBASE DEBUG] Command ID: {initial_command.get('id')}")
-                        print(f"[FIREBASE DEBUG] Status: {initial_status}")
-                        print(f"[FIREBASE DEBUG] Timestamp: {initial_command.get('timestamp')}")
-                        
                         # Only process PENDING commands on startup
                         if initial_status == 'PENDING':
-                            print("[FIREBASE DEBUG] Processing PENDING command...")
+                            print("[FIREBASE] Processing PENDING command found on startup...")
                             check_mission(initial_command)
-                        else:
-                            print(f"[FIREBASE DEBUG] Skipping old command with status '{initial_status}' (not PENDING)")
-                    else:
-                        print("[FIREBASE DEBUG] No existing command found in Firebase")
                 except Exception as e:
-                    print(f"[FIREBASE DEBUG] Error fetching initial command: {e}")
-                    traceback.print_exc()
+                    print(f"[FIREBASE] Error fetching initial command: {e}")
             
             # Start initial fetch in background thread so it doesn't block
             if not initial_command_fetch_started:
                 initial_fetch_thread = threading.Thread(target=fetch_initial_command, name="InitialFetchThread", daemon=True)
                 initial_fetch_thread.start()
                 initial_command_fetch_started = True
-                print("[FIREBASE DEBUG] Initial command fetch started in background thread")
 
             listener_start = time.time()
-            print("[FIREBASE DEBUG] [OK] Firebase Listener Active - Listening for commands and abort requests...")
-            print("[FIREBASE DEBUG] READY! System can now receive missions from app!")
-            print(f"[FIREBASE DEBUG] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
             ref.listen(on_firebase_event)
-            # If listener exits, treat it as a disconnect and apply backoff
-            print(f"[FIREBASE DEBUG] Firebase listener ended after {time.time() - listener_start:.1f}s; reconnecting in {backoff}s...")
-            time.sleep(backoff)
-            backoff = min(backoff * FIREBASE_BACKOFF_MULTIPLIER, FIREBASE_MAX_BACKOFF)
+            print("[FIREBASE] [OK] Firebase Listener Active - Listening for commands and abort requests...")
+            print("[FIREBASE] READY! System can now receive missions from app!")
+            print(f"[FIREBASE] [TIMING] Total Firebase setup time: {time.time() - start_time:.1f}s")
+            
+            # Since listen() returns a registration and runs SSE on background threads,
+            # block this listener setup thread indefinitely to avoid loop re-registration.
+            connection_blocker = threading.Event()
+            connection_blocker.wait()
             
         except Exception as e:
             print(f"[FIREBASE DEBUG] Firebase listener/connection failed: {e}. Retrying in {backoff}s...")
@@ -1042,11 +760,11 @@ def status_publisher_thread():
     Publishes always-on drone state to Firebase every 5s, regardless of mission status.
     The dashboard uses this for remote map updates even when there is no active mission.
     """
-    print("[FIREBASE DEBUG] Waiting for Firebase initialization...")
+    print("[FIREBASE] Waiting for Firebase initialization...")
     while not firebase_initialized:
         time.sleep(2)
     status_ref = db.reference(f'missions/{DRONE_ID}/status')
-    print(f"[FIREBASE DEBUG] [OK] Status publisher started - writing to missions/{DRONE_ID}/status")
+    print(f"[FIREBASE] [OK] Status publisher started - writing to missions/{DRONE_ID}/status")
     while True:
         try:
             current_time = int(time.time() * 1000)
@@ -1058,17 +776,9 @@ def status_publisher_thread():
                 status_payload['telemetry'] = telemetry
 
             status_ref.update(status_payload)
-            readable_time = format_timestamp(current_time)
-            if telemetry is not None:
-                print(
-                    f"[FIREBASE DEBUG] [OK] Status published - last_seen: {current_time} ({readable_time}), "
-                    f"lat={telemetry['lat']:.6f}, lng={telemetry['lng']:.6f}, alt={telemetry['alt']:.1f}m, "
-                    f"batt={telemetry['batteryVoltage']:.2f}V, current={telemetry['current']:.2f}A"
-                )
-            else:
-                print(f"[FIREBASE DEBUG] [OK] Status published - last_seen: {current_time} ({readable_time}), telemetry unavailable")
+            # Silent publisher on success to prevent terminal log spam
         except Exception as e:
-            print(f"[FIREBASE DEBUG] [STATUS] Write failed (no internet?): {e}")
+            print(f"[FIREBASE] [STATUS] Write failed (no internet?): {e}")
         time.sleep(TELEMETRY_INTERVAL_SEC)
 
 
@@ -1318,15 +1028,12 @@ else:
 
 while True:
     try:
-        if args.connect.startswith('udp') or args.connect.startswith('tcp') or args.connect.startswith('192.168.'):
-            vehicle = connect(args.connect)
-        else:
-            vehicle = connect(args.connect, baud=args.baud)
+        vehicle = MavlinkVehicle(args.connect, baud=args.baud)
         break
     except Exception as e:
         print(f"Connection failed: {e}. Retrying in 2s...")
         time.sleep(2)
-print(vehicle, "connected!!!")
+print("Vehicle connected successfully!!!")
 
 @vehicle.on_message('SYS_STATUS')
 def sys_status_battery_listener(self, name, message):
