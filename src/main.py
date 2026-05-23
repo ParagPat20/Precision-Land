@@ -350,11 +350,19 @@ def execute_mission_logic(mission_items, cmd_ref):
             
         cmds = vehicle.commands
         cmds.clear()
+        vehicle.flush()
+        print("[FIREBASE DEBUG] Previous mission cleared from flight controller")
         
         for item in mission_items:
             if abort_requested:
                 print("[ABORT] Abort requested during mission upload. Cancelling...")
                 return False
+            print(
+                f"[FIREBASE DEBUG] Mission item {item.seq}: "
+                f"cmd={item.command_id}, current={item.current}, frame={item.frame}, "
+                f"lat={item.x}, lon={item.y}, alt={item.z}, "
+                f"params=({item.param1}, {item.param2}, {item.param3}, {item.param4})"
+            )
             cmd = Command(
                 0, 0, 0, 
                 item.frame,
@@ -366,14 +374,10 @@ def execute_mission_logic(mission_items, cmd_ref):
             cmds.add(cmd)
             
         cmds.upload()
+        vehicle.commands.next = 0
+        vehicle.flush()
         print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
-        
-        # Reset the mission index pointer to 0 so the new mission starts from the beginning (index 0/1)
-        try:
-            vehicle.commands.next = 0
-            print("[FIREBASE DEBUG] Reset vehicle mission pointer to sequence 0 (first command)")
-        except Exception as e:
-            print(f"[FIREBASE DEBUG] Warning: Could not reset mission pointer: {e}")
+        print("[FIREBASE DEBUG] Mission start index reset to 0 (first item should be NAV_TAKEOFF)")
         
         # Start telemetry loop immediately after mission upload (regardless of arming status)
         # This allows tracking mission progress even before arming

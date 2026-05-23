@@ -220,8 +220,8 @@ class DroneAlarmController(threading.Thread):
         self.takeoff_until = 0.0
         self.buzzer_is_high = False
         self.next_toggle_time = 0.0
+        self.last_buzzer_reason = None
         self.lock = threading.Lock()
-        self.last_logged_reason = None
         
         try:
             import digitalio
@@ -240,12 +240,23 @@ class DroneAlarmController(threading.Thread):
                 DroneLEDController.STATE_ARMED_GROUND
             ]:
                 self.takeoff_until = time.time() + 5.0
+                self._set_buzzer_reason("takeoff: transitioned from ground/disarmed to flying")
             
             # Reset takeoff timer if disarmed
             if new_state == DroneLEDController.STATE_DISARMED:
                 self.takeoff_until = 0.0
+                self._set_buzzer_reason(None)
                 
             self.current_state = new_state
+
+    def _set_buzzer_reason(self, reason):
+        if reason == self.last_buzzer_reason:
+            return
+        self.last_buzzer_reason = reason
+        if reason:
+            print(f"[ALARM] Buzzer active: {reason}")
+        else:
+            print("[ALARM] Buzzer inactive")
 
     def get_state(self):
         with self.lock:
@@ -269,12 +280,9 @@ class DroneAlarmController(threading.Thread):
                 time.sleep(1)
                 continue
 
-            reason = None
-            alt = 0.0
-
             # 1. Crash Alarm (Highest Priority)
             if state == DroneLEDController.STATE_CRASH:
-                reason = "CRASH_ALARM"
+                self._set_buzzer_reason("crash alarm state")
                 cycle_time = 0.3
                 is_high = (now % cycle_time) < 0.2
                 self.buzzer.value = is_high
@@ -284,7 +292,10 @@ class DroneAlarmController(threading.Thread):
 
             # 2. Failsafe Alarms
             elif state in [DroneLEDController.STATE_FAILSAFE, DroneLEDController.STATE_BAT_FAILSAFE]:
-                reason = f"FAILSAFE_ALARM_{state}"
+                if state == DroneLEDController.STATE_BAT_FAILSAFE:
+                    self._set_buzzer_reason("battery failsafe alarm state")
+                else:
+                    self._set_buzzer_reason("failsafe alarm state")
                 cycle_time = 0.4
                 is_high = (now % cycle_time) < 0.1
                 self.buzzer.value = is_high
@@ -294,7 +305,7 @@ class DroneAlarmController(threading.Thread):
 
             # 3. Takeoff Sequence (5 seconds fast beep)
             elif self.takeoff_until > now:
-                reason = "TAKEOFF_SEQUENCE_BEEP"
+                self._set_buzzer_reason("takeoff: 5 second fast beep window")
                 cycle_time = 0.2
                 is_high = (now % cycle_time) < 0.1
                 self.buzzer.value = is_high
@@ -306,7 +317,7 @@ class DroneAlarmController(threading.Thread):
             elif state in [DroneLEDController.STATE_PRECISION_LAND, DroneLEDController.STATE_LAND, DroneLEDController.STATE_RTL]:
                 alt = self.get_altitude()
                 if 0.8 <= alt < 4.0:
-                    reason = f"PROXIMITY_BEEP_{state}"
+                    self._set_buzzer_reason(f"landing/RTL proximity: altitude {alt:.1f}m")
                     if now >= self.next_toggle_time:
                         self.buzzer_is_high = not self.buzzer_is_high
                         if self.buzzer_is_high:
@@ -325,24 +336,15 @@ class DroneAlarmController(threading.Thread):
                     self.buzzer.value = False
                     self.buzzer_is_high = False
                     self.next_toggle_time = 0.0
+                    self._set_buzzer_reason(None)
                     time.sleep(0.1)
                 
             else:
                 self.buzzer.value = False
                 self.buzzer_is_high = False
                 self.next_toggle_time = 0.0
+                self._set_buzzer_reason(None)
                 time.sleep(0.1)
-
-            # Print why the buzzer is buzzing when the reason changes
-            if reason != self.last_logged_reason:
-                if reason:
-                    if "PROXIMITY" in reason:
-                        print(f"[ALARM DEBUG] Buzzer activated: {reason} (Current Alt: {alt:.2f}m)")
-                    else:
-                        print(f"[ALARM DEBUG] Buzzer activated: {reason}")
-                else:
-                    print("[ALARM DEBUG] Buzzer deactivated")
-                self.last_logged_reason = reason
 
     def stop(self):
         self.stop_event.set()

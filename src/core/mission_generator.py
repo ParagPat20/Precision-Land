@@ -35,6 +35,7 @@ class DeliveryTemplate:
     def get_default_template():
         return DeliveryTemplate(
             commands=[
+                TemplateCommand('home', {'location': '{HOME_LOCATION}', 'alt': 0}),
                 TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
                 TemplateCommand('waypoint', {
                     'location': '{DELIVERY_LOCATION}',
@@ -79,6 +80,7 @@ class DeliveryTemplate:
 
         mission_items = []
         seq = 0
+        last_nav_location = home_location
         
         # MAVLink Command Mapping
         CMD_MAP = {
@@ -92,6 +94,15 @@ class DeliveryTemplate:
         }
 
         for cmd in self.commands:
+            # The template keeps "home" as planning metadata only. Uploading it as
+            # MAV_CMD_NAV_WAYPOINT makes ArduPilot execute a fake first waypoint
+            # before TAKEOFF on later missions.
+            if cmd.type == 'home':
+                loc = cmd.params.get('location')
+                if loc == '{HOME_LOCATION}' and home_location:
+                    last_nav_location = home_location
+                continue
+
             command_id = CMD_MAP.get(cmd.type, 16)
             
             # Init params
@@ -117,14 +128,19 @@ class DeliveryTemplate:
             # 2. Map params to MAVLink fields
             # Positional params depends on command type
             
-            if cmd.type in ['waypoint', 'land', 'home']:
+            if cmd.type in ['waypoint', 'land']:
                 loc = temp_params.get('location')
                 if isinstance(loc, LatLng):
                     x = loc.latitude
                     y = loc.longitude
+                    last_nav_location = loc
                 z = float(temp_params.get('alt', 0))
                 
             elif cmd.type == 'takeoff':
+                loc = temp_params.get('location', last_nav_location)
+                if isinstance(loc, LatLng):
+                    x = loc.latitude
+                    y = loc.longitude
                 z = float(temp_params.get('alt', 0))
                 
             elif cmd.type == 'doSetServo':
