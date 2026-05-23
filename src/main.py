@@ -524,6 +524,19 @@ def upload_mission_items_dronekit(mission_items):
     if start_seq != 1:
         raise ValueError("Expected ArduPilot home at seq 0 and TAKEOFF at executable seq 1")
 
+    master = vehicle._master
+    target_system = master.target_system
+    target_component = master.target_component
+
+    print("[FIREBASE DEBUG] Clearing previous mission with MISSION_CLEAR_ALL...")
+    _send_with_optional_mission_type(
+        master.mav.mission_clear_all_send,
+        target_system,
+        target_component,
+    )
+    # brief pause for flight controller to process clear
+    time.sleep(0.5)
+
     cmds = vehicle.commands
     cmds.clear()
     vehicle.flush()
@@ -550,9 +563,17 @@ def upload_mission_items_dronekit(mission_items):
 
     cmds.upload()
     
+    # Force MAVLink MISSION_SET_CURRENT to bypass DroneKit's broken caching on subsequent flights
+    _send_with_optional_mission_type(
+        master.mav.mission_set_current_send,
+        target_system,
+        target_component,
+        start_seq,
+    )
+    # Also update DroneKit's cache so it's aware
     vehicle.commands.next = start_seq
     vehicle.flush()
-    print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq}")
+    print(f"[FIREBASE DEBUG] Mission current index forced via MAVLink to seq {start_seq}")
 
     cmds.download()
     cmds.wait_ready()
