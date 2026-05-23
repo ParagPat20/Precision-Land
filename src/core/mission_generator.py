@@ -35,7 +35,6 @@ class DeliveryTemplate:
     def get_default_template():
         return DeliveryTemplate(
             commands=[
-                TemplateCommand('home', {'location': '{HOME_LOCATION}', 'alt': 0}),
                 TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
                 TemplateCommand('waypoint', {
                     'location': '{DELIVERY_LOCATION}',
