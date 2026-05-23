@@ -16,8 +16,7 @@ import neopixel
 
 # ===================== Configuration =====================
 STRIP_PIN    = board.D13       # GPIO 13 — PWM1
-NUM_LEDS     = 8               # Total LEDs on the strip
-LEDS_PER_EYE = 4               # First 4 = left eye, last 4 = right eye
+NUM_LEDS     = 11              # Total LEDs on the strip (Eyes)
 BRIGHTNESS   = 0.8
 LED_ORDER    = neopixel.GRB    # WS2812B standard
 MODE_DURATION = 5              # Default seconds per mode
@@ -38,14 +37,14 @@ class LEDTester:
             auto_write=False,
             pixel_order=LED_ORDER,
         )
-        print(f"  [OK] GPIO 13 — {NUM_LEDS} LEDs ({LEDS_PER_EYE} per eye)\n")
+        print(f"  [OK] GPIO 13 — {NUM_LEDS} LEDs (Left eye 0..5, Right eye 6..10)\n")
 
     # --------------- Low-level helpers ---------------
 
     def fill_eye(self, eye, color):
-        """Fill one eye: eye 0 = LEDs 0..3, eye 1 = LEDs 4..7."""
-        start = eye * LEDS_PER_EYE
-        for i in range(start, start + LEDS_PER_EYE):
+        """Fill one eye: eye 0 = Left eye (0..5), eye 1 = Right eye (6..10)."""
+        indices = [0, 1, 2, 3, 4, 5] if eye == 0 else [6, 7, 8, 9, 10]
+        for i in indices:
             self.strip[i] = color
 
     def fill_all(self, color):
@@ -91,7 +90,7 @@ class LEDTester:
         banner = (
             "=" * 48 + "\n"
             "  NeoPixel LED Test — Drone Eyes\n"
-            f"  Strip : GPIO 13  |  {NUM_LEDS} LEDs ({LEDS_PER_EYE} per eye)\n"
+            f"  Strip : GPIO 13  |  {NUM_LEDS} LEDs (Left 0..5, Right 6..10)\n"
             f"  Duration: {duration_per_mode}s per mode  |  "
             f"{len(modes)} modes\n"
             "=" * 48

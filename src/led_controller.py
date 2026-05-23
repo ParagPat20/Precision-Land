@@ -8,7 +8,7 @@ S1_PIN         = board.D13    # Left Ring
 S2_PIN         = board.D18    # Right Ring
 S3_PIN         = board.D12    # Eyes
 RING_COUNT     = 8
-EYE_COUNT      = 8            # Total pixels — left 0..3, right 4..7
+EYE_COUNT      = 11           # Total pixels — left 0..5, right 6..10
 LED_BRIGHTNESS = 0.9          # Set to 0.0 to 1.0
 LED_ORDER      = neopixel.GRB  # Standard for WS2812B
 
@@ -59,8 +59,8 @@ class DroneLEDController(threading.Thread):
             self.strips = []
             
         # Segments for Eyes
-        self.eye_left_indices = [0, 1, 2, 3]
-        self.eye_right_indices = [4, 5, 6, 7]
+        self.eye_left_indices = [0, 1, 2, 3, 4, 5]
+        self.eye_right_indices = [6, 7, 8, 9, 10]
 
     def set_state(self, new_state):
         with self.lock:
