@@ -562,21 +562,22 @@ def check_mission(command):
         print("[FIREBASE DEBUG] check_mission called with invalid command (None or not dict)")
         return
 
-    # Deduplicate based on command ID
+    status = command.get('status')
+
+    # Deduplicate based on command ID and Status
     cmd_id = command.get('id')
-    if cmd_id:
+    if cmd_id and status:
+        cache_key = f"{cmd_id}_{status}"
         with processed_mission_lock:
-            if cmd_id in processed_mission_ids:
-                print(f"[FIREBASE DEBUG] Mission {cmd_id} already processed – skipping")
+            if cache_key in processed_mission_ids:
+                print(f"[FIREBASE DEBUG] Command {cache_key} already processed – skipping")
                 return
             # Add to cache and prune if needed
-            processed_mission_ids.add(cmd_id)
+            processed_mission_ids.add(cache_key)
             if len(processed_mission_ids) > MAX_MISSION_CACHE:
                 # Remove oldest entry (convert to list for deterministic removal)
                 oldest = next(iter(processed_mission_ids))
                 processed_mission_ids.remove(oldest)
-
-    status = command.get('status')
     print(f"[FIREBASE DEBUG] check_mission called - Status: {status}")
 
     # Handle abort requests (can come at any time)
