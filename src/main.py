@@ -1612,69 +1612,57 @@ confidence_threshold =20.0  # Minimum confidence percentage to send position dat
 
 print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_threshold}%)")
 
-try:
-    while True:                
-        # Detect marker in current frame
-        if aruco_tracker is None:
-            # Camera disabled/unavailable: keep loop alive for telemetry / other services.
-            marker_found, x_cm, y_cm, z_cm = (False, 0.0, 0.0, 0.0)
-            time.sleep(0.05)
-        else:
-            marker_found, x_cm, y_cm, z_cm = aruco_tracker.track(loop=False)
+while True:                
+    # Detect marker in current frame
+    if aruco_tracker is None:
+        # Camera disabled/unavailable: keep loop alive for telemetry / other services.
+        marker_found, x_cm, y_cm, z_cm = (False, 0.0, 0.0, 0.0)
+        time.sleep(0.05)
+    else:
+        marker_found, x_cm, y_cm, z_cm = aruco_tracker.track(loop=False)
 
-        # If armed, record the latest camera frame without blocking the tracking loop.
-        # The tracker exposes the last frame so we don't open the camera twice.
-        if getattr(vehicle, "armed", False) and video_recorder is not None:
-            try:
-                frame = getattr(aruco_tracker, "last_frame", None)
-                if frame is not None:
-                    video_recorder.submit(frame)
-            except Exception:
-                pass
-        
-        # Update detection buffer
-        if marker_found:
-            # Marker detected - append 1 and update last known position
-            detection_buffer.append(1)
-            x_cm, y_cm = camera_to_uav(x_cm, y_cm)
-            z_cm = max(1.0, float(z_cm))
-            last_known_position = (x_cm, y_cm, z_cm)
-        else:
-            # Marker not detected - append 0, keep last known position
-            detection_buffer.append(0)
-        
-        # Calculate confidence score (percentage of successful detections in buffer)
-        if len(detection_buffer) > 0:
-            confidence_score = (sum(detection_buffer) / len(detection_buffer)) * 100.0
-        else:
-            confidence_score = 0.0
-        
-        # Send position data only if confidence exceeds threshold and we have a valid position
-        if confidence_score >= confidence_threshold and last_known_position is not None:
-            x_cm, y_cm, z_cm = last_known_position
-            angle_x, angle_y = marker_position_to_angle(x_cm, y_cm, z_cm)
-            
-            if time.time() >= time_0 + 1.0/freq_send:
-                time_0 = time.time()
-                status = "DETECTED" if marker_found else "TRACKING"
-                print(f"[{status}] Confidence: {confidence_score:.1f}% | x={x_cm:5.0f}cm y={y_cm:5.0f}cm z={z_cm:5.0f}cm | angles=({angle_x:.3f}, {angle_y:.3f})")
-                # send_land_message(x_m=x_cm*0.01, y_m=y_cm*0.01, z_m=z_cm*0.01)
-                send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
-        else:
-            # Low confidence or no position data - do not send
-            # No print statements to avoid log spam
+    # If armed, record the latest camera frame without blocking the tracking loop.
+    # The tracker exposes the last frame so we don't open the camera twice.
+    if getattr(vehicle, "armed", False) and video_recorder is not None:
+        try:
+            frame = getattr(aruco_tracker, "last_frame", None)
+            if frame is not None:
+                video_recorder.submit(frame)
+        except Exception:
             pass
+    
+    # Update detection buffer
+    if marker_found:
+        # Marker detected - append 1 and update last known position
+        detection_buffer.append(1)
+        x_cm, y_cm = camera_to_uav(x_cm, y_cm)
+        z_cm = max(1.0, float(z_cm))
+        last_known_position = (x_cm, y_cm, z_cm)
+    else:
+        # Marker not detected - append 0, keep last known position
+        detection_buffer.append(0)
+    
+    # Calculate confidence score (percentage of successful detections in buffer)
+    if len(detection_buffer) > 0:
+        confidence_score = (sum(detection_buffer) / len(detection_buffer)) * 100.0
+    else:
+        confidence_score = 0.0
+    
+    # Send position data only if confidence exceeds threshold and we have a valid position
+    if confidence_score >= confidence_threshold and last_known_position is not None:
+        x_cm, y_cm, z_cm = last_known_position
+        angle_x, angle_y = marker_position_to_angle(x_cm, y_cm, z_cm)
         
-        # LED state is now driven by `led_state_updater()` (telemetry-only thread).
-
-except KeyboardInterrupt:
-    print("\n[MAIN] Caught KeyboardInterrupt. Shutting down...")
-finally:
-    if 'led_controller' in globals() and led_controller:
-        led_controller.stop()
-    if 'alarm_controller' in globals() and alarm_controller:
-        alarm_controller.stop()
-    if 'video_recorder' in globals() and video_recorder:
-        video_recorder.stop()
-    print("[MAIN] Graceful shutdown complete.")
+        if time.time() >= time_0 + 1.0/freq_send:
+            time_0 = time.time()
+            status = "DETECTED" if marker_found else "TRACKING"
+            print(f"[{status}] Confidence: {confidence_score:.1f}% | x={x_cm:5.0f}cm y={y_cm:5.0f}cm z={z_cm:5.0f}cm | angles=({angle_x:.3f}, {angle_y:.3f})")
+            # send_land_message(x_m=x_cm*0.01, y_m=y_cm*0.01, z_m=z_cm*0.01)
+            send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
+    else:
+        # Low confidence or no position data - do not send
+        # No print statements to avoid log spam
+        pass
+    
+    # LED state is now driven by `led_state_updater()` (telemetry-only thread).
       
