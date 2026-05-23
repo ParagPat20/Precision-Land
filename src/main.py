@@ -406,6 +406,11 @@ def execute_mission_logic(mission_items, cmd_ref):
             
         print(f"[FIREBASE DEBUG] ARMED Status: {vehicle.armed}")
         
+        # If arming failed, return False so the mission is flagged as FAILED
+        if not vehicle.armed:
+            print("[FIREBASE DEBUG] [ERROR] Arming failed – cancelling mission execution.")
+            return False
+
         # Final check for abort after arming wait
         if abort_requested:
             print("[FIREBASE DEBUG] [ABORT] Abort requested. Switching to RTL...")
@@ -582,23 +587,32 @@ def check_mission(command):
 
     # Handle abort requests (can come at any time)
     if status == 'ABORT_REQUESTED':
-        if not mission_active:
-            print("[FIREBASE DEBUG] [ABORT] Stale or inactive abort request received (no active mission is running). Ignoring.")
+        # Check if the vehicle is armed to allow abort safety overrides
+        is_armed = False
+        try:
+            is_armed = vehicle.armed
+        except Exception as e:
+            print(f"[FIREBASE DEBUG] Could not check vehicle armed state: {e}")
+
+        if not mission_active and not is_armed:
+            print("[FIREBASE DEBUG] [ABORT] Stale or inactive abort request received (no active mission and vehicle is disarmed). Ignoring.")
             return
 
         print("[FIREBASE DEBUG] [ABORT] Abort request received from Firebase!")
         abort_requested = True
         mission_active = False  # Stop sending telemetry immediately
-        # If there's an active mission, update its status
-        if active_mission_ref:
-            try:
-                active_mission_ref.update({
-                    'status': 'ABORTED',
-                    'aborted_at': int(time.time() * 1000)
-                })
-                print("[FIREBASE DEBUG] Updated active mission status to ABORTED")
-            except Exception as e:
-                print(f"[FIREBASE DEBUG] Error updating abort status: {e}")
+        
+        # Update active command status to ABORTED in Firebase
+        ref_to_update = active_mission_ref or db.reference(f'missions/{DRONE_ID}/active_command')
+        try:
+            ref_to_update.update({
+                'status': 'ABORTED',
+                'aborted_at': int(time.time() * 1000)
+            })
+            print("[FIREBASE DEBUG] Updated active mission status to ABORTED")
+        except Exception as e:
+            print(f"[FIREBASE DEBUG] Error updating abort status: {e}")
+
         # Always try to switch to RTL mode (regardless of armed status)
         try:
             print("[FIREBASE DEBUG] [ABORT] Switching vehicle to RTL mode...")
