@@ -28,9 +28,9 @@ ST_ACC = 200
 SC_SPEED = 1500
 
 # Locking Targets
-LOCK_POS_1 = 150
+LOCK_POS_1 = 180
 LOCK_POS_2 = 960
-LOCK_POS_3 = 520
+LOCK_POS_3 = 530
 
 # Unlocking Targets
 UNLOCK_POS_1 = 2000
