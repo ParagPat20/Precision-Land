@@ -368,6 +368,13 @@ def execute_mission_logic(mission_items, cmd_ref):
         cmds.upload()
         print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
         
+        # Reset the mission index pointer to 0 so the new mission starts from the beginning (index 0/1)
+        try:
+            vehicle.commands.next = 0
+            print("[FIREBASE DEBUG] Reset vehicle mission pointer to sequence 0 (first command)")
+        except Exception as e:
+            print(f"[FIREBASE DEBUG] Warning: Could not reset mission pointer: {e}")
+        
         # Start telemetry loop immediately after mission upload (regardless of arming status)
         # This allows tracking mission progress even before arming
         print("[FIREBASE DEBUG] Starting telemetry transmission to Firebase...")
