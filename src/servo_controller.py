@@ -37,6 +37,13 @@ UNLOCK_POS_1 = 2000
 UNLOCK_POS_2 = 790
 UNLOCK_POS_3 = 700
 UNLOCK_CHECK_3 = 680  # Threshold check for ID 3
+
+# Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers
+SERVO_LIMITS = {
+    1: (150, 2000),  # Servo 1 (ST)
+    2: (790, 960),   # Servo 2 (SC)
+    3: (520, 700)    # Servo 3 (SC)
+}
 # --------------------------------------------------------
 
 
@@ -514,6 +521,13 @@ class ServoController:
         self.servo6_raw = getattr(message, 'servo6_raw', 0)
         self.last_servo6_raw_rx_time = time.time()
 
+    def _clamp_wiggle(self, sid, target, wiggle_dir):
+        limits = SERVO_LIMITS.get(sid)
+        if not limits:
+            return target + (100 * wiggle_dir)
+        wiggle_target = target + (100 * wiggle_dir)
+        return max(limits[0], min(limits[1], wiggle_target))
+
     def robust_move_st_single(self, sid, target, speed, acc, timeout=10.0):
         print(f"[SERVO] Moving Servo {sid} to {target} (timeout {timeout}s)...")
         start_time = time.time()
@@ -554,7 +568,7 @@ class ServoController:
                 if abs(pos - last_pos) < 3:
                     stuck_count += 1
                     if stuck_count >= 2:
-                        wiggle_target = target + (100 * wiggle_dir)
+                        wiggle_target = self._clamp_wiggle(sid, target, wiggle_dir)
                         print(f"  [ID {sid}] JAM DETECTED! Jiggling target to {wiggle_target} to build momentum...")
                         with self._io_lock:
                             self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
@@ -609,7 +623,7 @@ class ServoController:
                 if abs(pos - last_pos) < 3:
                     stuck_count += 1
                     if stuck_count >= 2:
-                        wiggle_target = target + (100 * wiggle_dir)
+                        wiggle_target = self._clamp_wiggle(sid, target, wiggle_dir)
                         print(f"  [ID {sid}] JAM DETECTED! Jiggling target to {wiggle_target} to build momentum...")
                         with self._io_lock:
                             self._write1(sid, SCSCL_TORQUE_ENABLE, 1, "enable torque")
@@ -675,7 +689,7 @@ class ServoController:
                         if abs(pos2 - last_pos2) < 3:
                             stuck_count2 += 1
                             if stuck_count2 >= 3:
-                                wiggle_target = target2 + (100 * wiggle_dir2)
+                                wiggle_target = self._clamp_wiggle(sid2, target2, wiggle_dir2)
                                 print(f"  [ID {sid2}] JAM DETECTED! Jiggling target to {wiggle_target} to build momentum...")
                                 with self._io_lock:
                                     self._write1(sid2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
@@ -722,7 +736,7 @@ class ServoController:
                         if abs(pos3 - last_pos3) < 3:
                             stuck_count3 += 1
                             if stuck_count3 >= 3:
-                                wiggle_target = target3 + (100 * wiggle_dir3)
+                                wiggle_target = self._clamp_wiggle(sid3, target3, wiggle_dir3)
                                 print(f"  [ID {sid3}] JAM DETECTED! Jiggling target to {wiggle_target} to build momentum...")
                                 with self._io_lock:
                                     self._write1(sid3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
