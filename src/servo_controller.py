@@ -566,9 +566,64 @@ class ServoController:
                 last_pos = pos
             else:
                 print(f"  [ID {sid}] Failed to read position (possibly resetting)...")
+        print(f"  -> Timeout reached for Servo {sid}! Did not reach {target}.")
+        return False
+
+    def robust_move_sc_single(self, sid, target, speed, timeout=10.0):
+        print(f"[SERVO] Moving SC Servo {sid} to {target} (timeout {timeout}s)...")
+        start_time = time.time()
+        
+        with self._io_lock:
+            self._write1(sid, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+            self.scsHandler.WritePos(sid, target, 0, speed)
+        
+        last_pos = -1
+        start_pos = None
+        stuck_count = 0
+        wiggle_dir = 1
+        
+        while time.time() - start_time < timeout:
+            time.sleep(0.3)
+            
+            with self._io_lock:
+                pos, res, error = self.scsHandler.ReadPos(sid)
+            
+            if res == COMM_SUCCESS:
+                if start_pos is None:
+                    start_pos = pos
+                print(f"  [ID {sid}] Current Pos: {pos} | Target: {target} (Start: {start_pos})")
+                
+                is_reached = False
+                if start_pos is not None:
+                    if target < start_pos:
+                        is_reached = (pos <= target + 15)
+                    else:
+                        is_reached = (pos >= target - 15)
+                else:
+                    is_reached = (abs(pos - target) <= 15)
+                    
+                if is_reached:
+                    print(f"  -> SC Servo {sid} reached target!")
+                    return True
+                    
+                if abs(pos - last_pos) < 3:
+                    stuck_count += 1
+                    if stuck_count >= 2:
+                        wiggle_target = target + (100 * wiggle_dir)
+                        print(f"  [ID {sid}] JAM DETECTED! Jiggling target to {wiggle_target} to build momentum...")
+                        with self._io_lock:
+                            self._write1(sid, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(sid, int(wiggle_target), 0, speed)
+                        wiggle_dir *= -1
+                        stuck_count = 0
+                else:
+                    stuck_count = 0
+                last_pos = pos
+            else:
+                print(f"  [ID {sid}] Failed to read position (possibly resetting)...")
                 stuck_count = 5 # Force resend next successful read
                 
-        print(f"  -> Timeout reached for Servo {sid}! Did not reach {target}.")
+        print(f"  -> Timeout reached for SC Servo {sid}! Did not reach {target}.")
         return False
 
     def robust_move_sc_pair(self, sid2, target2, sid3, target3, speed, timeout=15.0, check_target3=None, check_dir3='>='):
@@ -711,11 +766,15 @@ class ServoController:
         self.sequence_active = True
         try:
             print("\n--- STARTING NATIVE UNLOCKING SEQUENCE ---")
-            print(f"Step 1: Servo 2 & 3 (SC) -> {UNLOCK_POS_2} & {UNLOCK_POS_3} (Checking if >= {UNLOCK_CHECK_3})")
-            self.robust_move_sc_pair(2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='>=')
+            print(f"Step 1: Servo 3 (SC) -> {UNLOCK_POS_3}")
+            self.robust_move_sc_single(3, UNLOCK_POS_3, SC_SPEED)
             
-            print(f"\nStep 2: Servo 1 (ST) -> {UNLOCK_POS_1}")
+            print(f"\nStep 2: Servo 2 (SC) -> {UNLOCK_POS_2}")
+            self.robust_move_sc_single(2, UNLOCK_POS_2, SC_SPEED)
+            
+            print(f"\nStep 3: Servo 1 (ST) -> {UNLOCK_POS_1}")
             self.robust_move_st_single(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
+            
             print("\nUnlocking sequence complete!")
             self.last_state = 'unlock'
         except Exception as e:
