@@ -20,6 +20,18 @@ YELLOW  = (255, 255, 0)
 PURPLE  = (128, 0, 128)
 OFF     = (0, 0, 0)
 
+def wheel(pos):
+    """Input a value 0 to 255 to get a color value. The colours are a transition r - g - b - back to r."""
+    if pos < 0 or pos > 255:
+        return (0, 0, 0)
+    if pos < 85:
+        return (255 - pos * 3, pos * 3, 0)
+    if pos < 170:
+        pos -= 85
+        return (0, 255 - pos * 3, pos * 3)
+    pos -= 170
+    return (pos * 3, 0, 255 - pos * 3)
+
 class DroneLEDController(threading.Thread):
     # States
     STATE_DISARMED       = "DISARMED"
@@ -122,16 +134,24 @@ class DroneLEDController(threading.Thread):
                 self.clear_all()
             
             if state == self.STATE_DISARMED:
-                # Breathing BLUE on everything
+                # Breathing BLUE on left and right rings
                 breathe_phase = (now % 2.0) / 2.0
-                color = self._get_breathe_color(BLUE, breathe_phase)
+                ring_color = self._get_breathe_color(BLUE, breathe_phase)
                 with self.strip_lock:
-                    for strip in self.strips:
-                        if strip:
-                            strip.fill(color)
-                    for strip in self.strips:
-                        if strip:
-                            strip.show()
+                    if self.left_ring:
+                        self.left_ring.fill(ring_color)
+                    if self.right_ring:
+                        self.right_ring.fill(ring_color)
+                    
+                    # Multi Sprinkling Color / Rainbow type on Front Eyes (Eyes strip)
+                    if self.eyes:
+                        for i in range(EYE_COUNT):
+                            color_val = int((i * (256 / EYE_COUNT)) + (now * 128)) % 256
+                            self.eyes[i] = wheel(color_val)
+                    
+                    if self.left_ring: self.left_ring.show()
+                    if self.right_ring: self.right_ring.show()
+                    if self.eyes: self.eyes.show()
                 time.sleep(0.05)
 
             elif state in [self.STATE_ARMED_GROUND, self.STATE_FLYING]:
