@@ -159,6 +159,7 @@ class DeliveryTemplate:
                     continue
                 p1 = 1.0
                 p2 = speed
+                p3 = -1.0 # -1 indicates no change to throttle. 0.0 would kill the motors!
 
             # Create Item
             item = MissionItem(
