@@ -512,6 +512,78 @@ def verify_uploaded_mission_int(expected_count, expected_start_seq):
 
     return stored
 
+def upload_mission_items_dronekit(mission_items):
+    """
+    Upload through DroneKit, keeping ArduPilot's hidden seq 0 home slot.
+
+    ArduPilot consumes seq 0 as home, so the first executable mission item must
+    be seq 1 TAKEOFF. With that layout, Mission Planner displays TAKEOFF first
+    while the FC still has the home location it requires.
+    """
+    start_seq = _mission_start_seq(mission_items)
+    if start_seq != 1:
+        raise ValueError("Expected ArduPilot home at seq 0 and TAKEOFF at executable seq 1")
+
+    cmds = vehicle.commands
+    cmds.clear()
+    vehicle.flush()
+    print("[FIREBASE DEBUG] Previous mission cleared from flight controller")
+
+    for item in mission_items:
+        cmd = Command(
+            0, 0, 0,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
+            if item.frame == mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+            else item.frame,
+            item.command_id,
+            item.current,
+            item.autocontinue,
+            item.param1,
+            item.param2,
+            item.param3,
+            item.param4,
+            item.x,
+            item.y,
+            item.z,
+        )
+        cmds.add(cmd)
+
+    cmds.upload()
+    vehicle.commands.next = start_seq
+    vehicle.flush()
+    print(f"[FIREBASE DEBUG] Mission current index set to executable seq {start_seq}")
+
+    cmds.download()
+    cmds.wait_ready()
+    stored_mission = list(cmds)
+    print("[FIREBASE DEBUG] Mission downloaded after upload:")
+    for idx, cmd in enumerate(stored_mission):
+        print(
+            f"[FIREBASE DEBUG] Downloaded item {idx}: "
+            f"cmd={cmd.command}, frame={cmd.frame}, current={cmd.current}, "
+            f"lat={cmd.x}, lon={cmd.y}, alt={cmd.z}"
+        )
+
+    if not stored_mission:
+        raise RuntimeError("Flight controller returned an empty mission after upload")
+    first_downloaded = stored_mission[0].command
+    if first_downloaded == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+        print("[FIREBASE DEBUG] Downloaded mission displays TAKEOFF first")
+    elif (
+        first_downloaded == mavutil.mavlink.MAV_CMD_NAV_WAYPOINT
+        and len(stored_mission) > 1
+        and stored_mission[1].command == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF
+    ):
+        print("[FIREBASE DEBUG] First downloaded item is home slot; executable TAKEOFF is seq 1")
+    else:
+        second = stored_mission[1].command if len(stored_mission) > 1 else "MISSING"
+        raise RuntimeError(
+            f"Downloaded mission does not start with executable TAKEOFF: "
+            f"first={first_downloaded}, second={second}"
+        )
+
+    return stored_mission
+
 def execute_mission_logic(mission_items, cmd_ref):
     """
     Executes the mission logic: uploads mission, sets mode, arms, and starts telemetry.
@@ -536,7 +608,7 @@ def execute_mission_logic(mission_items, cmd_ref):
                 f"params=({item.param1}, {item.param2}, {item.param3}, {item.param4})"
             )
 
-        upload_mission_items_int(mission_items)
+        upload_mission_items_dronekit(mission_items)
         print(f"[FIREBASE DEBUG] Mission of {len(mission_items)} items Uploaded!")
         print("[FIREBASE DEBUG] Verified FC executable mission starts with NAV_TAKEOFF")
         
