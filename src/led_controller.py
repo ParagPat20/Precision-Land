@@ -4,7 +4,7 @@ import board
 import neopixel
 
 # LED strip configuration
-S1_PIN         = board.D13    # Left Ring
+S1_PIN         = board.D10    # Left Ring (SPI MOSI - GPIO 10)
 S2_PIN         = board.D18    # Right Ring
 S3_PIN         = board.D12    # Eyes
 RING_COUNT     = 8
