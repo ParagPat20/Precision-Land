@@ -145,11 +145,10 @@ class DroneLEDController(threading.Thread):
                     if self.right_ring:
                         self.right_ring.fill(ring_color)
                     
-                    # Multi Sprinkling Color / Rainbow type on Front Eyes and Sides (first 15 pixels)
+                    # Breathing BLUE on Front Eyes and Sides (first 15 pixels)
                     if self.eyes:
                         for i in range(15):
-                            color_val = int((i * (256 / 15)) + (now * 128)) % 256
-                            self.eyes[i] = wheel(color_val)
+                            self.eyes[i] = ring_color
                         
                         # Box LEDs breathe White
                         box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
@@ -256,6 +255,28 @@ class DroneLEDController(threading.Thread):
                         box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
                         for i in range(15, 21):
                             self.eyes[i] = box_breathe
+                    if self.left_ring: self.left_ring.show()
+                    if self.right_ring: self.right_ring.show()
+                    if self.eyes: self.eyes.show()
+                time.sleep(0.05)
+
+            elif state == self.STATE_CRASH:
+                # Solid RED on all (Crash indicator)
+                breathe_phase = (now % 2.0) / 2.0
+                with self.strip_lock:
+                    if self.left_ring: self.left_ring.fill(RED)
+                    if self.right_ring: self.right_ring.fill(RED)
+                    if self.eyes:
+                        # Eyes & Sides solid RED
+                        for i in range(15):
+                            self.eyes[i] = RED
+                        # Box LEDs breathe White
+                        box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
+                        for i in range(15, 21):
+                            self.eyes[i] = box_breathe
+                    if self.left_ring: self.left_ring.show()
+                    if self.right_ring: self.right_ring.show()
+                    if self.eyes: self.eyes.show()
                 time.sleep(0.05)
             
             else:
