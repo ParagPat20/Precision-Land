@@ -208,14 +208,17 @@ class MavlinkVehicle:
     def set_mode(self, mode_name, timeout=5.0):
         """Switch vehicle mode via PyMAVLink."""
         mode_name = mode_name.upper()
-        mode_map = self._master.mode_mapping()
-        if mode_name in mode_map:
-            mode_id = mode_map[mode_name]
+        
+        # Try to find the mode ID in COPTER_MODE_MAP first since this is a Copter
+        mode_id = next((k for k, v in COPTER_MODE_MAP.items() if v == mode_name), None)
+        if mode_id is not None:
             self._master.set_mode(mode_id)
             print(f"[MAVLINK VEHICLE] Mode switch command sent: {mode_name} ({mode_id})")
         else:
-            mode_id = next((k for k, v in COPTER_MODE_MAP.items() if v == mode_name), None)
-            if mode_id is not None:
+            # Fall back to self._master.mode_mapping()
+            mode_map = self._master.mode_mapping()
+            if mode_name in mode_map:
+                mode_id = mode_map[mode_name]
                 self._master.set_mode(mode_id)
                 print(f"[MAVLINK VEHICLE] Mode switch command sent via fallback: {mode_name} ({mode_id})")
             else:
@@ -390,9 +393,11 @@ class MavlinkVehicle:
 
     def _update_mode_from_heartbeat(self, msg):
         custom_mode = msg.custom_mode
-        mode_name = self._mode_map_rev.get(custom_mode)
+        # First, try to look up in the COPTER_MODE_MAP since this is a copter system
+        mode_name = COPTER_MODE_MAP.get(custom_mode)
         if not mode_name:
-            mode_name = COPTER_MODE_MAP.get(custom_mode, "UNKNOWN")
+            # Fall back to the active MAVLink connection mode mapping
+            mode_name = self._mode_map_rev.get(custom_mode, "UNKNOWN")
         
         old_mode_name = self._mode.name
         if mode_name != old_mode_name:

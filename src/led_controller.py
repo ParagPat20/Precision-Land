@@ -8,7 +8,7 @@ S1_PIN         = board.D13    # Left Ring
 S2_PIN         = board.D18    # Right Ring
 S3_PIN         = board.D12    # Eyes
 RING_COUNT     = 8
-EYE_COUNT      = 11           # Total pixels — left 0..5, right 6..10
+EYE_COUNT      = 21           # Total pixels: 11 (Eyes) + 4 (Sides) + 6 (Box)
 LED_BRIGHTNESS = 0.9          # Set to 0.0 to 1.0
 LED_ORDER      = neopixel.GRB  # Standard for WS2812B
 
@@ -70,9 +70,11 @@ class DroneLEDController(threading.Thread):
             self.left_ring = self.right_ring = self.eyes = None
             self.strips = []
             
-        # Segments for Eyes
+        # Segments for Eyes and Sides
         self.eye_left_indices = [0, 1, 2, 3, 4, 5]
         self.eye_right_indices = [6, 7, 8, 9, 10]
+        self.sides_indices = [11, 12, 13, 14]
+        self.box_indices = [15, 16, 17, 18, 19, 20]
 
     def set_state(self, new_state):
         with self.lock:
@@ -143,11 +145,16 @@ class DroneLEDController(threading.Thread):
                     if self.right_ring:
                         self.right_ring.fill(ring_color)
                     
-                    # Multi Sprinkling Color / Rainbow type on Front Eyes (Eyes strip)
+                    # Multi Sprinkling Color / Rainbow type on Front Eyes and Sides (first 15 pixels)
                     if self.eyes:
-                        for i in range(EYE_COUNT):
-                            color_val = int((i * (256 / EYE_COUNT)) + (now * 128)) % 256
+                        for i in range(15):
+                            color_val = int((i * (256 / 15)) + (now * 128)) % 256
                             self.eyes[i] = wheel(color_val)
+                        
+                        # Box LEDs breathe White
+                        box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
+                        for i in range(15, 21):
+                            self.eyes[i] = box_breathe
                     
                     if self.left_ring: self.left_ring.show()
                     if self.right_ring: self.right_ring.show()
@@ -157,16 +164,28 @@ class DroneLEDController(threading.Thread):
             elif state in [self.STATE_ARMED_GROUND, self.STATE_FLYING]:
                 # Flash Red (Left) and Green (Right) - 2Hz (0.5s cycle)
                 is_on = (now % 0.5) < 0.25
+                breathe_phase = (now % 2.0) / 2.0
                 with self.strip_lock:
                     if is_on:
                         if self.left_ring: self.left_ring.fill(RED)
                         if self.right_ring: self.right_ring.fill(GREEN)
-                        # Eyes: Keeping purple as flight indicator
-                        if self.eyes: self.eyes.fill(PURPLE)
+                        # Eyes & Sides: Keeping purple as flight indicator
+                        if self.eyes:
+                            for i in range(15):
+                                self.eyes[i] = PURPLE
                     else:
                         if self.left_ring: self.left_ring.fill(OFF)
                         if self.right_ring: self.right_ring.fill(OFF)
-                        if self.eyes: self.eyes.fill(OFF)
+                        if self.eyes:
+                            for i in range(15):
+                                self.eyes[i] = OFF
+                    
+                    # Box LEDs breathe White
+                    if self.eyes:
+                        box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
+                        for i in range(15, 21):
+                            self.eyes[i] = box_breathe
+                            
                     if self.left_ring: self.left_ring.show()
                     if self.right_ring: self.right_ring.show()
                     if self.eyes: self.eyes.show()
@@ -176,6 +195,7 @@ class DroneLEDController(threading.Thread):
                 # Chaser Red (Left) and Green (Right)
                 # 8 LEDs, cycle every 0.8s
                 chaser_idx = int((now % 0.8) / 0.1) % 8
+                breathe_phase = (now % 2.0) / 2.0
                 
                 with self.strip_lock:
                     if self.left_ring:
@@ -185,8 +205,14 @@ class DroneLEDController(threading.Thread):
                         self.right_ring.fill(OFF)
                         self.right_ring[chaser_idx] = GREEN
                     if self.eyes:
-                        # Steady yellow for landing/RTL indicators
-                        self.eyes.fill(YELLOW)
+                        # Steady yellow for landing/RTL indicators on Eyes & Sides
+                        for i in range(15):
+                            self.eyes[i] = YELLOW
+                        # Box LEDs breathe White
+                        box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
+                        for i in range(15, 21):
+                            self.eyes[i] = box_breathe
+                            
                     if self.left_ring: self.left_ring.show()
                     if self.right_ring: self.right_ring.show()
                     if self.eyes: self.eyes.show()
@@ -196,26 +222,40 @@ class DroneLEDController(threading.Thread):
                 # Fast Flash RED on all - 5Hz
                 is_on = (now % 0.2) < 0.1
                 color = RED if is_on else OFF
+                breathe_phase = (now % 2.0) / 2.0
                 with self.strip_lock:
-                    for strip in self.strips:
-                        if strip:
-                            strip.fill(color)
-                    for strip in self.strips:
-                        if strip:
-                            strip.show()
+                    if self.left_ring: self.left_ring.fill(color)
+                    if self.right_ring: self.right_ring.fill(color)
+                    if self.eyes:
+                        # Eyes & Sides flash RED
+                        for i in range(15):
+                            self.eyes[i] = color
+                        # Box LEDs breathe White
+                        box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
+                        for i in range(15, 21):
+                            self.eyes[i] = box_breathe
+                            
+                    if self.left_ring: self.left_ring.show()
+                    if self.right_ring: self.right_ring.show()
+                    if self.eyes: self.eyes.show()
                 time.sleep(0.02)
 
             elif state == self.STATE_BAT_FAILSAFE:
                 # Oscillate Red/Blue quickly
                 is_red = (now % 0.4) < 0.2
                 color = RED if is_red else BLUE
+                breathe_phase = (now % 2.0) / 2.0
                 with self.strip_lock:
-                    for strip in self.strips:
-                        if strip:
-                            strip.fill(color)
-                    for strip in self.strips:
-                        if strip:
-                            strip.show()
+                    if self.left_ring: self.left_ring.fill(color)
+                    if self.right_ring: self.right_ring.fill(color)
+                    if self.eyes:
+                        # Eyes & Sides oscillate Red/Blue
+                        for i in range(15):
+                            self.eyes[i] = color
+                        # Box LEDs breathe White
+                        box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
+                        for i in range(15, 21):
+                            self.eyes[i] = box_breathe
                 time.sleep(0.05)
             
             else:
