@@ -293,6 +293,7 @@ class DroneAlarmController(threading.Thread):
         self.next_toggle_time = 0.0
         self.last_buzzer_reason = None
         self.lock = threading.Lock()
+        self.failsafe_start_time = 0.0
         
         try:
             import digitalio
@@ -317,6 +318,10 @@ class DroneAlarmController(threading.Thread):
             if new_state == DroneLEDController.STATE_DISARMED:
                 self.takeoff_until = 0.0
                 self._set_buzzer_reason(None)
+                
+            # If entering a failsafe state, record start time for a 10s maximum beeping cap
+            if new_state in [DroneLEDController.STATE_FAILSAFE, DroneLEDController.STATE_BAT_FAILSAFE] and self.current_state not in [DroneLEDController.STATE_FAILSAFE, DroneLEDController.STATE_BAT_FAILSAFE]:
+                self.failsafe_start_time = time.time()
                 
             self.current_state = new_state
 
@@ -361,18 +366,25 @@ class DroneAlarmController(threading.Thread):
                 self.next_toggle_time = 0.0
                 time.sleep(0.05)
 
-            # 2. Failsafe Alarms
+            # 2. Failsafe Alarms (capped at 10 seconds per event)
             elif state in [DroneLEDController.STATE_FAILSAFE, DroneLEDController.STATE_BAT_FAILSAFE]:
-                if state == DroneLEDController.STATE_BAT_FAILSAFE:
-                    self._set_buzzer_reason("battery failsafe alarm state")
+                failsafe_elapsed = now - self.failsafe_start_time
+                if failsafe_elapsed < 10.0:
+                    if state == DroneLEDController.STATE_BAT_FAILSAFE:
+                        self._set_buzzer_reason(f"battery failsafe alarm state (active: {failsafe_elapsed:.1f}s/10s)")
+                    else:
+                        self._set_buzzer_reason(f"failsafe alarm state (active: {failsafe_elapsed:.1f}s/10s)")
+                    cycle_time = 0.4
+                    is_high = (now % cycle_time) < 0.1
+                    self.buzzer.value = is_high
+                    self.buzzer_is_high = is_high
+                    self.next_toggle_time = 0.0
+                    time.sleep(0.05)
                 else:
-                    self._set_buzzer_reason("failsafe alarm state")
-                cycle_time = 0.4
-                is_high = (now % cycle_time) < 0.1
-                self.buzzer.value = is_high
-                self.buzzer_is_high = is_high
-                self.next_toggle_time = 0.0
-                time.sleep(0.05)
+                    self.buzzer.value = False
+                    self.buzzer_is_high = False
+                    self._set_buzzer_reason(f"failsafe alarm state - beeping timed out after {failsafe_elapsed:.1f}s")
+                    time.sleep(0.1)
 
             # 3. Takeoff Sequence (5 seconds fast beep)
             elif self.takeoff_until > now:

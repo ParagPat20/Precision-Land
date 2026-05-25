@@ -1211,14 +1211,26 @@ def listener(self, name, message):
     global battery_failsafe_active, other_failsafe_active, crash_detected
     text = message.text.upper()
     if "CRASH" in text:
-        crash_detected = True
-        print(f"[ALARM] CRASH Detected: {text}")
+        if "CLEARED" in text or "RECOVER" in text or "RESOLVED" in text:
+            crash_detected = False
+            print(f"[ALARM] CRASH Cleared: {text}")
+        else:
+            crash_detected = True
+            print(f"[ALARM] CRASH Detected: {text}")
     elif "BATTERY" in text and "FAILSAFE" in text:
-        battery_failsafe_active = True
-        print("[LED] Battery Failsafe Detected!")
+        if "CLEARED" in text or "RECOVER" in text or "RESOLVED" in text:
+            battery_failsafe_active = False
+            print(f"[LED] Battery Failsafe Cleared: {text}")
+        else:
+            battery_failsafe_active = True
+            print("[LED] Battery Failsafe Detected!")
     elif "FAILSAFE" in text:
-        other_failsafe_active = True
-        print(f"[LED] Failsafe Detected: {text}")
+        if "CLEARED" in text or "RECOVER" in text or "RESOLVED" in text:
+            other_failsafe_active = False
+            print(f"[LED] Failsafe Cleared: {text}")
+        else:
+            other_failsafe_active = True
+            print(f"[LED] Failsafe Detected: {text}")
 
 @vehicle.on_attribute('armed')
 def armed_listener(self, attr_name, value):
