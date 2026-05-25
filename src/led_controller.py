@@ -371,9 +371,9 @@ class DroneAlarmController(threading.Thread):
                 failsafe_elapsed = now - self.failsafe_start_time
                 if failsafe_elapsed < 10.0:
                     if state == DroneLEDController.STATE_BAT_FAILSAFE:
-                        self._set_buzzer_reason(f"battery failsafe alarm state (active: {failsafe_elapsed:.1f}s/10s)")
+                        self._set_buzzer_reason("battery failsafe alarm active")
                     else:
-                        self._set_buzzer_reason(f"failsafe alarm state (active: {failsafe_elapsed:.1f}s/10s)")
+                        self._set_buzzer_reason("failsafe alarm active")
                     cycle_time = 0.4
                     is_high = (now % cycle_time) < 0.1
                     self.buzzer.value = is_high
@@ -383,7 +383,7 @@ class DroneAlarmController(threading.Thread):
                 else:
                     self.buzzer.value = False
                     self.buzzer_is_high = False
-                    self._set_buzzer_reason(f"failsafe alarm state - beeping timed out after {failsafe_elapsed:.1f}s")
+                    self._set_buzzer_reason("failsafe alarm - beeping timed out (10s reached)")
                     time.sleep(0.1)
 
             # 3. Takeoff Sequence (5 seconds fast beep)
