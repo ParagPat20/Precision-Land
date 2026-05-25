@@ -228,6 +228,9 @@ class ArucoSingleTracker():
                 ret, frame = self._cap.read()
 
             if not ret or frame is None:
+                if not loop:
+                    return (False, 0.0, 0.0, 0.0)
+                time.sleep(0.01)  # Avoid high-CPU busy loop on capture error
                 continue
 
             # Expose the most recent frame to callers (copy to avoid accidental mutation).

@@ -674,7 +674,7 @@ def check_mission(command):
         mission_active = False
         sender = command.get('sender_email', 'Unknown')
         print(f"[FIREBASE] Received PENDING Mission from {sender} (ID: {cmd_id})")
-        t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread")
+        t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread", daemon=True)
         t.start()
         print(f"[FIREBASE] Mission thread started: {t.name}")
         return
@@ -1039,6 +1039,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--connect', default = 'udpout:192.168.144.14:14551', help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0. Overridden to UDP by default.")
 parser.add_argument('--baud', type=int, default=int(os.environ.get("JECH_MAVLINK_BAUD", "921600")), help="Vehicle serial baud rate. Default: %(default)s")
 parser.add_argument('--servo-port', default=None, help="Serial port for ST3215 and SC09 servos. Defaults to JECH_SERVO_PORT, then auto-detects common RPi serial devices.")
+parser.add_argument('--show-video', action='store_true', help="Display the camera window (OpenCV window). Defaults to False (headless).")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
 
@@ -1386,7 +1387,7 @@ try:
     aruco_tracker = ArucoSingleTracker(
         id_to_find=id_to_find,
         marker_size=marker_size,
-        show_video=True,
+        show_video=args.show_video,
         axis_scale=0.01,
         camera_matrix=camera_matrix,
         camera_distortion=camera_distortion,
