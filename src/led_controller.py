@@ -136,14 +136,24 @@ class DroneLEDController(threading.Thread):
                 self.clear_all()
             
             if state == self.STATE_DISARMED:
-                # Breathing BLUE on left and right rings
+                # Breathing BLUE on left and right rings (only indices 0, 1, 6, 7)
+                # Indices 2, 3, 4, 5 are constant 50% White
                 breathe_phase = (now % 2.0) / 2.0
                 ring_color = self._get_breathe_color(BLUE, breathe_phase)
+                dim_white = (127, 127, 127)
+                
                 with self.strip_lock:
                     if self.left_ring:
-                        self.left_ring.fill(ring_color)
+                        for i in [0, 1, 6, 7]:
+                            self.left_ring[i] = ring_color
+                        for i in [2, 3, 4, 5]:
+                            self.left_ring[i] = dim_white
+                            
                     if self.right_ring:
-                        self.right_ring.fill(ring_color)
+                        for i in [0, 1, 6, 7]:
+                            self.right_ring[i] = ring_color
+                        for i in [2, 3, 4, 5]:
+                            self.right_ring[i] = dim_white
                     
                     if self.eyes:
                         # Breathing BLUE on Front Eyes (first 11 pixels)
@@ -166,23 +176,32 @@ class DroneLEDController(threading.Thread):
                 time.sleep(0.05)
 
             elif state in [self.STATE_ARMED_GROUND, self.STATE_FLYING]:
-                # Flash Red (Left) and Green (Right) - 2Hz (0.5s cycle)
+                # Flash Red (Left) and Green (Right) on indices 0, 1, 6, 7 - 2Hz (0.5s cycle)
+                # Indices 2, 3, 4, 5 are constant 50% White
                 is_on = (now % 0.5) < 0.25
                 breathe_phase = (now % 2.0) / 2.0
+                dim_white = (127, 127, 127)
+                flash_left = RED if is_on else OFF
+                flash_right = GREEN if is_on else OFF
+                
                 with self.strip_lock:
-                    if is_on:
-                        if self.left_ring: self.left_ring.fill(RED)
-                        if self.right_ring: self.right_ring.fill(GREEN)
-                        # Eyes & Sides: Keeping purple as flight indicator
-                        if self.eyes:
-                            for i in range(15):
-                                self.eyes[i] = PURPLE
-                    else:
-                        if self.left_ring: self.left_ring.fill(OFF)
-                        if self.right_ring: self.right_ring.fill(OFF)
-                        if self.eyes:
-                            for i in range(15):
-                                self.eyes[i] = OFF
+                    if self.left_ring:
+                        for i in [0, 1, 6, 7]:
+                            self.left_ring[i] = flash_left
+                        for i in [2, 3, 4, 5]:
+                            self.left_ring[i] = dim_white
+                            
+                    if self.right_ring:
+                        for i in [0, 1, 6, 7]:
+                            self.right_ring[i] = flash_right
+                        for i in [2, 3, 4, 5]:
+                            self.right_ring[i] = dim_white
+                            
+                    # Eyes & Sides: Keeping purple as flight indicator (flashing with flash rate)
+                    if self.eyes:
+                        eyes_color = PURPLE if is_on else OFF
+                        for i in range(15):
+                            self.eyes[i] = eyes_color
                     
                     # Box LEDs breathe White
                     if self.eyes:
