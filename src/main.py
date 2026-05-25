@@ -241,8 +241,6 @@ class ArmedVideoRecorder:
 def build_telemetry_payload():
     """Build the latest telemetry snapshot for Firebase consumers."""
     loc = vehicle.location.global_relative_frame
-    if loc is None or loc.lat is None or loc.lon is None:
-        return None
 
     # Safe extraction of battery data
     batt_voltage = latest_battery_voltage
@@ -256,16 +254,27 @@ def build_telemetry_payload():
         if vehicle.battery.level is not None:
             batt_remaining = int(vehicle.battery.level)
 
-    return {
-        'lat': loc.lat,
-        'lng': loc.lon,
-        'alt': float(loc.alt) if loc.alt is not None else 0.0,
+    payload = {
         'heading': float(vehicle.heading) if vehicle.heading is not None else 0.0,
         'mode': vehicle.mode.name if vehicle.mode is not None else 'UNKNOWN',
         'batteryVoltage': batt_voltage,
         'current': batt_cur,
         'updated_at': int(time.time() * 1000)
     }
+
+    # Add GPS coordinates if available, otherwise omit to avoid blocking other telemetry
+    if loc is not None:
+        if loc.lat is not None:
+            payload['lat'] = float(loc.lat)
+        if loc.lon is not None:
+            payload['lng'] = float(loc.lon)
+        if loc.alt is not None:
+            payload['alt'] = float(loc.alt)
+
+    if 'alt' not in payload:
+        payload['alt'] = 0.0
+
+    return payload
 
 def telemetry_loop(cmd_ref):
     """
