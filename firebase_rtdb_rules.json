@@ -34,8 +34,15 @@
             },
             "updated_at": {
               ".validate": "newData.isNumber()"
+            },
+            "total_measured_weight": {
+              ".validate": "newData.isNumber()"
+            },
+            "cargo_payload_weight": {
+              ".validate": "newData.isNumber()"
             }
           }
+
         },
         "control_command": {
           ".read": "auth != null",
@@ -97,8 +104,15 @@
             },
             "updated_at": {
               ".validate": "newData.isNumber()"
+            },
+            "total_measured_weight": {
+              ".validate": "newData.isNumber()"
+            },
+            "cargo_payload_weight": {
+              ".validate": "newData.isNumber()"
             }
           },
+
           "payload": {
             ".read": "auth != null",
             ".write": "auth != null"

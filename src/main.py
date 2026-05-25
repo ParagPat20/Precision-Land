@@ -254,13 +254,24 @@ def build_telemetry_payload():
         if vehicle.battery.level is not None:
             batt_remaining = int(vehicle.battery.level)
 
+    # Decode weight from vehicle Servo 15
+    servo_15_pwm = getattr(vehicle, 'servo_15_pwm', 1000)
+    total_weight = 0.0
+    cargo_weight = 0.0
+    if servo_15_pwm >= 1400:
+        total_weight = (servo_15_pwm - 1000) / 100.0
+        cargo_weight = max(0.0, total_weight - 5.5)
+
     payload = {
         'heading': float(vehicle.heading) if vehicle.heading is not None else 0.0,
         'mode': vehicle.mode.name if vehicle.mode is not None else 'UNKNOWN',
         'batteryVoltage': batt_voltage,
         'current': batt_cur,
-        'updated_at': int(time.time() * 1000)
+        'updated_at': int(time.time() * 1000),
+        'total_measured_weight': total_weight,
+        'cargo_payload_weight': cargo_weight
     }
+
 
     # Add GPS coordinates if available, otherwise omit to avoid blocking other telemetry
     if loc is not None:
@@ -384,9 +395,55 @@ def execute_mission_logic(mission_items, cmd_ref):
         if abort_requested:
             print("[FIREBASE] [ABORT] Abort requested after mission upload. Cancelling...")
             return False
+
+        # --- Virtual Handshake Mux Interlock Protocol (Servo 15 / 16 Mux) ---
+        # 1. Lock the handshake loop (Signal active flight state)
+        print("[HANDSHAKE] Locking Dock weight flag (Servo 16 = 2000)...")
+        vehicle.set_servo(16, 2000)
+        time.sleep(1.0) # Allow Dock to detect lock and freeze Servo 15
+
+        # 2. Fetch and decode frozen weight from Servo 15
+        frozen_pwm = getattr(vehicle, 'servo_15_pwm', 1000)
+        print(f"[HANDSHAKE] Frozen Servo 15 PWM: {frozen_pwm}")
+
+        # 3. Enforce Disconnection / Empty Safety check (under 1400 PWM = Disconnected/Failsafe)
+        if frozen_pwm < 1400:
+            print(f"[SAFETY] Takeoff REJECTED: Dock disconnected or uninitialized! (PWM: {frozen_pwm} < 1400)")
+            cmd_ref.update({
+                'status': 'FAILED',
+                'error': f'Takeoff blocked: Dock disconnected or scale reading uninitialized (PWM: {frozen_pwm} < 1400)'
+            })
+            # Release the lock so Dock can update again
+            vehicle.set_servo(16, 1000)
+            return False
+
+        # 4. Decode Total Measured Weight & Cargo Payload Weight
+        total_weight = (frozen_pwm - 1000) / 100.0
+        cargo_weight = max(0.0, total_weight - 5.5) # Drone dry weight is 5.5kg
+        print(f"[HANDSHAKE] Scale Measured Total Weight: {total_weight:.2f} kg | Cargo Payload Weight: {cargo_weight:.2f} kg")
+
+        # 5. Save weight details to Firebase command payload so it syncs to App telemetry
+        cmd_ref.update({
+            'payload/total_measured_weight': total_weight,
+            'payload/cargo_payload_weight': cargo_weight
+        })
+
+        # 6. Enforce Overweight Safety Check (Max 8.5kg total scale weight)
+        if total_weight > 8.5:
+            print(f"[SAFETY] Takeoff REJECTED: Overweight scale load ({total_weight:.2f}kg > 8.5kg limit)!")
+            cmd_ref.update({
+                'status': 'FAILED',
+                'error': f'Takeoff blocked: Scale measured total weight ({total_weight:.2f}kg) exceeds 8.5kg safety limit'
+            })
+            # Release the lock so Dock can update again
+            vehicle.set_servo(16, 1000)
+            return False
+
+        print("[SAFETY] Weight is safe. Proceeding to flight operations...")
         
         print("[FIREBASE] Setting Mode to AUTO...")
         vehicle.mode = VehicleMode("AUTO")
+
         
         # Check for abort before arming
         if abort_requested:
@@ -556,7 +613,14 @@ def run_mission_thread(command):
     finally:
         mission_active = False
         active_mission_ref = None
+        # Release the virtual interlock servo so the Dock can read scale again
+        print("[HANDSHAKE] Resetting interlock (Servo 16 = 1000)...")
+        try:
+            vehicle.set_servo(16, 1000)
+        except Exception as e:
+            print(f"[HANDSHAKE] Error releasing interlock: {e}")
         print("[FIREBASE DEBUG] ========== MISSION ENDED ==========")
+
 
 # Track the last successfully processed command and its status to prevent log spam and duplicate trigger loops
 last_processed_cmd_id = None

@@ -91,6 +91,9 @@ class MavlinkVehicle:
         self.location = LocationInfo()
         self.battery = BatteryInfo()
         self.channels = {}
+        self.servo_15_pwm = 1000
+        self.servo_16_pwm = 1000
+
         
         # Thread synchronization
         self._msg_queues = []
@@ -251,6 +254,25 @@ class MavlinkVehicle:
     def simple_takeoff(self, altitude):
         """DroneKit simple_takeoff compatibility alias."""
         self.takeoff(altitude)
+
+    def set_servo(self, servo_channel, pwm_value):
+        """Set a servo output to a specific PWM value using MAV_CMD_DO_SET_SERVO."""
+        print(f"[MAVLINK VEHICLE] Setting Servo {servo_channel} to {pwm_value} PWM...")
+        try:
+            self._master.mav.command_long_send(
+                self.target_system,
+                self.target_component,
+                mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+                0,
+                servo_channel,
+                pwm_value,
+                0, 0, 0, 0, 0
+            )
+            return True
+        except Exception as e:
+            print(f"[MAVLINK VEHICLE] Error setting servo {servo_channel} to {pwm_value}: {e}")
+            return False
+
 
     def send_mavlink(self, msg):
         """Send a raw MAVLink message to the flight controller."""
@@ -481,6 +503,11 @@ class MavlinkVehicle:
                     for i in range(1, 19):
                         ch_val = getattr(msg, f'chan{i}_raw', 0)
                         self.channels[str(i)] = ch_val
+
+                elif msg_type == 'SERVO_OUTPUT_RAW':
+                    self.servo_15_pwm = getattr(msg, 'servo15_raw', 1000)
+                    self.servo_16_pwm = getattr(msg, 'servo16_raw', 1000)
+
                 
                 # Distribute message to synchronous response queues
                 with self._msg_queues_lock:
