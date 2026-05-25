@@ -1105,8 +1105,15 @@ while True:
         break
     except Exception as e:
         print(f"Connection failed: {e}. Retrying in 2s...")
-        time.sleep(2)
 print("Vehicle connected successfully!!!")
+
+# Initialize Servo 16 to LOW (1000) at startup
+print("[HANDSHAKE] Initializing Servo 16 to LOW (1000) at startup...")
+try:
+    vehicle.set_servo(16, 1000)
+except Exception as e:
+    print(f"[HANDSHAKE] Error setting Servo 16 to 1000 at startup: {e}")
+
 
 @vehicle.on_message('SYS_STATUS')
 def sys_status_battery_listener(self, name, message):
