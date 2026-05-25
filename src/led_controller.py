@@ -145,12 +145,17 @@ class DroneLEDController(threading.Thread):
                     if self.right_ring:
                         self.right_ring.fill(ring_color)
                     
-                    # Breathing BLUE on Front Eyes and Sides (first 15 pixels)
                     if self.eyes:
-                        for i in range(15):
+                        # Breathing BLUE on Front Eyes (first 11 pixels)
+                        for i in range(11):
                             self.eyes[i] = ring_color
                         
-                        # Box LEDs breathe White
+                        # Breathing RED on Sides (next 4 pixels)
+                        side_breathe = self._get_breathe_color(RED, breathe_phase)
+                        for i in range(11, 15):
+                            self.eyes[i] = side_breathe
+                        
+                        # Box LEDs breathe White (last 6 pixels)
                         box_breathe = self._get_breathe_color((255, 255, 255), breathe_phase)
                         for i in range(15, 21):
                             self.eyes[i] = box_breathe
