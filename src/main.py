@@ -98,6 +98,7 @@ firebase_initialized = False
 abort_requested = False  # Global abort flag to stop mission execution
 active_mission_ref = None  # Reference to current mission command in Firebase
 mission_active = False  # Track if a mission is currently active (IN_PROGRESS)
+drone_dry_weight = 5.5  # Global drone dry weight configuration (default: 5.5 kg)
 latest_battery_voltage = 0.0
 latest_battery_current = 0.0
 latest_battery_remaining = -1
@@ -240,6 +241,7 @@ class ArmedVideoRecorder:
 
 def build_telemetry_payload():
     """Build the latest telemetry snapshot for Firebase consumers."""
+    global drone_dry_weight
     loc = vehicle.location.global_relative_frame
 
     # Safe extraction of battery data
@@ -260,7 +262,7 @@ def build_telemetry_payload():
     cargo_weight = 0.0
     if servo_15_pwm >= 1400:
         total_weight = (servo_15_pwm - 1000) / 100.0
-        cargo_weight = max(0.0, total_weight - 5.5)
+        cargo_weight = max(0.0, total_weight - drone_dry_weight)
 
     payload = {
         'heading': float(vehicle.heading) if vehicle.heading is not None else 0.0,
@@ -362,7 +364,7 @@ def execute_mission_logic(mission_items, cmd_ref):
     Executes the mission logic: uploads mission, sets mode, arms, and starts telemetry.
     Checks for abort requests throughout the process.
     """
-    global abort_requested
+    global abort_requested, drone_dry_weight
     print("[FIREBASE] Uploading mission...")
     try:
         # Check for abort before starting
@@ -419,7 +421,7 @@ def execute_mission_logic(mission_items, cmd_ref):
 
         # 4. Decode Total Measured Weight & Cargo Payload Weight
         total_weight = (frozen_pwm - 1000) / 100.0
-        cargo_weight = max(0.0, total_weight - 5.5) # Drone dry weight is 5.5kg
+        cargo_weight = max(0.0, total_weight - drone_dry_weight) # Dynamic drone dry weight
         print(f"[HANDSHAKE] Scale Measured Total Weight: {total_weight:.2f} kg | Cargo Payload Weight: {cargo_weight:.2f} kg")
 
         # 5. Save weight details to Firebase command payload so it syncs to App telemetry
@@ -530,8 +532,11 @@ def run_mission_thread(command):
     except Exception as e:
         print(f"[FIREBASE DEBUG] Status check error: {e}")
 
+    global drone_dry_weight
     print(f"[FIREBASE DEBUG] [{threading.current_thread().name}] Processing Mission {cmd_id}")
     payload = command.get('payload', {})
+    drone_dry_weight = float(payload.get('DRONE_DRY_WEIGHT', 5.5))
+    print(f"[FIREBASE DEBUG] Updated drone dry weight config to: {drone_dry_weight} kg")
     print(f"[FIREBASE DEBUG] Payload: {payload}")
     
     target_lat = payload.get('target_lat')
