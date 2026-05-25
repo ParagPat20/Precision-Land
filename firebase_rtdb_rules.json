@@ -115,7 +115,19 @@
 
           "payload": {
             ".read": "auth != null",
-            ".write": "auth != null"
+            ".write": "auth != null",
+            "TAKEOFF_ALT": {
+              ".validate": "newData.isNumber()"
+            },
+            "CRUISE_ALT": {
+              ".validate": "newData.isNumber()"
+            },
+            "DROP_DELAY": {
+              ".validate": "newData.isNumber()"
+            },
+            "DRONE_DRY_WEIGHT": {
+              ".validate": "newData.isNumber()"
+            }
           },
           "id": {
             ".validate": "newData.isString()"
