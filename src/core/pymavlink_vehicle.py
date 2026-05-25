@@ -139,6 +139,9 @@ class MavlinkVehicle:
         self._update_mode_from_heartbeat(hb)
         self._update_armed_from_heartbeat(hb)
         
+        # Start the data streams from flight controller
+        self.start_streams()
+        
         # Start background read loop
         self._stop_event = threading.Event()
         self._reader_thread = threading.Thread(target=self._reader_loop, name="MavlinkReader", daemon=True)
@@ -316,6 +319,20 @@ class MavlinkVehicle:
                 break
         raise TimeoutError(f"Timed out waiting for message types {msg_types}")
 
+    def start_streams(self, rate=4):
+        """Send data stream requests to ArduPilot."""
+        print(f"[MAVLINK VEHICLE] Sending stream request MAV_DATA_STREAM_ALL at {rate}Hz...")
+        try:
+            self._master.mav.request_data_stream_send(
+                self.target_system,
+                self.target_component,
+                mavutil.mavlink.MAV_DATA_STREAM_ALL,
+                rate,
+                1  # 1 = start
+            )
+        except Exception as e:
+            print(f"[MAVLINK VEHICLE] Error requesting streams: {e}")
+
     def upload_mission(self, mission_items, timeout=15.0):
         """
         Upload mission items using robust response queue synchronization
@@ -421,8 +438,14 @@ class MavlinkVehicle:
 
     def _reader_loop(self):
         """Background thread that continually polls the serial link."""
+        last_stream_request = time.time()
         while not self._stop_event.is_set():
             try:
+                # Send periodic stream requests every 5 seconds to ensure streams stay active
+                if time.time() - last_stream_request > 5.0:
+                    self.start_streams()
+                    last_stream_request = time.time()
+
                 # Read message with a short timeout to check self._stop_event
                 msg = self._master.recv_match(blocking=True, timeout=0.05)
                 if msg is None:
