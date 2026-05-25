@@ -438,14 +438,8 @@ class MavlinkVehicle:
 
     def _reader_loop(self):
         """Background thread that continually polls the serial link."""
-        last_stream_request = time.time()
         while not self._stop_event.is_set():
             try:
-                # Send periodic stream requests every 5 seconds to ensure streams stay active
-                if time.time() - last_stream_request > 5.0:
-                    self.start_streams()
-                    last_stream_request = time.time()
-
                 # Read message with a short timeout to check self._stop_event
                 msg = self._master.recv_match(blocking=True, timeout=0.05)
                 if msg is None:
