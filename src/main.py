@@ -99,6 +99,7 @@ abort_requested = False  # Global abort flag to stop mission execution
 active_mission_ref = None  # Reference to current mission command in Firebase
 mission_active = False  # Track if a mission is currently active (IN_PROGRESS)
 drone_dry_weight = 5.5  # Global drone dry weight configuration (default: 5.5 kg)
+use_dock = True  # Global config to bypass dock interlock when false
 latest_battery_voltage = 0.0
 latest_battery_current = 0.0
 latest_battery_remaining = -1
@@ -364,7 +365,7 @@ def execute_mission_logic(mission_items, cmd_ref):
     Executes the mission logic: uploads mission, sets mode, arms, and starts telemetry.
     Checks for abort requests throughout the process.
     """
-    global abort_requested, drone_dry_weight
+    global abort_requested, drone_dry_weight, use_dock
     print("[FIREBASE] Uploading mission...")
     try:
         # Check for abort before starting
@@ -399,50 +400,88 @@ def execute_mission_logic(mission_items, cmd_ref):
             return False
 
         # --- Virtual Handshake Mux Interlock Protocol (Servo 15 / 16 Mux) ---
-        # 1. Lock the handshake loop (Signal active flight state)
-        print("[HANDSHAKE] Locking Dock weight flag (Servo 16 = 2000)...")
-        vehicle.set_servo(16, 2000)
-        time.sleep(1.0) # Allow Dock to detect lock and freeze Servo 15
+        if use_dock:
+            # 1. Lock the handshake loop (Signal active flight state)
+            print("[HANDSHAKE] Locking Dock weight flag (Servo 16 = 2000)...")
+            vehicle.set_servo(16, 2000)
+            time.sleep(1.0) # Allow Dock to detect lock and freeze Servo 15
 
-        # 2. Fetch and decode frozen weight from Servo 15
-        frozen_pwm = getattr(vehicle, 'servo_15_pwm', 1000)
-        print(f"[HANDSHAKE] Frozen Servo 15 PWM: {frozen_pwm}")
+            # 2. Fetch and decode frozen weight from Servo 15
+            frozen_pwm = getattr(vehicle, 'servo_15_pwm', 1000)
+            print(f"[HANDSHAKE] Frozen Servo 15 PWM: {frozen_pwm}")
 
-        # 3. Enforce Disconnection / Empty Safety check (under 1400 PWM = Disconnected/Failsafe)
-        if frozen_pwm < 1400:
-            print(f"[SAFETY] Takeoff REJECTED: Dock disconnected or uninitialized! (PWM: {frozen_pwm} < 1400)")
+            # 3. Enforce Disconnection / Empty Safety check (under 1400 PWM = Disconnected/Failsafe)
+            if frozen_pwm < 1400:
+                print(f"[SAFETY] Takeoff REJECTED: Dock disconnected or uninitialized! (PWM: {frozen_pwm} < 1400)")
+                cmd_ref.update({
+                    'status': 'FAILED',
+                    'error': f'Takeoff blocked: Dock disconnected or scale reading uninitialized (PWM: {frozen_pwm} < 1400)'
+                })
+                # Release the lock so Dock can update again
+                vehicle.set_servo(16, 1000)
+                return False
+
+            # 4. Decode Total Measured Weight & Cargo Payload Weight
+            total_weight = (frozen_pwm - 1000) / 100.0
+            cargo_weight = max(0.0, total_weight - drone_dry_weight) # Dynamic drone dry weight
+            print(f"[HANDSHAKE] Scale Measured Total Weight: {total_weight:.2f} kg | Cargo Payload Weight: {cargo_weight:.2f} kg")
+
+            # 5. Save weight details to Firebase command payload so it syncs to App telemetry
             cmd_ref.update({
-                'status': 'FAILED',
-                'error': f'Takeoff blocked: Dock disconnected or scale reading uninitialized (PWM: {frozen_pwm} < 1400)'
+                'payload/total_measured_weight': total_weight,
+                'payload/cargo_payload_weight': cargo_weight
             })
-            # Release the lock so Dock can update again
-            vehicle.set_servo(16, 1000)
-            return False
 
-        # 4. Decode Total Measured Weight & Cargo Payload Weight
-        total_weight = (frozen_pwm - 1000) / 100.0
-        cargo_weight = max(0.0, total_weight - drone_dry_weight) # Dynamic drone dry weight
-        print(f"[HANDSHAKE] Scale Measured Total Weight: {total_weight:.2f} kg | Cargo Payload Weight: {cargo_weight:.2f} kg")
+            # 6. Enforce Overweight Safety Check (Max 8.5kg total scale weight)
+            if total_weight > 8.5:
+                print(f"[SAFETY] Takeoff REJECTED: Overweight scale load ({total_weight:.2f}kg > 8.5kg limit)!")
+                cmd_ref.update({
+                    'status': 'FAILED',
+                    'error': f'Takeoff blocked: Scale measured total weight ({total_weight:.2f}kg) exceeds 8.5kg safety limit'
+                })
+                # Release the lock so Dock can update again
+                vehicle.set_servo(16, 1000)
+                return False
 
-        # 5. Save weight details to Firebase command payload so it syncs to App telemetry
-        cmd_ref.update({
-            'payload/total_measured_weight': total_weight,
-            'payload/cargo_payload_weight': cargo_weight
-        })
+            print("[SAFETY] Weight is safe. Proceeding to flight operations...")
+        else:
+            print("[HANDSHAKE] Use Dock option is DISABLED. Skipping scale handshake and weight validation.")
 
-        # 6. Enforce Overweight Safety Check (Max 8.5kg total scale weight)
-        if total_weight > 8.5:
-            print(f"[SAFETY] Takeoff REJECTED: Overweight scale load ({total_weight:.2f}kg > 8.5kg limit)!")
-            cmd_ref.update({
-                'status': 'FAILED',
-                'error': f'Takeoff blocked: Scale measured total weight ({total_weight:.2f}kg) exceeds 8.5kg safety limit'
-            })
-            # Release the lock so Dock can update again
-            vehicle.set_servo(16, 1000)
-            return False
+        # 7. Wait for Dock Home Release (Servo 7 >= 1500) if use_dock is active
+        if use_dock:
+            print("[HANDSHAKE] Waiting for Dock Home/Release state (Servo 7 >= 1500)...")
+            dock_released = False
+            start_wait_time = time.time()
+            # Wait up to 35 seconds for homing/release sequence
+            while time.time() - start_wait_time < 35.0:
+                if abort_requested:
+                    print("[HANDSHAKE] [ABORT] Abort requested during dock release wait. Cancelling...")
+                    vehicle.set_servo(16, 1000)
+                    return False
+                
+                servo_7_pwm = getattr(vehicle, 'servo_7_pwm', 1000)
+                if servo_7_pwm >= 1500:
+                    print(f"[HANDSHAKE] Dock Home/Release CONFIRMED! (Servo 7 PWM: {servo_7_pwm} >= 1500)")
+                    dock_released = True
+                    break
+                
+                time.sleep(0.2) # check at 5Hz
 
-        print("[SAFETY] Weight is safe. Proceeding to flight operations...")
-        
+            if not dock_released:
+                print(f"[SAFETY] Takeoff REJECTED: Dock release timeout! Dock did not HOME/Release in time (Servo 7: {getattr(vehicle, 'servo_7_pwm', 1000)})")
+                cmd_ref.update({
+                    'status': 'FAILED',
+                    'error': 'Takeoff blocked: Dock release timeout (Dock did not HOME/Release in time)'
+                })
+                vehicle.set_servo(16, 1000)
+                return False
+
+            # Add safety delay after home complete to let physical components settle
+            print("[HANDSHAKE] Homing complete. Settling safety delay (2.0s)...")
+            time.sleep(2.0)
+        else:
+            print("[HANDSHAKE] Use Dock option is DISABLED. Skipping Dock Home check.")
+
         print("[FIREBASE] Setting Mode to AUTO...")
         vehicle.mode = VehicleMode("AUTO")
 
@@ -532,10 +571,11 @@ def run_mission_thread(command):
     except Exception as e:
         print(f"[FIREBASE DEBUG] Status check error: {e}")
 
-    global drone_dry_weight
+    global drone_dry_weight, use_dock
     print(f"[FIREBASE DEBUG] [{threading.current_thread().name}] Processing Mission {cmd_id}")
     payload = command.get('payload', {})
     drone_dry_weight = float(payload.get('DRONE_DRY_WEIGHT', 5.5))
+    use_dock = bool(payload.get('USE_DOCK', True))
     print(f"[FIREBASE DEBUG] Updated drone dry weight config to: {drone_dry_weight} kg")
     print(f"[FIREBASE DEBUG] Payload: {payload}")
     
@@ -619,11 +659,12 @@ def run_mission_thread(command):
         mission_active = False
         active_mission_ref = None
         # Release the virtual interlock servo so the Dock can read scale again
-        print("[HANDSHAKE] Resetting interlock (Servo 16 = 1000)...")
-        try:
-            vehicle.set_servo(16, 1000)
-        except Exception as e:
-            print(f"[HANDSHAKE] Error releasing interlock: {e}")
+        if use_dock:
+            print("[HANDSHAKE] Resetting interlock (Servo 16 = 1000)...")
+            try:
+                vehicle.set_servo(16, 1000)
+            except Exception as e:
+                print(f"[HANDSHAKE] Error releasing interlock: {e}")
         print("[FIREBASE DEBUG] ========== MISSION ENDED ==========")
 
 

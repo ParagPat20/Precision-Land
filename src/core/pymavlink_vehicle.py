@@ -91,6 +91,7 @@ class MavlinkVehicle:
         self.location = LocationInfo()
         self.battery = BatteryInfo()
         self.channels = {}
+        self.servo_7_pwm = 1000
         self.servo_15_pwm = 1000
         self.servo_16_pwm = 1000
 
@@ -505,6 +506,7 @@ class MavlinkVehicle:
                         self.channels[str(i)] = ch_val
 
                 elif msg_type == 'SERVO_OUTPUT_RAW':
+                    self.servo_7_pwm = getattr(msg, 'servo7_raw', 1000)
                     self.servo_15_pwm = getattr(msg, 'servo15_raw', 1000)
                     self.servo_16_pwm = getattr(msg, 'servo16_raw', 1000)
 

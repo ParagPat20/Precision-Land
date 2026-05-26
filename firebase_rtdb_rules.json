@@ -127,6 +127,9 @@
             },
             "DRONE_DRY_WEIGHT": {
               ".validate": "newData.isNumber()"
+            },
+            "USE_DOCK": {
+              ".validate": "newData.isBoolean()"
             }
           },
           "id": {
