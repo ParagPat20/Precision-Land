@@ -218,8 +218,10 @@ class ArmedVideoRecorder:
         """
         Writer loop:
         - Waits for the first frame to open the writer with the correct resolution
-        - Writes frames until stop is requested
+        - Writes frames with precise target FPS pacing until stop is requested
         """
+        frame_delay = 1.0 / self.target_fps
+        last_write_time = 0.0
         try:
             while not self._stop_evt.is_set():
                 try:
@@ -233,8 +235,15 @@ class ArmedVideoRecorder:
                 if self._writer is None:
                     self._open_writer(frame.shape)
 
+                # Ensure strictly increasing/monotonic timestamps for FFmpeg
+                now = time.time()
+                elapsed = now - last_write_time
+                if elapsed < frame_delay:
+                    time.sleep(frame_delay - elapsed)
+
                 try:
                     self._writer.write(frame)
+                    last_write_time = time.time()
                 except Exception as e:
                     print(f"[VIDEO] Write error: {e}")
         finally:
@@ -1081,6 +1090,7 @@ parser.add_argument('--connect', default = 'udpout:192.168.144.14:14551', help="
 parser.add_argument('--baud', type=int, default=int(os.environ.get("JECH_MAVLINK_BAUD", "921600")), help="Vehicle serial baud rate. Default: %(default)s")
 parser.add_argument('--servo-port', default=None, help="Serial port for ST3215 and SC09 servos. Defaults to JECH_SERVO_PORT, then auto-detects common RPi serial devices.")
 parser.add_argument('--no-video', action='store_true', help="Disable the camera window (OpenCV window) for headless running.")
+parser.add_argument('--no-record', action='store_true', help="Disable automatic video recording during armed state.")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
 
@@ -1235,11 +1245,15 @@ except Exception as e:
     print(f"[SERVO] Failed to initialize servo controller: {e}")
 
 # Video recordings go under ~/Videos/Precision-Land/<DDMMYYYY>/
-_videos_dir = os.path.expanduser(os.environ.get("PL_VIDEOS_DIR", "~/Videos"))
-video_recorder = ArmedVideoRecorder(
-    recordings_root_dir=os.path.join(_videos_dir, "Precision-Land"),
-    drone_id=DRONE_ID,
-)
+if args.no_record:
+    video_recorder = None
+    print("[VIDEO] Automatic video recording is DISABLED by --no-record option.")
+else:
+    _videos_dir = os.path.expanduser(os.environ.get("PL_VIDEOS_DIR", "~/Videos"))
+    video_recorder = ArmedVideoRecorder(
+        recordings_root_dir=os.path.join(_videos_dir, "Precision-Land"),
+        drone_id=DRONE_ID,
+    )
 
 battery_failsafe_active = False
 other_failsafe_active = False
@@ -1359,20 +1373,22 @@ def armed_listener(self, attr_name, value):
         crash_detected = False
         print("[LED] Armed - Resetting Failsafe Flags")
         # Start video recording in the background (non-blocking).
-        try:
-            video_recorder.start()
-        except Exception as e:
-            print(f"[VIDEO] Could not start recording: {e}")
+        if video_recorder is not None:
+            try:
+                video_recorder.start()
+            except Exception as e:
+                print(f"[VIDEO] Could not start recording: {e}")
     else:
         # Disarmed: background thread in fc_log_service waits briefly, then pulls the latest .bin
         # over QGC-style LOG_REQUEST_DATA chunks (same stack as HTTP /api/logs/latest).
         print("[LOG SERVICE] Disarm detected - triggering auto log download...")
         fc_log_service.auto_download_latest_log()
         # Stop recording (background thread will close the file).
-        try:
-            video_recorder.stop()
-        except Exception as e:
-            print(f"[VIDEO] Could not stop recording: {e}")
+        if video_recorder is not None:
+            try:
+                video_recorder.stop()
+            except Exception as e:
+                print(f"[VIDEO] Could not stop recording: {e}")
 
 
 #--------------------------------------------------
@@ -1458,6 +1474,8 @@ confidence_threshold =20.0  # Minimum confidence percentage to send position dat
 
 print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_threshold}%)")
 
+last_recorded_ts = 0.0
+
 while True:                
     # Detect marker in current frame
     if aruco_tracker is None:
@@ -1472,8 +1490,12 @@ while True:
     if getattr(vehicle, "armed", False) and video_recorder is not None:
         try:
             frame = getattr(aruco_tracker, "last_frame", None)
-            if frame is not None:
-                video_recorder.submit(frame)
+            frame_ts = getattr(aruco_tracker, "last_frame_ts", 0.0)
+            if frame is not None and frame_ts > last_recorded_ts:
+                # Limit submissions to target FPS to avoid queue buildup and save CPU/memory
+                if frame_ts - last_recorded_ts >= (1.0 / video_recorder.target_fps):
+                    video_recorder.submit(frame)
+                    last_recorded_ts = frame_ts
         except Exception:
             pass
     
