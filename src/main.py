@@ -44,6 +44,7 @@ import math
 import argparse
 import os
 import sys
+import signal
 import traceback
 import glob
 import threading
@@ -1093,6 +1094,30 @@ parser.add_argument('--no-video', action='store_true', help="Disable the camera 
 parser.add_argument('--no-record', action='store_true', help="Disable automatic video recording during armed state.")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
+
+def handle_signal(signum, frame):
+    print("\n[SYSTEM] Termination signal received. Exiting cleanly...")
+    try:
+        if 'vehicle' in globals() and vehicle is not None:
+            print("[SYSTEM] Closing vehicle connection...")
+            vehicle.close()
+    except Exception as e:
+        print(f"[SYSTEM] Error closing vehicle: {e}")
+    try:
+        if 'aruco_tracker' in globals() and aruco_tracker is not None:
+            print("[SYSTEM] Releasing camera...")
+            aruco_tracker.stop()
+    except Exception as e:
+        print(f"[SYSTEM] Error releasing camera: {e}")
+    try:
+        cv2.destroyAllWindows()
+    except Exception:
+        pass
+    print("[SYSTEM] Exiting now.")
+    os._exit(0)
+
+signal.signal(signal.SIGINT, handle_signal)
+signal.signal(signal.SIGTERM, handle_signal)
 
 #--------------------------------------------------
 #-------------- FUNCTIONS  
