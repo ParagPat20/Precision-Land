@@ -96,9 +96,9 @@ TELEMETRY_INTERVAL_SEC = 5
 
 # --- Firebase & Mission Logic ---
 firebase_initialized = False
-abort_requested = False  # Global abort flag to stop mission execution
+abort_event = threading.Event()  # Global abort flag to stop mission execution
 active_mission_ref = None  # Reference to current mission command in Firebase
-mission_active = False  # Track if a mission is currently active (IN_PROGRESS)
+mission_active_event = threading.Event()  # Track if a mission is currently active (IN_PROGRESS)
 drone_dry_weight = 5.5  # Global drone dry weight configuration (default: 5.5 kg)
 use_dock = True  # Global config to bypass dock interlock when false
 latest_battery_voltage = 0.0
@@ -133,6 +133,8 @@ class ArmedVideoRecorder:
 
         # Tune with env vars if needed.
         self.target_fps = float(os.environ.get("PL_RECORD_FPS", "30"))
+        if self.target_fps <= 0:
+            self.target_fps = 30.0  # Fallback to default
 
     def is_active(self) -> bool:
         return bool(self._armed) and self._thread is not None and self._thread.is_alive()
@@ -307,20 +309,19 @@ def telemetry_loop(cmd_ref):
     Only sends GPS/telemetry data when mission status is IN_PROGRESS.
     Runs regardless of arming status once mission is uploaded.
     """
-    global abort_requested, mission_active
     print("[FIREBASE DEBUG] Starting Telemetry Loop...")
-    mission_active = True  # Mark mission as active when telemetry loop starts
+    mission_active_event.set()  # Mark mission as active when telemetry loop starts
     
     # Continue sending telemetry while mission is active (not just when armed)
-    while mission_active and not abort_requested:
+    while mission_active_event.is_set() and not abort_event.is_set():
         # 1. Check for Abort (check both global flag and Firebase status)
         try:
             current_status = cmd_ref.child('status').get()
             # Silently check abort status to prevent log spam
-            if current_status == 'ABORT_REQUESTED' or abort_requested:
+            if current_status == 'ABORT_REQUESTED' or abort_event.is_set():
                 print("[ABORT] Received Abort Request! Stopping Mission...")
-                abort_requested = True
-                mission_active = False  # Stop telemetry immediately
+                abort_event.set()
+                mission_active_event.clear()  # Stop telemetry immediately
                 # Switch to RTL mode for safe return
                 try:
                     vehicle.mode = VehicleMode("RTL")
@@ -337,7 +338,7 @@ def telemetry_loop(cmd_ref):
             # Only send telemetry if mission is IN_PROGRESS
             if current_status != 'IN_PROGRESS':
                 print(f"[FIREBASE DEBUG] Mission status is '{current_status}', not IN_PROGRESS. Stopping telemetry.")
-                mission_active = False
+                mission_active_event.clear()
                 time.sleep(2)
                 continue
                 
@@ -345,7 +346,7 @@ def telemetry_loop(cmd_ref):
             print(f"[FIREBASE DEBUG] Abort Check Error: {e}")
 
         # 2. Send Telemetry (only when mission is active)
-        if mission_active:
+        if mission_active_event.is_set():
             try:
                 loc = vehicle.location.global_relative_frame
                 telemetry = build_telemetry_payload()
@@ -359,7 +360,7 @@ def telemetry_loop(cmd_ref):
             
         time.sleep(TELEMETRY_INTERVAL_SEC)
     
-    mission_active = False  # Mark mission as inactive when loop exits
+    mission_active_event.clear()  # Mark mission as inactive when loop exits
     print("[FIREBASE DEBUG] Telemetry loop ended")
 
 def _send_with_optional_mission_type(send_fn, *args):
@@ -375,16 +376,16 @@ def execute_mission_logic(mission_items, cmd_ref):
     Executes the mission logic: uploads mission, sets mode, arms, and starts telemetry.
     Checks for abort requests throughout the process.
     """
-    global abort_requested, drone_dry_weight, use_dock
+    global drone_dry_weight, use_dock
     print("[FIREBASE] Uploading mission...")
     try:
         # Check for abort before starting
-        if abort_requested:
+        if abort_event.is_set():
             print("[FIREBASE] [ABORT] Abort requested before mission upload. Cancelling...")
             return False
             
         for item in mission_items:
-            if abort_requested:
+            if abort_event.is_set():
                 print("[ABORT] Abort requested during mission upload. Cancelling...")
                 return False
             print(
@@ -405,7 +406,7 @@ def execute_mission_logic(mission_items, cmd_ref):
         telemetry_thread.start()
         
         # Check for abort before setting mode
-        if abort_requested:
+        if abort_event.is_set():
             print("[FIREBASE] [ABORT] Abort requested after mission upload. Cancelling...")
             return False
 
@@ -464,7 +465,7 @@ def execute_mission_logic(mission_items, cmd_ref):
             start_wait_time = time.time()
             # Wait up to 35 seconds for homing/release sequence
             while time.time() - start_wait_time < 35.0:
-                if abort_requested:
+                if abort_event.is_set():
                     print("[HANDSHAKE] [ABORT] Abort requested during dock release wait. Cancelling...")
                     vehicle.set_servo(16, 1000)
                     return False
@@ -497,7 +498,7 @@ def execute_mission_logic(mission_items, cmd_ref):
 
         
         # Check for abort before arming
-        if abort_requested:
+        if abort_event.is_set():
             print("[FIREBASE] [ABORT] Abort requested before arming. Cancelling...")
             return False
         
@@ -506,7 +507,7 @@ def execute_mission_logic(mission_items, cmd_ref):
         
         # Wait up to 5s for arming, checking for abort during wait
         for _ in range(5):
-            if abort_requested:
+            if abort_event.is_set():
                 print("[FIREBASE] [ABORT] Abort requested during arming wait. Switching to RTL...")
                 try:
                     vehicle.mode = VehicleMode("RTL")
@@ -526,7 +527,7 @@ def execute_mission_logic(mission_items, cmd_ref):
             return False
 
         # Final check for abort after arming wait
-        if abort_requested:
+        if abort_event.is_set():
             print("[FIREBASE] [ABORT] Abort requested. Switching to RTL...")
             try:
                 vehicle.mode = VehicleMode("RTL")
@@ -545,7 +546,7 @@ def run_mission_thread(command):
     """
     Runs a mission in a separate thread. Handles mission execution and status updates.
     """
-    global abort_requested, active_mission_ref, mission_active
+    global active_mission_ref
     cmd_id = command.get('id')
     timestamp = command.get('timestamp', 0)
     current_time = int(time.time() * 1000)
@@ -558,12 +559,12 @@ def run_mission_thread(command):
     
     ref = db.reference(f'missions/{DRONE_ID}/active_command')
     active_mission_ref = ref
-    mission_active = False  # Reset mission active flag
+    mission_active_event.clear()  # Reset mission active flag
     
     # 1. Stale Command Check (45 seconds = 45000 ms)
     if current_time - timestamp > 45000:
         print(f"[FIREBASE DEBUG] [REJECT] Mission {cmd_id} is STALE ({(current_time - timestamp)/1000:.1f}s old). Ignoring.")
-        mission_active = False
+        mission_active_event.clear()
         ref.update({'status': 'EXPIRED_STALE'})
         active_mission_ref = None
         return
@@ -574,7 +575,7 @@ def run_mission_thread(command):
         print(f"[FIREBASE DEBUG] Current mission status in Firebase: {current_status}")
         if current_status == 'ABORT_REQUESTED':
             print(f"[FIREBASE DEBUG] [ABORT] Mission {cmd_id} was aborted before processing.")
-            mission_active = False
+            mission_active_event.clear()
             ref.update({'status': 'ABORTED', 'aborted_at': int(time.time() * 1000)})
             active_mission_ref = None
             return
@@ -594,7 +595,7 @@ def run_mission_thread(command):
     
     if target_lat is None or target_lng is None:
         print("[FIREBASE DEBUG] [ERROR] Invalid Target Location - missing lat/lng")
-        mission_active = False
+        mission_active_event.clear()
         ref.update({'status': 'FAILED', 'error': 'Invalid target location'})
         active_mission_ref = None
         return
@@ -625,7 +626,7 @@ def run_mission_thread(command):
         print(f"[FIREBASE DEBUG] [ERROR] Mission generation error: {e}")
         import traceback
         traceback.print_exc()
-        mission_active = False
+        mission_active_event.clear()
         ref.update({'status': 'FAILED', 'error': str(e)})
         active_mission_ref = None
         return
@@ -633,7 +634,7 @@ def run_mission_thread(command):
     # Update status to IN_PROGRESS
     print("[FIREBASE DEBUG] Updating Firebase status to IN_PROGRESS...")
     ref.update({'status': 'IN_PROGRESS', 'started_at': int(time.time() * 1000)})
-    mission_active = True  # Mark mission as active
+    mission_active_event.set()  # Mark mission as active
     print("[FIREBASE DEBUG] Status updated to IN_PROGRESS")
     
     # Execute mission (this will check for abort internally)
@@ -645,18 +646,18 @@ def run_mission_thread(command):
         print(f"[FIREBASE DEBUG] Final mission status: {final_status}")
         if final_status == 'ABORTED':
             print(f"[FIREBASE DEBUG] Mission {cmd_id} ended (ABORTED).")
-            mission_active = False
+            mission_active_event.clear()
             active_mission_ref = None
             return
         elif success:
-            mission_active = False  # Stop telemetry when mission completes
+            mission_active_event.clear()  # Stop telemetry when mission completes
             ref.update({
                 'status': 'COMPLETED',
                 'completed_at': int(time.time() * 1000)
             })
             print(f"[FIREBASE DEBUG] Mission {cmd_id} COMPLETED")
         else:
-            mission_active = False  # Stop telemetry when mission fails
+            mission_active_event.clear()  # Stop telemetry when mission fails
             ref.update({
                 'status': 'FAILED',
                 'failed_at': int(time.time() * 1000)
@@ -666,7 +667,7 @@ def run_mission_thread(command):
         print(f"[FIREBASE DEBUG] Status update error: {e}")
         traceback.print_exc()
     finally:
-        mission_active = False
+        mission_active_event.clear()
         active_mission_ref = None
         # Release the virtual interlock servo so the Dock can read scale again
         if use_dock:
@@ -687,7 +688,7 @@ def check_mission(command):
     Checks incoming Firebase commands and handles them appropriately.
     Handles PENDING missions and ABORT_REQUESTED status changes.
     """
-    global abort_requested, active_mission_ref, mission_active, processed_mission_ids, processed_mission_lock
+    global active_mission_ref, processed_mission_ids, processed_mission_lock
     global last_processed_cmd_id, last_processed_status
 
     if not command or not isinstance(command, dict):
@@ -721,8 +722,8 @@ def check_mission(command):
                     pass
 
         # Reset abort flag and mission active flag for new mission
-        abort_requested = False
-        mission_active = False
+        abort_event.clear()
+        mission_active_event.clear()
         sender = command.get('sender_email', 'Unknown')
         print(f"[FIREBASE] Received PENDING Mission from {sender} (ID: {cmd_id})")
         t = threading.Thread(target=run_mission_thread, args=(command,), name="MissionThread", daemon=True)
@@ -739,12 +740,12 @@ def check_mission(command):
         except Exception as e:
             print(f"[FIREBASE] Could not check vehicle armed state: {e}")
 
-        if not mission_active and not is_armed:
+        if not mission_active_event.is_set() and not is_armed:
             return
 
         print("[FIREBASE] [ABORT] Abort request received from Firebase!")
-        abort_requested = True
-        mission_active = False  # Stop sending telemetry immediately
+        abort_event.set()
+        mission_active_event.clear()  # Stop sending telemetry immediately
         
         # Update active command status to ABORTED in Firebase
         ref_to_update = active_mission_ref or db.reference(f'missions/{DRONE_ID}/active_command')
@@ -1098,6 +1099,15 @@ args.connect = resolve_vehicle_connection_path(args.connect)
 def handle_signal(signum, frame):
     print("\n[SYSTEM] Termination signal received. Exiting cleanly...")
     try:
+        if 'fc_log_service' in globals() and fc_log_service is not None:
+            print("[SYSTEM] Stopping log service...")
+            try:
+                fc_log_service.stop()
+            except Exception as e:
+                print(f"[SYSTEM] Error stopping log service: {e}")
+    except Exception:
+        pass
+    try:
         if 'vehicle' in globals() and vehicle is not None:
             print("[SYSTEM] Closing vehicle connection...")
             vehicle.close()
@@ -1236,7 +1246,7 @@ try:
         vehicle=vehicle,
         port_name=args.servo_port,
         baudrate=1000000,
-        is_mission_active_cb=lambda: mission_active
+        is_mission_active_cb=lambda: mission_active_event.is_set()
     )
     
     # Load servo config from JSON
@@ -1518,7 +1528,7 @@ while True:
             frame_ts = getattr(aruco_tracker, "last_frame_ts", 0.0)
             if frame is not None and frame_ts > last_recorded_ts:
                 # Limit submissions to target FPS to avoid queue buildup and save CPU/memory
-                if frame_ts - last_recorded_ts >= (1.0 / video_recorder.target_fps):
+                if video_recorder.target_fps > 0 and frame_ts - last_recorded_ts >= (1.0 / video_recorder.target_fps):
                     video_recorder.submit(frame)
                     last_recorded_ts = frame_ts
         except Exception:

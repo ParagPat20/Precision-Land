@@ -295,6 +295,31 @@ class FlightControllerLogService:
         self._http_thread.start()
         print(f"[LOG SERVICE] HTTP server listening on http://{self.public_host}:{self.port}")
 
+    def stop(self):
+        """Cleanly shut down the HTTP server and release any resources."""
+        global _log_service_instance
+        print("[LOG SERVICE] Stopping log service HTTP server...")
+        with _log_service_lock:
+            _log_service_instance = None
+        if hasattr(self, 'httpd') and self.httpd:
+            try:
+                self.httpd.shutdown()
+                self.httpd.server_close()
+                print("[LOG SERVICE] HTTP server stopped successfully.")
+            except Exception as e:
+                print(f"[LOG SERVICE] Error stopping HTTP server: {e}")
+        try:
+            self.vehicle.remove_message_listener("LOG_ENTRY", self._on_log_entry)
+            self.vehicle.remove_message_listener("LOG_DATA", self._on_log_data)
+            self.vehicle.remove_message_listener("FILE_TRANSFER_PROTOCOL", self._on_ftp)
+            self.vehicle.remove_message_listener("PARAM_VALUE", self._on_param_value)
+            self.vehicle.remove_message_listener("SYS_STATUS", self._on_sys_status)
+            self.vehicle.remove_message_listener("BATTERY_STATUS", self._on_battery_status)
+            print("[LOG SERVICE] Removed message listeners from vehicle.")
+        except Exception as e:
+            print(f"[LOG SERVICE] Error removing message listeners: {e}")
+
+
     def _serve_http(self):
         service = self
 
@@ -513,8 +538,11 @@ class FlightControllerLogService:
                 self.end_headers()
                 self.wfile.write(body)
 
-        httpd = ThreadingHTTPServer((self.host, self.port), Handler)
-        httpd.serve_forever()
+        self.httpd = ThreadingHTTPServer((self.host, self.port), Handler)
+        try:
+            self.httpd.serve_forever()
+        except Exception as e:
+            print(f"[LOG SERVICE] HTTP server exception/shutdown: {e}")
 
     def _on_log_entry(self, vehicle, name, message):
         entry = {
@@ -1110,32 +1138,42 @@ class FlightControllerLogService:
             self._set_auto_download_msg("")
 
 
-def start_log_services(vehicle):
-    cache_dir = os.environ.get(
-        "JECH_FC_LOG_CACHE_DIR",
-        str(Path(__file__).resolve().parent.parent / "downloaded_logs"),
-    )
-    web_root = os.environ.get(
-        "JECH_WEBTOOLS_DIR",
-        str(Path(__file__).resolve().parent.parent / "webtools"),
-    )
-    # The UI expects to reach the Pi at `victoris.local` by default.
-    # We still bind to a resolved IP (if possible) to avoid issues on systems
-    # where binding to a hostname is less reliable.
-    host_public = os.environ.get("JECH_FC_LOG_HOST", "victoris.local")
-    try:
-        host_bind = socket.gethostbyname(host_public)
-    except Exception:
-        host_bind = "0.0.0.0"
-    port = int(os.environ.get("JECH_FC_LOG_PORT", "8765"))
+_log_service_instance = None
+_log_service_lock = threading.Lock()
 
-    service = FlightControllerLogService(
-        vehicle,
-        cache_dir=cache_dir,
-        web_root=web_root,
-        host=host_bind,
-        port=port,
-        public_host=host_public,
-    )
-    service.start()
-    return service
+def start_log_services(vehicle):
+    global _log_service_instance
+    with _log_service_lock:
+        if _log_service_instance is not None:
+            print("[LOG SERVICE] Log service is already running. Returning existing instance.")
+            return _log_service_instance
+
+        cache_dir = os.environ.get(
+            "JECH_FC_LOG_CACHE_DIR",
+            str(Path(__file__).resolve().parent.parent / "downloaded_logs"),
+        )
+        web_root = os.environ.get(
+            "JECH_WEBTOOLS_DIR",
+            str(Path(__file__).resolve().parent.parent / "webtools"),
+        )
+        # The UI expects to reach the Pi at `victoris.local` by default.
+        # We still bind to a resolved IP (if possible) to avoid issues on systems
+        # where binding to a hostname is less reliable.
+        host_public = os.environ.get("JECH_FC_LOG_HOST", "victoris.local")
+        try:
+            host_bind = socket.gethostbyname(host_public)
+        except Exception:
+            host_bind = "0.0.0.0"
+        port = int(os.environ.get("JECH_FC_LOG_PORT", "8765"))
+
+        service = FlightControllerLogService(
+            vehicle,
+            cache_dir=cache_dir,
+            web_root=web_root,
+            host=host_bind,
+            port=port,
+            public_host=host_public,
+        )
+        service.start()
+        _log_service_instance = service
+        return service
