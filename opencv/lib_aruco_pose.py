@@ -396,7 +396,7 @@ class ArucoSingleTracker():
 if __name__ == "__main__":
 
     #--- Define Tag
-    id_to_find  = 132
+    id_to_find  = 72
     marker_size  = 17.8 #- [cm]
 
     #--- Get the camera calibration path
