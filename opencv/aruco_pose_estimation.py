@@ -36,16 +36,36 @@ We are going to obtain the following quantities:
 
 import os
 import sys
+import shutil
+import glob
 
-# Suppress Qt font directory warnings on Linux
-if "QT_QPA_FONTDIR" not in os.environ:
-    for font_dir in ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"]:
-        if os.path.isdir(font_dir):
-            os.environ["QT_QPA_FONTDIR"] = font_dir
-            break
+# Suppress Qt font directory warnings on Linux by dynamically creating the expected font folder if missing
+try:
+    import cv2
+    cv2_dir = os.path.dirname(cv2.__file__)
+    qt_fonts_dir = os.path.join(cv2_dir, "qt", "fonts")
+    if not os.path.exists(qt_fonts_dir):
+        os.makedirs(qt_fonts_dir, exist_ok=True)
+        # Copy a standard system TrueType font to the directory
+        system_font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]
+        font_copied = False
+        for font_path in system_font_paths:
+            if os.path.exists(font_path):
+                shutil.copy(font_path, os.path.join(qt_fonts_dir, os.path.basename(font_path)))
+                font_copied = True
+                break
+        if not font_copied:
+            found_fonts = glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
+            if found_fonts:
+                shutil.copy(found_fonts[0], os.path.join(qt_fonts_dir, os.path.basename(found_fonts[0])))
+except Exception:
+    pass
 
 import numpy as np
-import cv2
 import cv2.aruco as aruco
 import time, math
 

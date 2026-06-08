@@ -41,13 +41,34 @@ Status Management:
 """
 import os
 import sys
+import shutil
+import glob
 
-# Suppress Qt font directory warnings on Linux
-if "QT_QPA_FONTDIR" not in os.environ:
-    for font_dir in ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"]:
-        if os.path.isdir(font_dir):
-            os.environ["QT_QPA_FONTDIR"] = font_dir
-            break
+# Suppress Qt font directory warnings on Linux by dynamically creating the expected font folder if missing
+try:
+    import cv2
+    cv2_dir = os.path.dirname(cv2.__file__)
+    qt_fonts_dir = os.path.join(cv2_dir, "qt", "fonts")
+    if not os.path.exists(qt_fonts_dir):
+        os.makedirs(qt_fonts_dir, exist_ok=True)
+        # Copy a standard system TrueType font to the directory
+        system_font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]
+        font_copied = False
+        for font_path in system_font_paths:
+            if os.path.exists(font_path):
+                shutil.copy(font_path, os.path.join(qt_fonts_dir, os.path.basename(font_path)))
+                font_copied = True
+                break
+        if not font_copied:
+            found_fonts = glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
+            if found_fonts:
+                shutil.copy(found_fonts[0], os.path.join(qt_fonts_dir, os.path.basename(found_fonts[0])))
+except Exception:
+    pass
 
 import time
 import math
@@ -1204,24 +1225,24 @@ def camera_to_uav(x_cam, y_cam):
 #--------------------------------------------------    
 #-- Connect to the vehicle with retry loop
 if args.connect.startswith('udp') or args.connect.startswith('tcp') or args.connect.startswith('192.168.'):
-    print(f'Connecting using {args.connect} (Network IP connection)...')
+    print(f'Connecting using {args.connect} (Network IP connection)...', flush=True)
 else:
-    print(f'Connecting using {args.connect} at {args.baud} baud...')
+    print(f'Connecting using {args.connect} at {args.baud} baud...', flush=True)
 
 while True:
     try:
         vehicle = MavlinkVehicle(args.connect, baud=args.baud)
         break
     except Exception as e:
-        print(f"Connection failed: {e}. Retrying in 2s...")
-print("Vehicle connected successfully!!!")
+        print(f"Connection failed: {e}. Retrying in 2s...", flush=True)
+print("Vehicle connected successfully!!!", flush=True)
 
 # Initialize Servo 16 to LOW (1000) at startup
-print("[HANDSHAKE] Initializing Servo 16 to LOW (1000) at startup...")
+print("[HANDSHAKE] Initializing Servo 16 to LOW (1000) at startup...", flush=True)
 try:
     vehicle.set_servo(16, 1000)
 except Exception as e:
-    print(f"[HANDSHAKE] Error setting Servo 16 to 1000 at startup: {e}")
+    print(f"[HANDSHAKE] Error setting Servo 16 to 1000 at startup: {e}", flush=True)
 
 
 @vehicle.on_message('SYS_STATUS')
@@ -1509,7 +1530,7 @@ except Exception as e:
     # Camera is optional during bring-up; LEDs and telemetry should still run without it.
     aruco_tracker = None
     camera_active = False
-    print(f"[CAMERA] Disabled/unavailable, skipping ArUco tracking: {e}")
+    print(f"[CAMERA] Disabled/unavailable, skipping ArUco tracking: {e}", flush=True)
                 
                 
 time_0 = time.time()
@@ -1526,7 +1547,7 @@ detection_buffer = deque(maxlen=7)
 last_known_position = None  # Store last known valid position (x_cm, y_cm, z_cm)
 confidence_threshold =20.0  # Minimum confidence percentage to send position data
 
-print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_threshold}%)")
+print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_threshold}%)", flush=True)
 
 last_recorded_ts = 0.0
 
@@ -1578,7 +1599,7 @@ while True:
         if time.time() >= time_0 + 1.0/freq_send:
             time_0 = time.time()
             status = "DETECTED" if marker_found else "TRACKING"
-            print(f"[{status}] Confidence: {confidence_score:.1f}% | x={x_cm:5.0f}cm y={y_cm:5.0f}cm z={z_cm:5.0f}cm | angles=({angle_x:.3f}, {angle_y:.3f})")
+            print(f"[{status}] Confidence: {confidence_score:.1f}% | x={x_cm:5.0f}cm y={y_cm:5.0f}cm z={z_cm:5.0f}cm | angles=({angle_x:.3f}, {angle_y:.3f})", flush=True)
             # send_land_message(x_m=x_cm*0.01, y_m=y_cm*0.01, z_m=z_cm*0.01)
             send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
     else:
