@@ -201,11 +201,56 @@ ip route
 
 ---
 
-# 11. Notes
+# 11. Arducam 64MP (OwlEye) Camera Configuration for RPi 5
+
+### Hardware Connection
+1. Connect the camera to one of the dual MIPI CSI ports on the Raspberry Pi 5 using the 15-pin to 22-pin FPC cable.
+2. Ensure the black tab on the cable faces the HDMI ports, and metal contacts are properly seated.
+
+### Software Configuration (Bookworm or Trixie OS)
+1. Open the Raspberry Pi boot configuration file:
+   ```bash
+   sudo nano /boot/firmware/config.txt
+   ```
+2. Disable auto-detection by changing:
+   ```text
+   camera_auto_detect=0
+   ```
+3. Locate the `[all]` section and add the appropriate overlay line beneath it to enable the camera:
+   * **For CAM1 port (default)**:
+     ```text
+     dtoverlay=ov64a40,link-frequency=360000000
+     ```
+   * **For CAM0 port**:
+     ```text
+     dtoverlay=ov64a40,cam0,link-frequency=360000000
+     ```
+4. Save the file and reboot:
+   ```bash
+   sudo reboot
+   ```
+
+### Camera Test Commands
+* **List available cameras**:
+  ```bash
+  rpicam-still --list-cameras
+  ```
+* **Start a live preview**:
+  ```bash
+  rpicam-still -t 0
+  ```
+* **Preview with Continuous Autofocus**:
+  ```bash
+  rpicam-still -t 0 --autofocus-mode continuous
+  ```
+
+---
+
+# 12. Notes
 
 * `ttyACM0` = NetworkManager modem control path
 * `usb0` = modem RNDIS interface (ignored in final setup)
-  n- `ttyACM2` = AT command port confirmed working
+* `ttyACM2` = AT command port confirmed working
 * `ppp0` = LTE internet interface
 * `wlan0` = primary WiFi internet
 * `eth0` = CUAV local ethernet link
