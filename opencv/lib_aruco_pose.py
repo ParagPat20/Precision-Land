@@ -36,10 +36,20 @@ We are going to obtain the following quantities:
 
 """
 
+import os
+import sys
+
+# Suppress Qt font directory warnings on Linux
+if "QT_QPA_FONTDIR" not in os.environ:
+    for font_dir in ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"]:
+        if os.path.isdir(font_dir):
+            os.environ["QT_QPA_FONTDIR"] = font_dir
+            break
+
 import numpy as np
 import cv2
 import cv2.aruco as aruco
-import sys, time, math
+import time, math
 import threading
 
 # Optional Raspberry Pi camera support via Picamera2, with graceful fallback
@@ -58,7 +68,8 @@ class ArucoSingleTracker():
                 camera_size=[640,360],  # Default: 640x360 for 16:9 wide FOV (120°), native: 2304x1296
                 show_video=False,
                 axis_scale=0.03,
-                use_picamera=None
+                use_picamera=None,
+                calib_size=[640, 480]   # Calibration resolution (matches cameraMatrix_webcam.txt)
                 ):
         
         
@@ -67,8 +78,20 @@ class ArucoSingleTracker():
         self._show_video    = show_video
         self._axis_scale    = axis_scale
         
-        self._camera_matrix = camera_matrix
-        self._camera_distortion = camera_distortion
+        # Scale camera matrix if requested camera size differs from calibration resolution
+        self._camera_matrix = np.array(camera_matrix, dtype=np.float32)
+        self._camera_distortion = np.array(camera_distortion, dtype=np.float32)
+        
+        calib_w, calib_h = calib_size[0], calib_size[1]
+        w_cur, h_cur = camera_size[0], camera_size[1]
+        sx = float(w_cur) / float(calib_w)
+        sy = float(h_cur) / float(calib_h)
+        if abs(sx - 1.0) > 1e-3 or abs(sy - 1.0) > 1e-3:
+            self._camera_matrix[0,0] *= sx  # fx
+            self._camera_matrix[1,1] *= sy  # fy
+            self._camera_matrix[0,2] *= sx  # cx
+            self._camera_matrix[1,2] *= sy  # cy
+            print(f"[TRACKER] Scaled camera matrix from calibration size {calib_w}x{calib_h} to active camera size {w_cur}x{h_cur} (sx={sx:.3f}, sy={sy:.3f})")
         
         self.is_detected    = False
         self._kill          = False
@@ -290,26 +313,17 @@ class ArucoSingleTracker():
 
                 #-- Draw the detected marker and put a reference frame over it
                 aruco.drawDetectedMarkers(frame, corners)
-                # Choose a short axis length relative to image size
-                axis_len = max(3, int(min(frame.shape[0], frame.shape[1]) * float(self._axis_scale)))
-                # Project a few axis endpoints to check if they are in frame
                 try:
-                    axes = np.float32([[0,0,0], [axis_len,0,0], [0,axis_len,0], [0,0,axis_len]])
-                    img_pts, _ = cv2.projectPoints(axes, rvec, tvec, self._camera_matrix, self._camera_distortion)
-                    img_pts = img_pts.reshape(-1,2)
-                    in_bounds = np.all((img_pts[:,0] >= 0) & (img_pts[:,0] < frame.shape[1]) &
-                                       (img_pts[:,1] >= 0) & (img_pts[:,1] < frame.shape[0]))
+                    # Draw custom warning-free axes (avoiding console warnings from solvepnp/drawFrameAxes)
+                    axis_len = max(5.0, self.marker_size * 0.5)
+                    axes_pts = np.float32([[0, 0, 0], [axis_len, 0, 0], [0, axis_len, 0], [0, 0, axis_len]])
+                    img_pts, _ = cv2.projectPoints(axes_pts, rvec, tvec, self._camera_matrix, self._camera_distortion)
+                    img_pts = img_pts.reshape(-1, 2).astype(int)
+                    cv2.line(frame, tuple(img_pts[0]), tuple(img_pts[1]), (0, 0, 255), 2, cv2.LINE_AA) # X-axis Red
+                    cv2.line(frame, tuple(img_pts[0]), tuple(img_pts[2]), (0, 255, 0), 2, cv2.LINE_AA) # Y-axis Green
+                    cv2.line(frame, tuple(img_pts[0]), tuple(img_pts[3]), (255, 0, 0), 2, cv2.LINE_AA) # Z-axis Blue
                 except Exception:
-                    in_bounds = True
-                try:
-                    if in_bounds:
-                        aruco.drawAxis(frame, self._camera_matrix, self._camera_distortion, rvec, tvec, axis_len)
-                except Exception:
-                    try:
-                        if in_bounds:
-                            cv2.drawFrameAxes(frame, self._camera_matrix, self._camera_distortion, rvec, tvec, axis_len)
-                    except Exception:
-                        pass
+                    pass
 
                 #-- Obtain the rotation matrix tag->camera
                 R_ct    = np.matrix(cv2.Rodrigues(rvec)[0])
@@ -382,14 +396,18 @@ class ArucoSingleTracker():
 if __name__ == "__main__":
 
     #--- Define Tag
-    id_to_find  = 72
-    marker_size  = 4 #- [cm]
+    id_to_find  = 132
+    marker_size  = 17.8 #- [cm]
 
     #--- Get the camera calibration path
     calib_path  = ""
-    camera_matrix   = np.loadtxt(calib_path+'cameraMatrix_raspi.txt', delimiter=',')
-    camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_raspi.txt', delimiter=',')                                      
-    aruco_tracker = ArucoSingleTracker(id_to_find=72, marker_size=10, show_video=False, camera_matrix=camera_matrix, camera_distortion=camera_distortion)
+    try:
+        camera_matrix   = np.loadtxt(calib_path+'cameraMatrix_webcam.txt', delimiter=',')
+        camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_webcam.txt', delimiter=',')
+    except Exception:
+        camera_matrix   = np.loadtxt(calib_path+'cameraMatrix_raspi.txt', delimiter=',')
+        camera_distortion   = np.loadtxt(calib_path+'cameraDistortion_raspi.txt', delimiter=',')
+    aruco_tracker = ArucoSingleTracker(id_to_find=id_to_find, marker_size=marker_size, show_video=False, camera_matrix=camera_matrix, camera_distortion=camera_distortion)
     
     aruco_tracker.track(verbose=True)
 

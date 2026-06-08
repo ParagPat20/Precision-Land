@@ -34,11 +34,20 @@ We are going to obtain the following quantities:
 
 """
 
+import os
+import sys
+
+# Suppress Qt font directory warnings on Linux
+if "QT_QPA_FONTDIR" not in os.environ:
+    for font_dir in ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"]:
+        if os.path.isdir(font_dir):
+            os.environ["QT_QPA_FONTDIR"] = font_dir
+            break
+
 import numpy as np
 import cv2
 import cv2.aruco as aruco
-import sys, time, math
-import os
+import time, math
 
 # Optional Raspberry Pi camera support via Picamera2
 try:
@@ -56,8 +65,8 @@ except Exception:
     _PICAMERA_AVAILABLE = False
 
 #--- Define Tag
-id_to_find  = 72
-marker_size  = 10 #- [cm]
+id_to_find  = 132
+marker_size  = 17.8 #- [cm]
 
 
 #------------------------------------------------------------------------------
@@ -136,7 +145,7 @@ except Exception:
 #-- Calibration should be done at the resolution you'll use for detection
 #-- Raspberry Pi Module 3 NoIR Wide: native 2304x1296 (16:9, 120° FOV)
 #-- Recommended: 640x360 for faster processing while preserving wide aspect ratio
-CALIB_W, CALIB_H = 640, 360  # Calibration resolution (should match your calibration images)
+CALIB_W, CALIB_H = 640, 480  # Calibration resolution (matches 640x480 calibration images)
 REQ_W, REQ_H = 640, 360      # Requested resolution (640x360 for 16:9 wide FOV)
 
 use_picamera = False
@@ -235,12 +244,16 @@ while True:
         #-- Draw the detected marker and put a reference frame over it
         aruco.drawDetectedMarkers(frame, corners)
         try:
-            aruco.drawAxis(frame, camera_matrix, camera_distortion, rvec, tvec, max(5, marker_size*0.5))
+            # Draw custom warning-free axes (avoiding console warnings from solvepnp/drawFrameAxes)
+            axis_len = max(5.0, marker_size * 0.5)
+            axes_pts = np.float32([[0, 0, 0], [axis_len, 0, 0], [0, axis_len, 0], [0, 0, axis_len]])
+            img_pts, _ = cv2.projectPoints(axes_pts, rvec, tvec, camera_matrix, camera_distortion)
+            img_pts = img_pts.reshape(-1, 2).astype(int)
+            cv2.line(frame, tuple(img_pts[0]), tuple(img_pts[1]), (0, 0, 255), 2, cv2.LINE_AA) # X-axis Red
+            cv2.line(frame, tuple(img_pts[0]), tuple(img_pts[2]), (0, 255, 0), 2, cv2.LINE_AA) # Y-axis Green
+            cv2.line(frame, tuple(img_pts[0]), tuple(img_pts[3]), (255, 0, 0), 2, cv2.LINE_AA) # Z-axis Blue
         except Exception:
-            try:
-                cv2.drawFrameAxes(frame, camera_matrix, camera_distortion, rvec, tvec, max(5, marker_size*0.5))
-            except Exception:
-                pass
+            pass
 
         #-- Print the tag position in camera frame
         str_position = "MARKER Position x=%4.0f  y=%4.0f  z=%4.0f"%(float(tvec[0]), float(tvec[1]), float(tvec[2]))

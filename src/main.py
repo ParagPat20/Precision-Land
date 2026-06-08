@@ -39,11 +39,19 @@ Status Management:
 - EXPIRED_STALE: Mission command was too old (>45s)
 
 """
+import os
+import sys
+
+# Suppress Qt font directory warnings on Linux
+if "QT_QPA_FONTDIR" not in os.environ:
+    for font_dir in ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"]:
+        if os.path.isdir(font_dir):
+            os.environ["QT_QPA_FONTDIR"] = font_dir
+            break
+
 import time
 import math
 import argparse
-import os
-import sys
 import signal
 import traceback
 import glob
@@ -1094,8 +1102,16 @@ parser.add_argument('--servo-port', default=None, help="Serial port for ST3215 a
 parser.add_argument('--no-video', action='store_true', help="Disable the camera window (OpenCV window) for headless running.")
 parser.add_argument('--no-record', action='store_true', help="Disable automatic video recording during armed state.")
 parser.add_argument('--no-servo', action='store_true', help="Disable servo controller initialization and monitoring.")
+parser.add_argument('--resolution', default='640x360', help="Camera resolution WxH (default: 640x360 for high/stable FPS).")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
+
+# Parse camera resolution
+try:
+    _w, _h = map(int, args.resolution.split('x'))
+    camera_resolution = [_w, _h]
+except Exception:
+    camera_resolution = [640, 360]
 
 def handle_signal(signum, frame):
     print("\n[SYSTEM] Termination signal received. Exiting cleanly...")
@@ -1473,11 +1489,8 @@ freq_send       = 10 #- Hz
 cwd                 = path.dirname(path.abspath(__file__))
 calib_path          = cwd+"/../opencv/"
 # Arducam 64MP OV64A40 camera resolution
-# Native: 9248x6944 (64MP)
-# Available modes: 1920x1080@45fps, 2312x1736@26fps, 3840x2160@14fps, 4624x3472@7fps
-# Using 1920x1080@45fps for optimal balance between resolution and frame rate for precision landing
-# Higher resolution allows marker detection from greater altitudes with continuous autofocus
-camera_resolution   = [1920, 1080]  # 16:9 aspect ratio, 45fps with link-frequency=360000000
+# Default: 640x360 for high/stable frame rate (9x lower CPU processing overhead than 1080p)
+# Using parsed resolution from CLI arguments.
 try:
     camera_matrix = np.loadtxt(calib_path + 'cameraMatrix_webcam.txt', delimiter=',')
     camera_distortion = np.loadtxt(calib_path + 'cameraDistortion_webcam.txt', delimiter=',')
@@ -1489,6 +1502,7 @@ try:
         camera_matrix=camera_matrix,
         camera_distortion=camera_distortion,
         camera_size=camera_resolution,
+        calib_size=[640, 480]
     )
     camera_active = True
 except Exception as e:
