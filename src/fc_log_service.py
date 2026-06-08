@@ -1157,13 +1157,9 @@ def start_log_services(vehicle):
             str(Path(__file__).resolve().parent.parent / "webtools"),
         )
         # The UI expects to reach the Pi at `victoris.local` by default.
-        # We still bind to a resolved IP (if possible) to avoid issues on systems
-        # where binding to a hostname is less reliable.
+        # To allow external devices on the same network to connect, bind the HTTP server to 0.0.0.0 (all interfaces).
         host_public = os.environ.get("JECH_FC_LOG_HOST", "victoris.local")
-        try:
-            host_bind = socket.gethostbyname(host_public)
-        except Exception:
-            host_bind = "0.0.0.0"
+        host_bind = os.environ.get("JECH_FC_LOG_BIND", "0.0.0.0")
         port = int(os.environ.get("JECH_FC_LOG_PORT", "8765"))
 
         service = FlightControllerLogService(

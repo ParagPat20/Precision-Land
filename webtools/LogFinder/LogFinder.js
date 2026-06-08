@@ -1329,8 +1329,17 @@ async function initial_load() {
     }
 
     const params = new URLSearchParams(window.location.search)
-    const source = params.get("source")
-    const inventory = params.get("inventory")
+    let source = params.get("source")
+    let inventory = params.get("inventory")
+
+    // Auto-detect and populate server/inventory URLs if loaded via HTTP/S
+    if (source == null && window.location.protocol.startsWith("http")) {
+        source = window.location.origin + "/api/logs"
+    }
+    if (inventory == null && window.location.protocol.startsWith("http")) {
+        inventory = window.location.origin + "/api/fc-logs"
+    }
+
     if (source != null) {
         document.getElementById("server_url").value = source
         loading_call(() => load_from_server(source))

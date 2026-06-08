@@ -52,6 +52,15 @@ def save_snaps_picamera2(width=0, height=0, name="snapshot", folder="."):
             eff_w, eff_h = config["main"]["size"]
 
         cam.start()
+
+        # Enable Continuous Autofocus for Arducam 64MP OV64A40 (matching lib_aruco_pose.py)
+        # Continuous autofocus keeps adjusting focus as the drone moves
+        try:
+            cam.set_controls({"AfMode": 2})  # AfMode: 2 = Continuous Autofocus
+            print("[CAMERA] Autofocus enabled (Continuous mode)")
+        except Exception as af_error:
+            print(f"[CAMERA] Warning: Could not enable autofocus: {af_error}")
+
         time.sleep(0.5)  # brief warmup
 
         nSnap = 0
