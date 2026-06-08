@@ -1093,6 +1093,7 @@ parser.add_argument('--baud', type=int, default=int(os.environ.get("JECH_MAVLINK
 parser.add_argument('--servo-port', default=None, help="Serial port for ST3215 and SC09 servos. Defaults to JECH_SERVO_PORT, then auto-detects common RPi serial devices.")
 parser.add_argument('--no-video', action='store_true', help="Disable the camera window (OpenCV window) for headless running.")
 parser.add_argument('--no-record', action='store_true', help="Disable automatic video recording during armed state.")
+parser.add_argument('--no-servo', action='store_true', help="Disable servo controller initialization and monitoring.")
 args = parser.parse_args()
 args.connect = resolve_vehicle_connection_path(args.connect)
 
@@ -1241,43 +1242,47 @@ alarm_controller.start()
 #--------------------------------------------------
 #-------------- SERVO CONTROLLER
 #--------------------------------------------------
-try:
-    servo_controller = ServoController(
-        vehicle=vehicle,
-        port_name=args.servo_port,
-        baudrate=1000000,
-        is_mission_active_cb=lambda: mission_active_event.is_set()
-    )
-    
-    # Load servo config from JSON
-    import json
-    servo_config_path = os.path.join(os.path.dirname(__file__), "..", "servo-config.json")
-    st_config = {"min": 0, "max": 4095, "home": 0}
-    sc09_configs = {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
-    
+if args.no_servo:
+    servo_controller = None
+    print("[SERVO] Servo controller is DISABLED by --no-servo option.")
+else:
     try:
-        if os.path.exists(servo_config_path):
-            with open(servo_config_path, "r") as f:
-                cfg = json.load(f)
-                st_config = cfg.get("st3215", st_config)
-                sc09_configs = {
-                    2: cfg.get("sc09_2", sc09_configs[2]),
-                    3: cfg.get("sc09_3", sc09_configs[3])
-                }
-    except Exception as ce:
-        print(f"[SERVO] Failed to load config, using defaults: {ce}")
+        servo_controller = ServoController(
+            vehicle=vehicle,
+            port_name=args.servo_port,
+            baudrate=1000000,
+            is_mission_active_cb=lambda: mission_active_event.is_set()
+        )
+        
+        # Load servo config from JSON
+        import json
+        servo_config_path = os.path.join(os.path.dirname(__file__), "..", "servo-config.json")
+        st_config = {"min": 0, "max": 4095, "home": 0}
+        sc09_configs = {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
+        
+        try:
+            if os.path.exists(servo_config_path):
+                with open(servo_config_path, "r") as f:
+                    cfg = json.load(f)
+                    st_config = cfg.get("st3215", st_config)
+                    sc09_configs = {
+                        2: cfg.get("sc09_2", sc09_configs[2]),
+                        3: cfg.get("sc09_3", sc09_configs[3])
+                    }
+        except Exception as ce:
+            print(f"[SERVO] Failed to load config, using defaults: {ce}")
 
-    # ST3215 uses 0-4095; SC09/SCSCL uses 0-1023.
-    servo_controller.initialize_servos(st_config=st_config, sc09_configs=sc09_configs)
-    servo_controller.start_monitoring()
-    
-    # Link to web service
-    if fc_log_service:
-        fc_log_service.servo_controller = servo_controller
-        print("[SERVO] Web API endpoints activated.")
+        # ST3215 uses 0-4095; SC09/SCSCL uses 0-1023.
+        servo_controller.initialize_servos(st_config=st_config, sc09_configs=sc09_configs)
+        servo_controller.start_monitoring()
+        
+        # Link to web service
+        if fc_log_service:
+            fc_log_service.servo_controller = servo_controller
+            print("[SERVO] Web API endpoints activated.")
 
-except Exception as e:
-    print(f"[SERVO] Failed to initialize servo controller: {e}")
+    except Exception as e:
+        print(f"[SERVO] Failed to initialize servo controller: {e}")
 
 # Video recordings go under ~/Videos/Precision-Land/<DDMMYYYY>/
 if args.no_record:
