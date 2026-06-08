@@ -1173,22 +1173,36 @@ signal.signal(signal.SIGTERM, handle_signal)
 # Define function to send landing_target mavlink message for mavlink based precision landing
 # http://mavlink.org/messages/common#LANDING_TARGET
 def send_land_message_v2(x_rad=0.0, y_rad=0.0, dist_m=0.0, x_m=0.0,y_m=0.0,z_m=0.0, time_usec=0, target_num=0):
-    msg = vehicle.message_factory.landing_target_encode(
-        int(time_usec),          # time target data was processed, as close to sensor capture as possible
-        int(target_num),         # target num, not used
-        int(mavutil.mavlink.MAV_FRAME_BODY_FRD), # frame, not used
-        float(x_rad),            # X-axis angular offset, in radians
-        float(y_rad),            # Y-axis angular offset, in radians
-        float(dist_m),       # distance, in meters
-        0.0,                     # Target x-axis size, in radians
-        0.0,                     # Target y-axis size, in radians
-        float(x_m),              # x position in frame
-        float(y_m),              # y position in frame
-        float(z_m),              # z position in frame
-        (1.0,0.0,0.0,0.0),       # orientation quaternion
-        int(2),                  # type of landing target: 2 = Fiducial marker
-        int(0),                  # position_valid boolean
-    )
+    try:
+        # Try sending with newer MAVLink fields (14 arguments)
+        msg = vehicle.message_factory.landing_target_encode(
+            int(time_usec),          # time target data was processed, as close to sensor capture as possible
+            int(target_num),         # target num, not used
+            int(mavutil.mavlink.MAV_FRAME_BODY_FRD), # frame, not used
+            float(x_rad),            # X-axis angular offset, in radians
+            float(y_rad),            # Y-axis angular offset, in radians
+            float(dist_m),           # distance, in meters
+            0.0,                     # Target x-axis size, in radians
+            0.0,                     # Target y-axis size, in radians
+            float(x_m),              # x position in frame
+            float(y_m),              # y position in frame
+            float(z_m),              # z position in frame
+            (1.0,0.0,0.0,0.0),       # orientation quaternion
+            int(2),                  # type of landing target: 2 = Fiducial marker
+            int(0),                  # position_valid boolean
+        )
+    except TypeError:
+        # Fallback for older pymavlink dialects (8 arguments)
+        msg = vehicle.message_factory.landing_target_encode(
+            int(time_usec),          # time target data was processed, as close to sensor capture as possible
+            int(target_num),         # target num, not used
+            int(mavutil.mavlink.MAV_FRAME_BODY_FRD), # frame, not used
+            float(x_rad),            # X-axis angular offset, in radians
+            float(y_rad),            # Y-axis angular offset, in radians
+            float(dist_m),           # distance, in meters
+            0.0,                     # Target x-axis size, in radians
+            0.0,                     # Target y-axis size, in radians
+        )
     # print(msg)
     vehicle.send_mavlink(msg)
 
