@@ -99,7 +99,7 @@ class DeliveryTemplate:
             'land': mavutil.mavlink.MAV_CMD_NAV_LAND, # 21
             'rtl': mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH, # 20
             'doSetServo': mavutil.mavlink.MAV_CMD_DO_SET_SERVO, # 183
-            'delay': mavutil.mavlink.MAV_CMD_CONDITION_DELAY, # 112
+            'delay': mavutil.mavlink.MAV_CMD_NAV_DELAY, # 93
             'changeSpeed': mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED, # 178
         }
 
