@@ -92,79 +92,39 @@ function run_batch_fft(data_set) {
 
 // Get index into FFT data array
 function get_axis_index() {
-    for (let i = 0; i < PID_log_messages.length; i++) {
-        if (document.getElementById("type_" + PID_log_messages[i].id.join("_")).checked) {
-            return i
+    let ref_log = loaded_logs.length > 0 ? loaded_logs[0] : [{id:['PIDR']}, {id:['PIDP']}, {id:['PIDY']}, {id:['PIQR']}, {id:['PIQP']}, {id:['PIQY']}, {id:['RATE', 'R']}, {id:['RATE', 'P']}, {id:['RATE', 'Y']}];
+    for (let i = 0; i < ref_log.length; i++) {
+        let el = document.getElementById("type_" + ref_log[i].id.join("_"));
+        if (el && el.checked) {
+            return i;
         }
     }
+    return 0;
 }
 
 // Attempt to put page back to for a new log
 function reset() {
-
-    document.title = "ArduPilot PID Review"
-
-    const types = ["PIDP",   "PIDR",   "PIDY",
-                   "PIQP",   "PIQR",   "PIQY",
-                   "RATE_R", "RATE_P", "RATE_Y"]
-    for (const type of types) {
-        let ele = document.getElementById("type_" + type)
-        ele.disabled = true
-        ele.checked = false
-    }
-
-    // Clear all plot data
-    for (let i = 0; i < TimeInputs.data.length; i++) {
-        TimeInputs.data[i].x = []
-        TimeInputs.data[i].y = []
-    }
-    for (let i = 0; i < TimeOutputs.data.length; i++) {
-        TimeOutputs.data[i].x = []
-        TimeOutputs.data[i].y = []
-    }
-    for (let i = 0; i < fft_plot.data.length; i++) {
-        fft_plot.data[i].x = []
-        fft_plot.data[i].y = []
-    }
-    for (let i = 0; i < step_plot.data.length; i++) {
-        step_plot.data[i].x = []
-        step_plot.data[i].y = []
-    }
-    for (let i = 0; i < Spectrogram.data.length; i++) {
-        Spectrogram.data[i].x = []
-        Spectrogram.data[i].y = []
-    }
-
-    document.getElementById("calculate").disabled = true
-
-    // Disable key checkboxes by default
-    for (const key of fft_keys) {
-        const FFT_checkbox = document.getElementById("PIDX_" + key)
-        FFT_checkbox.checked = false
-        FFT_checkbox.disabled = true
-
-        const Spec_checkbox = document.getElementById("Spec_" + key)
-        Spec_checkbox.checked = false
-        Spec_checkbox.disabled = true
-    }
-
-    // Check target and actual
-    document.getElementById("PIDX_Tar").checked = true
-    document.getElementById("PIDX_Act").checked = true
-
-    // Show output on spectrogram by default
-    document.getElementById("Spec_Out").checked = true
-
+    // do not clear logs if multiple are supported
 }
 
+
 // Setup plots with no data
-var flight_data = {}
-var TimeInputs = {}
-var TimeOutputs = {}
-var fft_plot = {}
-var step_plot = {}
-var Spectrogram = {}
-function setup_plots() {
+
+
+
+
+
+
+function setup_plots(log_index, file_name) {
+    create_log_dom(log_index, file_name);
+    
+    var flight_data = {};
+    var TimeInputs = {};
+    var TimeOutputs = {};
+    var fft_plot = {};
+    var step_plot = {};
+    var Spectrogram = {};
+
 
     const time_scale_label = "Time (s)"
 
@@ -215,12 +175,12 @@ function setup_plots() {
         }
     }
 
-    var plot = document.getElementById("FlightData")
+    var plot = document.getElementById("FlightData_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, flight_data.data, flight_data.layout, {displaylogo: false});
 
     // Update start and end time based on range
-    document.getElementById("FlightData").on('plotly_relayout', function(data) {
+    document.getElementById("FlightData_" + log_index).on('plotly_relayout', function(data) {
 
         function range_update(range) {
             document.getElementById("TimeStart").value = Math.floor(range[0])
@@ -266,7 +226,7 @@ function setup_plots() {
                                 xaxis: { title: {text: time_scale_label } },
                                 yaxis: { title: {text: "deg / s" } }}
 
-    var plot = document.getElementById("TimeInputs")
+    var plot = document.getElementById("TimeInputs_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, TimeInputs.data, TimeInputs.layout, {displaylogo: false})
 
@@ -286,7 +246,7 @@ function setup_plots() {
                                 xaxis: { title: {text: time_scale_label } },
                                 yaxis: { title: {text: "" } }}
 
-    plot = document.getElementById("TimeOutputs")
+    plot = document.getElementById("TimeOutputs_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, TimeOutputs.data, TimeOutputs.layout, {displaylogo: false})
 
@@ -304,7 +264,7 @@ function setup_plots() {
         margin: { b: 50, l: 50, r: 50, t: 20 },
     }
 
-    plot = document.getElementById("FFTPlot")
+    plot = document.getElementById("FFTPlot_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, fft_plot.data, fft_plot.layout, {displaylogo: false});
 
@@ -327,7 +287,7 @@ function setup_plots() {
                                 y0: 1,
                                 y1: 1 }]
 
-    plot = document.getElementById("step_plot")
+    plot = document.getElementById("step_plot_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, step_plot.data, step_plot.layout, {displaylogo: false});
 
@@ -350,39 +310,47 @@ function setup_plots() {
         margin: { b: 50, l: 50, r: 50, t: 20 }
     }
 
-    plot = document.getElementById("Spectrogram")
+    plot = document.getElementById("Spectrogram_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, Spectrogram.data, Spectrogram.layout, {displaylogo: false});
 
-    link_plots()
+
+    flight_data_arr[log_index] = flight_data;
+    TimeInputs_arr[log_index] = TimeInputs;
+    TimeOutputs_arr[log_index] = TimeOutputs;
+    fft_plot_arr[log_index] = fft_plot;
+    step_plot_arr[log_index] = step_plot;
+    Spectrogram_arr[log_index] = Spectrogram;
+    
+    link_plots(log_index);
 } 
 
-function link_plots() {
+function link_plots(log_index) {
 
     // Clear listeners
-    document.getElementById("TimeInputs").removeAllListeners("plotly_relayout");
-    document.getElementById("TimeOutputs").removeAllListeners("plotly_relayout");
-    document.getElementById("FFTPlot").removeAllListeners("plotly_relayout");
-    document.getElementById("Spectrogram").removeAllListeners("plotly_relayout");
-    document.getElementById("step_plot").removeAllListeners("plotly_relayout");
+    document.getElementById("TimeInputs_" + log_index).removeAllListeners("plotly_relayout");
+    document.getElementById("TimeOutputs_" + log_index).removeAllListeners("plotly_relayout");
+    document.getElementById("FFTPlot_" + log_index).removeAllListeners("plotly_relayout");
+    document.getElementById("Spectrogram_" + log_index).removeAllListeners("plotly_relayout");
+    document.getElementById("step_plot_" + log_index).removeAllListeners("plotly_relayout");
 
 
     // Link all frequency axis
-    link_plot_axis_range([["FFTPlot", "x", "", fft_plot],
-                          ["Spectrogram", "y", "", Spectrogram]])
+    link_plot_axis_range([["FFTPlot_" + log_index, "x", "", fft_plot_arr[log_index]],
+                          ["Spectrogram_" + log_index, "y", "", Spectrogram_arr[log_index]]])
 
     // Link time axis
-    link_plot_axis_range([["TimeInputs", "x", "", TimeInputs],
-                          ["TimeOutputs", "x", "", TimeOutputs],
-                          ["Spectrogram", "x", "", Spectrogram]])
+    link_plot_axis_range([["TimeInputs_" + log_index, "x", "", TimeInputs_arr[log_index]],
+                          ["TimeOutputs_" + log_index, "x", "", TimeOutputs_arr[log_index]],
+                          ["Spectrogram_" + log_index, "x", "", Spectrogram_arr[log_index]]])
 
 
     // Link all reset calls
-    link_plot_reset([["TimeInputs", TimeInputs],
-                     ["TimeOutputs", TimeOutputs],
-                     ["FFTPlot", fft_plot],
-                     ["step_plot", step_plot],
-                     ["Spectrogram", Spectrogram]])
+    link_plot_reset([["TimeInputs_" + log_index, TimeInputs_arr[log_index]],
+                     ["TimeOutputs_" + log_index, TimeOutputs_arr[log_index]],
+                     ["FFTPlot_" + log_index, fft_plot_arr[log_index]],
+                     ["step_plot_" + log_index, step_plot_arr[log_index]],
+                     ["Spectrogram_" + log_index, Spectrogram_arr[log_index]]])
 
 }
 
@@ -392,7 +360,15 @@ function get_FFT_data_index(set_num, plot_type) {
     return set_num*plot_types.length + plot_type
 }
 
-function setup_FFT_data() {
+function setup_FFT_data_inner(log_index) {
+    let PID_log_messages = loaded_logs[log_index];
+    let flight_data = flight_data_arr[log_index];
+    let TimeInputs = TimeInputs_arr[log_index];
+    let TimeOutputs = TimeOutputs_arr[log_index];
+    let fft_plot = fft_plot_arr[log_index];
+    let step_plot = step_plot_arr[log_index];
+    let Spectrogram = Spectrogram_arr[log_index];
+    if (!PID_log_messages) return;
 
     const PID = PID_log_messages[get_axis_index()]
 
@@ -466,23 +442,23 @@ function setup_FFT_data() {
 
     }
 
-    let plot = document.getElementById("TimeInputs")
+    let plot = document.getElementById("TimeInputs_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, TimeInputs.data, TimeInputs.layout, {displaylogo: false})
 
-    plot = document.getElementById("TimeOutputs")
+    plot = document.getElementById("TimeOutputs_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, TimeOutputs.data, TimeOutputs.layout, {displaylogo: false})
 
-    plot = document.getElementById("FFTPlot")
+    plot = document.getElementById("FFTPlot_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, fft_plot.data, fft_plot.layout, {displaylogo: false});
 
-    plot = document.getElementById("step_plot")
+    plot = document.getElementById("step_plot_" + log_index)
     Plotly.purge(plot)
     Plotly.newPlot(plot, step_plot.data, step_plot.layout, {displaylogo: false});
 
-    link_plots()
+    link_plots(log_index)
 
 }
 
@@ -500,7 +476,15 @@ function re_calc() {
 }
 
 // Force full re-calc on next run, on window size change
-function clear_calculation() {
+function clear_calculation_inner(log_index) {
+    let PID_log_messages = loaded_logs[log_index];
+    let flight_data = flight_data_arr[log_index];
+    let TimeInputs = TimeInputs_arr[log_index];
+    let TimeOutputs = TimeOutputs_arr[log_index];
+    let fft_plot = fft_plot_arr[log_index];
+    let step_plot = step_plot_arr[log_index];
+    let Spectrogram = Spectrogram_arr[log_index];
+    if (!PID_log_messages) return;
     if (PID_log_messages == null) {
         return
     }
@@ -521,7 +505,15 @@ function clear_calculation() {
 }
 
 // Re-run all FFT's
-function calculate() {
+function calculate_inner(log_index) {
+    let PID_log_messages = loaded_logs[log_index];
+    let flight_data = flight_data_arr[log_index];
+    let TimeInputs = TimeInputs_arr[log_index];
+    let TimeOutputs = TimeOutputs_arr[log_index];
+    let fft_plot = fft_plot_arr[log_index];
+    let step_plot = step_plot_arr[log_index];
+    let Spectrogram = Spectrogram_arr[log_index];
+    if (!PID_log_messages) return;
     // Disable button, calculation is now upto date
     document.getElementById("calculate").disabled = true
 
@@ -579,7 +571,15 @@ function find_end_index(time) {
     return end_index
 }
 
-function add_param_sets() {
+function add_param_sets_inner(log_index) {
+    let PID_log_messages = loaded_logs[log_index];
+    let flight_data = flight_data_arr[log_index];
+    let TimeInputs = TimeInputs_arr[log_index];
+    let TimeOutputs = TimeOutputs_arr[log_index];
+    let fft_plot = fft_plot_arr[log_index];
+    let step_plot = step_plot_arr[log_index];
+    let Spectrogram = Spectrogram_arr[log_index];
+    if (!PID_log_messages) return;
     let fieldset = document.getElementById("test_sets")
 
     // Remove all children
@@ -764,7 +764,15 @@ function add_param_sets() {
 
 var amplitude_scale
 var frequency_scale
-function redraw() {
+function redraw_inner(log_index) {
+    let PID_log_messages = loaded_logs[log_index];
+    let flight_data = flight_data_arr[log_index];
+    let TimeInputs = TimeInputs_arr[log_index];
+    let TimeOutputs = TimeOutputs_arr[log_index];
+    let fft_plot = fft_plot_arr[log_index];
+    let step_plot = step_plot_arr[log_index];
+    let Spectrogram = Spectrogram_arr[log_index];
+    if (!PID_log_messages) return;
     if ((PID_log_messages == null) || !PID_log_messages.have_data) {
         return
     }
@@ -850,8 +858,8 @@ function redraw() {
         }
     }
 
-    Plotly.redraw("TimeInputs")
-    Plotly.redraw("TimeOutputs")
+    Plotly.redraw("TimeInputs_" + log_index)
+    Plotly.redraw("TimeOutputs_" + log_index)
 
     if (PID.sets.FFT == null) {
         return
@@ -928,14 +936,22 @@ function redraw() {
         }
     }
 
-    Plotly.redraw("FFTPlot")
+    Plotly.redraw("FFTPlot_" + log_index)
 
     redraw_Spectrogram()
 
     redraw_step()
 }
 
-function redraw_Spectrogram() {
+function redraw_Spectrogram_inner(log_index) {
+    let PID_log_messages = loaded_logs[log_index];
+    let flight_data = flight_data_arr[log_index];
+    let TimeInputs = TimeInputs_arr[log_index];
+    let TimeOutputs = TimeOutputs_arr[log_index];
+    let fft_plot = fft_plot_arr[log_index];
+    let step_plot = step_plot_arr[log_index];
+    let Spectrogram = Spectrogram_arr[log_index];
+    if (!PID_log_messages) return;
     if ((PID_log_messages == null) || !PID_log_messages.have_data) {
         return
     }
@@ -949,6 +965,12 @@ function redraw_Spectrogram() {
             plot_key = key
             break
         }
+    }
+    
+    if (!plot_key) {
+        plot_key = "Out";
+        let fallback_el = document.getElementById("Spec_Out");
+        if(fallback_el) fallback_el.checked = true;
     }
 
     // Setup axes
@@ -1025,11 +1047,19 @@ function redraw_Spectrogram() {
         }
     }
 
-    Plotly.redraw("Spectrogram")
+    Plotly.redraw("Spectrogram_" + log_index)
 }
 
 // Redraw step response
-function redraw_step() {
+function redraw_step_inner(log_index) {
+    let PID_log_messages = loaded_logs[log_index];
+    let flight_data = flight_data_arr[log_index];
+    let TimeInputs = TimeInputs_arr[log_index];
+    let TimeOutputs = TimeOutputs_arr[log_index];
+    let fft_plot = fft_plot_arr[log_index];
+    let step_plot = step_plot_arr[log_index];
+    let Spectrogram = Spectrogram_arr[log_index];
+    if (!PID_log_messages) return;
     if ((PID_log_messages == null) || !PID_log_messages.have_data) {
         return
     }
@@ -1050,7 +1080,7 @@ function redraw_step() {
         step_plot.data[plot_index].y = []
     }
     if (valid_sets == 0) {
-        Plotly.redraw("step_plot")
+        Plotly.redraw("step_plot_" + log_index)
         return
     }
 
@@ -1205,12 +1235,16 @@ function redraw_step() {
     step_plot.layout.yaxis.range = [0, 2]
     step_plot.layout.yaxis.autorange = false
 
-    Plotly.redraw("step_plot")
+    Plotly.redraw("step_plot_" + log_index)
 
 } 
 
 // Update lines that are shown in FFT plot
-function update_hidden(source) {
+function update_hidden_inner(source, log_index) {
+    let PID_log_messages = loaded_logs[log_index];
+    let fft_plot = fft_plot_arr[log_index];
+    let step_plot = step_plot_arr[log_index];
+    if (!PID_log_messages) return;
 
     function set_all_from_id(id, set_to) {
 
@@ -1286,24 +1320,25 @@ function update_hidden(source) {
             step_plot.data[visible_set].visible = true
         }
 
-        Plotly.redraw("step_plot")
+        Plotly.redraw("step_plot_" + log_index)
 
 
     } else {
         set_all_from_id(source.id, source.checked)
     }
 
-    Plotly.redraw("FFTPlot")
+    Plotly.redraw("FFTPlot_" + log_index)
 
 }
 
 // Update flight data range and enable calculate when time range inputs are updated
-function time_range_changed() {
+function time_range_changed_inner(log_index) {
+    let flight_data = flight_data_arr[log_index];
 
     flight_data.layout.xaxis.range = [ parseFloat(document.getElementById("TimeStart").value),
                                        parseFloat(document.getElementById("TimeEnd").value)]
     flight_data.layout.xaxis.autorange = false
-    Plotly.redraw("FlightData")
+    Plotly.redraw("FlightData_" + log_index)
 
     document.getElementById('calculate').disabled = false
 }
@@ -1381,8 +1416,164 @@ function split_into_batches(PID_log_messages, index, time) {
     return ret
 }
 
-var PID_log_messages = []
-async function load(log_file) {
+
+// Global arrays for multiple logs
+var loaded_logs = [];
+var flight_data_arr = [];
+var TimeInputs_arr = [];
+var TimeOutputs_arr = [];
+var fft_plot_arr = [];
+var step_plot_arr = [];
+var Spectrogram_arr = [];
+
+function create_log_dom(log_index, file_name) {
+    let container = document.getElementById("logs_container");
+    let html = `
+<div id="log_${log_index}_container" style="border: 2px solid #ccc; padding: 10px; margin-bottom: 20px;">
+   <h1 style="text-align:center; color: #333;">Log ${log_index+1}: ${file_name}</h1>
+   
+   <h2 style="text-align:center">Flight Data</h2>
+   <div id="FlightData_${log_index}" style="width:1200px;height:450px"></div>
+
+   <h2 style="text-align:center">Time domain</h2>
+   <div id="TimeInputs_${log_index}" style="width:1200px;height:450px"></div>
+   <div id="TimeOutputs_${log_index}" style="width:1200px;height:450px"></div>
+
+   <h2 style="text-align:center">Frequency domain</h2>
+   <div id="FFTPlot_${log_index}" style="width:1200px;height:450px"></div>
+
+   <h2 style="text-align:center">Step Response</h2>
+   <div id="step_plot_${log_index}" style="width:1200px;height:450px"></div>
+
+   <h2 style="text-align:center">PID Spectrogram</h2>
+   <div id="Spectrogram_${log_index}" style="width:1200px;height:450px"></div>
+</div>
+    `;
+    let div = document.createElement('div');
+    div.innerHTML = html;
+    container.appendChild(div);
+}
+
+function render_technical_suggestions() {
+    let container = document.getElementById("comparison_and_suggestions_container");
+    if (!container) return;
+    
+    let html = "<h2 style='text-align:center;'>Technical Suggestions & Comparison</h2>";
+    html += "<div style='width:1200px; margin: 0 auto; padding: 20px; border: 2px solid #0056b3; border-radius: 8px; background-color: #f8f9fa;'>";
+    
+    if (loaded_logs.length === 0) {
+        html += "<p>No logs loaded.</p></div>";
+        container.innerHTML = html;
+        return;
+    }
+
+    html += "<table style='width:100%; border-collapse: collapse;' border='1'>";
+    html += "<tr style='background-color:#e9ecef'><th>Log</th><th>Overshoot (%)</th><th>Rise Time (ms)</th><th>Oscillation Peak (Hz)</th><th>Suggestions & Trends</th></tr>";
+    
+    let prev_overshoot = null;
+    let prev_risetime = null;
+
+    for (let i = 0; i < loaded_logs.length; i++) {
+        let PID = loaded_logs[i][get_axis_index()];
+        if(!PID || !PID.sets || PID.sets.length === 0) continue;
+        
+        let step_y = null;
+        let step_x = null;
+        try {
+            let step_data = step_plot_arr[i].data;
+            for(let p=0; p<step_data.length; p++){
+                if(step_data[p].name && step_data[p].name.startsWith("Test") && step_data[p].y && step_data[p].y.length > 0) {
+                    step_y = step_data[p].y;
+                    step_x = step_data[p].x;
+                }
+            }
+        } catch(e) {}
+
+        let peak_freq = 0;
+        let peak_amp = 0;
+        try {
+            let fft_data = fft_plot_arr[i].data;
+            for(let p=0; p<fft_data.length; p++){
+                if(fft_data[p].name === "Error" && fft_data[p].y && fft_data[p].y.length > 0) {
+                    for(let f=0; f<fft_data[p].y.length; f++){
+                        if (fft_data[p].x[f] > 2.0 && fft_data[p].y[f] > peak_amp) {
+                            peak_amp = fft_data[p].y[f];
+                            peak_freq = fft_data[p].x[f];
+                        }
+                    }
+                }
+            }
+        } catch(e) {}
+        
+        let overshoot = 0;
+        let risetime = 0;
+        let suggestion = "Insufficient data for analysis.";
+        
+        if (step_y && step_y.length > 0) {
+            let max_val = Math.max(...step_y.filter(v => !isNaN(v)));
+            overshoot = Math.max(0, (max_val - 1.0) * 100);
+            
+            let t10 = -1, t90 = -1;
+            for(let j=0; j<step_y.length; j++){
+                if(!isNaN(step_y[j])) {
+                    if(t10 < 0 && step_y[j] >= 0.1) t10 = step_x[j];
+                    if(t90 < 0 && step_y[j] >= 0.9) t90 = step_x[j];
+                }
+            }
+            if(t10 >= 0 && t90 >= 0) {
+                risetime = ((t90 - t10)*1000);
+            }
+            
+            suggestion = "Good tuning.";
+            if (overshoot > 15) {
+                suggestion = "High overshoot. Suggest increasing D or decreasing P.";
+            } else if (overshoot > 5) {
+                suggestion = "Slight overshoot. Minor increase to D recommended.";
+            } else if (risetime > 100) {
+                suggestion = "Response is slow. Suggest increasing P or FF.";
+            }
+        }
+
+        let trend_str = "";
+        if (prev_overshoot !== null && prev_risetime !== null) {
+            let over_diff = overshoot - prev_overshoot;
+            let rise_diff = risetime - prev_risetime;
+            trend_str = `<br><b>Trend vs Prev:</b> Overshoot ${over_diff > 0 ? '+' : ''}${over_diff.toFixed(1)}%, Rise Time ${rise_diff > 0 ? '+' : ''}${rise_diff.toFixed(1)}ms. `;
+            
+            if (over_diff < 0 && rise_diff > 0) {
+                trend_str += "Damping increased, response is slower.";
+            } else if (over_diff > 0 && rise_diff < 0) {
+                trend_str += "More aggressive, less damped.";
+            } else if (over_diff < 0 && rise_diff < 0) {
+                trend_str += "Overall improvement!";
+            } else if (over_diff > 0 && rise_diff > 0) {
+                trend_str += "Worse performance on both metrics.";
+            }
+        }
+
+        prev_overshoot = overshoot;
+        prev_risetime = risetime;
+
+        let osc_str = "None";
+        if (peak_amp > -40 && peak_freq > 10) { // arbitrary threshold for resonance
+            osc_str = `${peak_freq.toFixed(1)} Hz`;
+            suggestion += ` Resonance detected at ${peak_freq.toFixed(1)} Hz. Consider a notch filter or lowering D.`;
+        }
+        
+        html += `<tr><td style='padding:5px'>Log ${i+1}: ${loaded_logs[i].file_name || "Unknown"}</td>`;
+        html += `<td style='padding:5px'>${overshoot.toFixed(1)} %</td>`;
+        html += `<td style='padding:5px'>${risetime.toFixed(1)} ms</td>`;
+        html += `<td style='padding:5px'>${osc_str}</td>`;
+        html += `<td style='padding:5px'>${suggestion} ${trend_str}</td></tr>`;
+    }
+    html += "</table>";
+    
+    html += "</div>";
+    container.innerHTML = html;
+}
+
+
+async function load(log_file, file_name) {
 
     // Make sure imports are fully loaded before starting
     // This is needed when called from "open in"
@@ -1394,7 +1585,7 @@ async function load(log_file) {
     reset()
 
     // Reset log object                                  Copter          Plane
-    PID_log_messages = [ {id: ["PIDR"],      prefixes: [ "ATC_RAT_RLL_", "RLL_RATE_"]},
+    let PID_log_messages = [ {id: ["PIDR"],      prefixes: [ "ATC_RAT_RLL_", "RLL_RATE_"]},
                          {id: ["PIDP"],      prefixes: [ "ATC_RAT_PIT_", "PTCH_RATE_"]},
                          {id: ["PIDY"],      prefixes: [ "ATC_RAT_YAW_", "YAW_RATE_"]},
                          {id: ["PIQR"],      prefixes: [                 "Q_A_RAT_RLL_"]},
@@ -1549,6 +1740,13 @@ async function load(log_file) {
         return
     }
 
+    let log_index = loaded_logs.length;
+    PID_log_messages.file_name = file_name;
+    loaded_logs.push(PID_log_messages);
+    setup_plots(log_index, file_name);
+
+    let flight_data = flight_data_arr[log_index];
+
     // Plot flight data from log
     if ("ATT" in log.messageTypes) {
         const ATT_time = TimeUS_to_seconds(log.get("ATT", "TimeUS"))
@@ -1570,7 +1768,7 @@ async function load(log_file) {
         flight_data.data[3].y = log.get("POS", "RelHomeAlt")
     }
 
-    Plotly.redraw("FlightData")
+    Plotly.redraw("FlightData_" + log_index)
 
     // Caculate output
     for (var PID of PID_log_messages) {
@@ -1597,8 +1795,15 @@ async function load(log_file) {
     }
 
     // Update ranges of start and end time
-    start_time = Math.floor(PID_log_messages.start_time)
-    end_time = Math.ceil(PID_log_messages.end_time)
+    let min_start = Infinity;
+    let max_end = -Infinity;
+    for(let l of loaded_logs) {
+        if(l.start_time < min_start) min_start = l.start_time;
+        if(l.end_time > max_end) max_end = l.end_time;
+    }
+    start_time = Math.floor(min_start);
+
+    end_time = Math.ceil(max_end)
 
     var start_input = document.getElementById("TimeStart")
     start_input.disabled = false;
@@ -1668,7 +1873,7 @@ async function refresh_live_tuning() {
 function get_current_live_prefix() {
     try {
         const axisIndex = get_axis_index();
-        const PID = PID_log_messages[axisIndex];
+        const PID = loaded_logs[loaded_logs.length-1][axisIndex];
         return PID.prefixes[0]; 
     } catch (e) {
         return "ATC_RAT_RLL_"; // Fallback
@@ -1749,7 +1954,7 @@ async function write_live_tuning() {
 
 function update_fc_from_set(setIndex) {
     const axisIndex = get_axis_index();
-    const PID = PID_log_messages[axisIndex];
+    const PID = loaded_logs[loaded_logs.length-1][axisIndex];
     const set = PID.params.sets[setIndex];
     if (!set) return;
     
@@ -1766,4 +1971,66 @@ function update_fc_from_set(setIndex) {
         el.style.backgroundColor = "#fff9c4";
         setTimeout(() => el.style.backgroundColor = "", 1000);
     });
+}
+
+function setup_FFT_data() {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        setup_FFT_data_inner(log_index);
+    }
+    if(typeof render_technical_suggestions === "function") render_technical_suggestions();
+}
+
+function redraw() {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        redraw_inner(log_index);
+    }
+    if(typeof render_technical_suggestions === "function") render_technical_suggestions();
+}
+
+function redraw_Spectrogram() {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        redraw_Spectrogram_inner(log_index);
+    }
+    if(typeof render_technical_suggestions === "function") render_technical_suggestions();
+}
+
+function redraw_step() {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        redraw_step_inner(log_index);
+    }
+    if(typeof render_technical_suggestions === "function") render_technical_suggestions();
+}
+
+function add_param_sets() {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        add_param_sets_inner(log_index);
+    }
+    if(typeof render_technical_suggestions === "function") render_technical_suggestions();
+}
+
+function clear_calculation() {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        clear_calculation_inner(log_index);
+    }
+    if(typeof render_technical_suggestions === "function") render_technical_suggestions();
+}
+
+function calculate() {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        calculate_inner(log_index);
+    }
+    if(typeof render_technical_suggestions === "function") render_technical_suggestions();
+}
+
+function update_hidden(source) {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        update_hidden_inner(source, log_index);
+    }
+}
+
+function time_range_changed() {
+    for (let log_index = 0; log_index < loaded_logs.length; log_index++) {
+        time_range_changed_inner(log_index);
+    }
+    document.getElementById('calculate').disabled = false;
 }
