@@ -323,15 +323,15 @@ class ServoController:
                     if not self._lock_eprom(sid):
                         continue
 
-                    # Initialize servos directly to their Lock sequence positions instead of mid/home
+                    # Initialize servos directly to their Unlock sequence positions on startup
                     if sid == 1:
-                        target_pos = LOCK_POS_1
+                        target_pos = UNLOCK_POS_1
                         speed_val = 2400
                     elif sid == 2:
-                        target_pos = LOCK_POS_2
+                        target_pos = UNLOCK_POS_2
                         speed_val = 1500
                     elif sid == 3:
-                        target_pos = LOCK_POS_3
+                        target_pos = UNLOCK_POS_3
                         speed_val = 1500
                     else:
                         target_pos = self._home_position_for(sid)
@@ -343,7 +343,7 @@ class ServoController:
                         result, error = handler.WritePosEx(sid, target_pos, speed_val, 50)
                     else:
                         result, error = handler.WritePos(sid, target_pos, 0, speed_val)
-                    if not self._result_ok(sid, "move to locking position", result, error, handler):
+                    if not self._result_ok(sid, "move to unlocking position", result, error, handler):
                         continue
 
                 print(f"[SERVO] Servo ID {sid} initialized.")
@@ -352,6 +352,14 @@ class ServoController:
                 # Prevent "Port is in use!" subsequent errors
                 if hasattr(self, "portHandler") and self.portHandler:
                     self.portHandler.is_using = False
+
+        # Startup sequence: Wait 2 seconds, then execute the locked sequence
+        def startup_locking_thread():
+            time.sleep(2.0)
+            print("[SERVO] Startup delay complete. Executing locked sequence...")
+            self.perform_locking()
+
+        threading.Thread(target=startup_locking_thread, daemon=True, name="ServoStartupLocking").start()
 
     def set_torque(self, sid, enable):
         if not self.connected:
