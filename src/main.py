@@ -1123,8 +1123,13 @@ parser.add_argument('--servo-port', default=None, help="Serial port for ST3215 a
 parser.add_argument('--no-video', action='store_true', help="Disable the camera window (OpenCV window) for headless running.")
 parser.add_argument('--no-record', action='store_true', help="Disable automatic video recording during armed state.")
 parser.add_argument('--no-servo', action='store_true', help="Disable servo controller initialization and monitoring.")
+parser.add_argument('--no-camera', action='store_true', help="Disable camera and vision tracking system entirely.")
 parser.add_argument('--resolution', default='640x360', help="Camera resolution WxH (default: 640x360 for high/stable FPS).")
 args = parser.parse_args()
+
+if args.no_camera:
+    args.no_record = True
+    args.no_video = True
 args.connect = resolve_vehicle_connection_path(args.connect)
 
 # Parse camera resolution
@@ -1526,25 +1531,30 @@ calib_path          = cwd+"/../opencv/"
 # Arducam 64MP OV64A40 camera resolution
 # Default: 640x360 for high/stable frame rate (9x lower CPU processing overhead than 1080p)
 # Using parsed resolution from CLI arguments.
-try:
-    camera_matrix = np.loadtxt(calib_path + 'cameraMatrix_webcam.txt', delimiter=',')
-    camera_distortion = np.loadtxt(calib_path + 'cameraDistortion_webcam.txt', delimiter=',')
-    aruco_tracker = ArucoSingleTracker(
-        id_to_find=id_to_find,
-        marker_size=marker_size,
-        show_video=not args.no_video,
-        axis_scale=0.01,
-        camera_matrix=camera_matrix,
-        camera_distortion=camera_distortion,
-        camera_size=camera_resolution,
-        calib_size=[640, 480]
-    )
-    camera_active = True
-except Exception as e:
-    # Camera is optional during bring-up; LEDs and telemetry should still run without it.
+if args.no_camera:
     aruco_tracker = None
     camera_active = False
-    print(f"[CAMERA] Disabled/unavailable, skipping ArUco tracking: {e}", flush=True)
+    print("[CAMERA] Disabled via --no-camera option.", flush=True)
+else:
+    try:
+        camera_matrix = np.loadtxt(calib_path + 'cameraMatrix_webcam.txt', delimiter=',')
+        camera_distortion = np.loadtxt(calib_path + 'cameraDistortion_webcam.txt', delimiter=',')
+        aruco_tracker = ArucoSingleTracker(
+            id_to_find=id_to_find,
+            marker_size=marker_size,
+            show_video=not args.no_video,
+            axis_scale=0.01,
+            camera_matrix=camera_matrix,
+            camera_distortion=camera_distortion,
+            camera_size=camera_resolution,
+            calib_size=[640, 480]
+        )
+        camera_active = True
+    except Exception as e:
+        # Camera is optional during bring-up; LEDs and telemetry should still run without it.
+        aruco_tracker = None
+        camera_active = False
+        print(f"[CAMERA] Disabled/unavailable, skipping ArUco tracking: {e}", flush=True)
                 
                 
 time_0 = time.time()
