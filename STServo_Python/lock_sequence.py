@@ -46,13 +46,13 @@ SC_SPEED = 1500
 # Locking Targets
 LOCK_POS_1 = 450
 LOCK_POS_2 = 450
-LOCK_POS_3 = 520
+LOCK_POS_3 = 750
 
 # Unlocking Targets
 UNLOCK_POS_1 = 2100
 UNLOCK_POS_2 = 666
-UNLOCK_POS_3 = 690
-UNLOCK_CHECK_3 = 630  # Threshold check for ID 3
+UNLOCK_POS_3 = 540
+UNLOCK_CHECK_3 = 560  # Threshold check for ID 3
 # ---------------------
 
 def setup_handlers():
@@ -279,13 +279,13 @@ def perform_locking(sts_handler, sc_handler):
     time.sleep(1.0)
     
     print(f"\nStep 2: Servo 2 -> {LOCK_POS_2} & Servo 3 -> {LOCK_POS_3}")
-    robust_move_sc_pair(sc_handler, 2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='<=')
+    robust_move_sc_pair(sc_handler, 2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='>=')
     print("\nLocking sequence complete!")
 
 def perform_unlocking(sts_handler, sc_handler):
     print("\n--- UNLOCKING SEQUENCE ---")
-    print(f"Step 1: Servo 2 -> {UNLOCK_POS_2} & Servo 3 -> {UNLOCK_POS_3} (Checking if >= {UNLOCK_CHECK_3})")
-    robust_move_sc_pair(sc_handler, 2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='>=')
+    print(f"Step 1: Servo 2 -> {UNLOCK_POS_2} & Servo 3 -> {UNLOCK_POS_3} (Checking if <= {UNLOCK_CHECK_3})")
+    robust_move_sc_pair(sc_handler, 2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='<=')
     
     print(f"\nStep 2: Servo 1 -> {UNLOCK_POS_1}")
     robust_move_st_single(sts_handler, 1, UNLOCK_POS_1, ST_SPEED, ST_ACC)

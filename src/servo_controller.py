@@ -30,19 +30,19 @@ SC_SPEED = 1500
 # Locking Targets
 LOCK_POS_1 = 450
 LOCK_POS_2 = 450
-LOCK_POS_3 = 540
+LOCK_POS_3 = 750
 
 # Unlocking Targets
 UNLOCK_POS_1 = 2100
 UNLOCK_POS_2 = 666
-UNLOCK_POS_3 = 700
-UNLOCK_CHECK_3 = 680  # Threshold check for ID 3
+UNLOCK_POS_3 = 540
+UNLOCK_CHECK_3 = 560  # Threshold check for ID 3
 
 # Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers
 SERVO_LIMITS = {
     1: (150, 2100),  # Servo 1 (ST)
     2: (450, 960),   # Servo 2 (SC)
-    3: (530, 700)    # Servo 3 (SC)
+    3: (530, 750)    # Servo 3 (SC)
 }
 # --------------------------------------------------------
 
@@ -767,7 +767,7 @@ class ServoController:
             time.sleep(1.0)
             
             print(f"\nStep 2: Servo 2 & 3 (SC) -> {LOCK_POS_2} & {LOCK_POS_3}")
-            self.robust_move_sc_pair(2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='<=')
+            self.robust_move_sc_pair(2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='>=')
             print("\nLocking sequence complete!")
             self.last_state = 'lock'
         except Exception as e:
