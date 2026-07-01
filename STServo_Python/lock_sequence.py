@@ -44,13 +44,13 @@ ST_ACC = max(0, min(254, 200)) # Clamped safely between 0-254
 SC_SPEED = 1500
 
 # Locking Targets
-LOCK_POS_1 = 150
-LOCK_POS_2 = 960
+LOCK_POS_1 = 450
+LOCK_POS_2 = 450
 LOCK_POS_3 = 520
 
 # Unlocking Targets
-UNLOCK_POS_1 = 2000
-UNLOCK_POS_2 = 790
+UNLOCK_POS_1 = 2100
+UNLOCK_POS_2 = 666
 UNLOCK_POS_3 = 690
 UNLOCK_CHECK_3 = 630  # Threshold check for ID 3
 # ---------------------

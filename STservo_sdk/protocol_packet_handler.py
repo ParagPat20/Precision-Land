@@ -355,12 +355,26 @@ class protocol_packet_handler(object):
 
     def read1ByteRx(self, sts_id):
         data, result, error = self.readRx(sts_id, 1)
-        data_read = data[0] if (result == COMM_SUCCESS) else 0
+        if result == COMM_SUCCESS:
+            if data and len(data) >= 1:
+                data_read = data[0]
+            else:
+                data_read = 0
+                result = COMM_RX_CORRUPT
+        else:
+            data_read = 0
         return data_read, result, error
 
     def read1ByteTxRx(self, sts_id, address):
         data, result, error = self.readTxRx(sts_id, address, 1)
-        data_read = data[0] if (result == COMM_SUCCESS) else 0
+        if result == COMM_SUCCESS:
+            if data and len(data) >= 1:
+                data_read = data[0]
+            else:
+                data_read = 0
+                result = COMM_RX_CORRUPT
+        else:
+            data_read = 0
         return data_read, result, error
 
     def read2ByteTx(self, sts_id, address):
@@ -368,12 +382,26 @@ class protocol_packet_handler(object):
 
     def read2ByteRx(self, sts_id):
         data, result, error = self.readRx(sts_id, 2)
-        data_read = self.sts_makeword(data[0], data[1]) if (result == COMM_SUCCESS) else 0
+        if result == COMM_SUCCESS:
+            if data and len(data) >= 2:
+                data_read = self.sts_makeword(data[0], data[1])
+            else:
+                data_read = 0
+                result = COMM_RX_CORRUPT
+        else:
+            data_read = 0
         return data_read, result, error
 
     def read2ByteTxRx(self, sts_id, address):
         data, result, error = self.readTxRx(sts_id, address, 2)
-        data_read = self.sts_makeword(data[0], data[1]) if (result == COMM_SUCCESS) else 0
+        if result == COMM_SUCCESS:
+            if data and len(data) >= 2:
+                data_read = self.sts_makeword(data[0], data[1])
+            else:
+                data_read = 0
+                result = COMM_RX_CORRUPT
+        else:
+            data_read = 0
         return data_read, result, error
 
     def read4ByteTx(self, sts_id, address):
@@ -381,14 +409,28 @@ class protocol_packet_handler(object):
 
     def read4ByteRx(self, sts_id):
         data, result, error = self.readRx(sts_id, 4)
-        data_read = self.sts_makedword(self.sts_makeword(data[0], data[1]),
-                                  self.sts_makeword(data[2], data[3])) if (result == COMM_SUCCESS) else 0
+        if result == COMM_SUCCESS:
+            if data and len(data) >= 4:
+                data_read = self.sts_makedword(self.sts_makeword(data[0], data[1]),
+                                          self.sts_makeword(data[2], data[3]))
+            else:
+                data_read = 0
+                result = COMM_RX_CORRUPT
+        else:
+            data_read = 0
         return data_read, result, error
 
     def read4ByteTxRx(self, sts_id, address):
         data, result, error = self.readTxRx(sts_id, address, 4)
-        data_read = self.sts_makedword(self.sts_makeword(data[0], data[1]),
-                                  self.sts_makeword(data[2], data[3])) if (result == COMM_SUCCESS) else 0
+        if result == COMM_SUCCESS:
+            if data and len(data) >= 4:
+                data_read = self.sts_makedword(self.sts_makeword(data[0], data[1]),
+                                          self.sts_makeword(data[2], data[3]))
+            else:
+                data_read = 0
+                result = COMM_RX_CORRUPT
+        else:
+            data_read = 0
         return data_read, result, error
 
     def writeTxOnly(self, sts_id, address, length, data):
