@@ -266,15 +266,18 @@ def detect_servo_type(byte0, byte1):
 def ping_and_detect(sts_handler, sid):
     """
     Pings a servo and determines its series (ST/SC) and model number.
+    Uses direct register read of Address 3 first for robust compatibility with all models (e.g. SC09).
     """
-    # Send base ping packet (this is standard across protocols)
-    _, result, error = sts_handler.ping(sid)
-    if result != COMM_SUCCESS:
-        return None, None, result
-        
-    # Read address 3 (model number, 2 bytes) to detect endianness
+    # Try reading the model number directly first
     data_read, result, error = sts_handler.readTxRx(sid, 3, 2)
+    
+    # Fallback to standard ping if direct read fails
     if result != COMM_SUCCESS:
+        _, result, error = sts_handler.ping(sid)
+        if result == COMM_SUCCESS:
+            data_read, result, error = sts_handler.readTxRx(sid, 3, 2)
+            
+    if result != COMM_SUCCESS or not data_read or len(data_read) < 2:
         return None, None, result
         
     servo_type, model = detect_servo_type(data_read[0], data_read[1])
@@ -479,8 +482,16 @@ def scan_servos(sts_handler, scan_all=False):
     
     found = []
     for sid in target_ids:
-        model_number, result, error = sts_handler.ping(sid)
-        if result == COMM_SUCCESS:
+        # Try direct read of address 3 first for robust compatibility with SC09
+        data_read, result, error = sts_handler.readTxRx(sid, 3, 2)
+        if result != COMM_SUCCESS:
+            # Fallback to standard ping
+            _, result, error = sts_handler.ping(sid)
+            if result == COMM_SUCCESS:
+                data_read, result, error = sts_handler.readTxRx(sid, 3, 2)
+                
+        if result == COMM_SUCCESS and data_read and len(data_read) >= 2:
+            model_number = sts_handler.sts_makeword(data_read[0], data_read[1])
             byte0 = model_number & 0xFF
             byte1 = (model_number >> 8) & 0xFF
             servo_type, model = detect_servo_type(byte0, byte1)
