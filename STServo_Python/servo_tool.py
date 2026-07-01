@@ -10,13 +10,61 @@ import sys
 import os
 import time
 import json
+import glob
 
 sys.path.append("..")
 from STservo_sdk import *
 
+def resolve_servo_port(manual_port=None):
+    """
+    Resolve the STServo serial bus for Linux/RPi first, while keeping Windows
+    development usable. Set JECH_SERVO_PORT or pass --servo-port to override.
+    """
+    if manual_port:
+        return manual_port
+
+    env_port = os.environ.get("JECH_SERVO_PORT")
+    if env_port:
+        return env_port
+
+    if os.name == "nt":
+        return "COM21"
+
+    by_id_patterns = [
+        "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14110734-if00",
+        "/dev/serial/by-id/usb-1a86_USB_Single_Serial_*-if00",
+        "/dev/serial/by-id/*1a86*USB*Single*Serial*",
+        "/dev/serial/by-id/*CH340*",
+        "/dev/serial/by-id/*ch341*",
+        "/dev/serial/by-id/*QinHeng*",
+        "/dev/serial/by-id/*CP210*",
+        "/dev/serial/by-id/*Silicon_Labs*",
+        "/dev/serial/by-id/*FTDI*",
+        "/dev/serial/by-id/*USB*Serial*",
+    ]
+    candidates = []
+    for pattern in by_id_patterns:
+        candidates.extend(sorted(glob.glob(pattern)))
+    candidates.extend(sorted(glob.glob("/dev/ttyUSB*")))
+    candidates.extend(sorted(glob.glob("/dev/ttyACM*")))
+    candidates.extend(["/dev/serial0", "/dev/ttyAMA0"])
+
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        name = os.path.basename(candidate).lower()
+        if "pixhawk" in name or "ardupilot" in name or "prolific" in name:
+            continue
+        if os.path.exists(candidate):
+            return candidate
+
+    return "/dev/serial0"
+
 # Default Settings
 BAUDRATE = 1000000
-DEVICENAME = 'COM21'
+DEVICENAME = resolve_servo_port()
 
 # ANSI Colors for UI
 C_RED = '\033[91m'
