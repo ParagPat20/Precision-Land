@@ -487,7 +487,7 @@ class ServoController:
         if not self.vehicle:
             return
         try:
-            print("[SERVO] Explicitly requesting SERVO_OUTPUT_RAW and RC_CHANNELS streams from Flight Controller...")
+            print("[SERVO] Explicitly requesting SERVO_OUTPUT_RAW streams from Flight Controller...")
             # Method 1: MAV_CMD_SET_MESSAGE_INTERVAL (preferred in MAVLink 2)
             # Message ID 36 is SERVO_OUTPUT_RAW
             # 100000 microseconds = 10Hz (100ms interval)
@@ -501,19 +501,8 @@ class ServoController:
             )
             self.vehicle.send_mavlink(msg1)
             
-            # Method 1b: Request RC_CHANNELS at 10Hz
-            msg1b = self.vehicle.message_factory.command_long_encode(
-                0, 0,
-                511,     # MAV_CMD_SET_MESSAGE_INTERVAL
-                0,
-                65,      # param 1: Message ID (65 for RC_CHANNELS)
-                100000,  # param 2: Interval in microseconds
-                0, 0, 0, 0, 0 # param 3-7
-            )
-            self.vehicle.send_mavlink(msg1b)
-            
             # Method 2: Legacy REQUEST_DATA_STREAM (fallback for MAVLink 1)
-            # Stream ID 3 is MAV_DATA_STREAM_RAW_CONTROLLER (contains SERVO_OUTPUT_RAW and RC_CHANNELS)
+            # Stream ID 3 is MAV_DATA_STREAM_RAW_CONTROLLER (contains SERVO_OUTPUT_RAW)
             # 10Hz, start/stop = 1 (start)
             msg2 = self.vehicle.message_factory.request_data_stream_encode(
                 0, 0,    # target system, target component
@@ -828,14 +817,10 @@ class ServoController:
                     self.request_servo_output_raw_stream()
                     self.last_stream_request_time = current_time
 
-                # Read target state from Channel 6
-                # Preference 1: MAVLink SERVO_OUTPUT_RAW message
-                # Preference 2: RC input channels fallback
+                # Read target state from Servo Channel 6 (SERVO_OUTPUT_RAW)
                 ch6 = 0
                 if self.servo6_raw > 0:
                     ch6 = self.servo6_raw
-                elif self.vehicle and self.vehicle.channels:
-                    ch6 = self.vehicle.channels.get('6', 0) or 0
 
                 if ch6 > 0:
                     should_lock = ch6 > 1500

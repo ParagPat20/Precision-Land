@@ -16,6 +16,8 @@ if os.name == 'nt':
 else:
     import select
     import termios
+
+    
     import tty
     def kbhit_safe():
         dr, dw, de = select.select([sys.stdin], [], [], 0)
