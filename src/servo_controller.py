@@ -35,8 +35,8 @@ LOCK_POS_3 = 740
 # Unlocking Targets
 UNLOCK_POS_1 = 2100
 UNLOCK_POS_2 = 650
-UNLOCK_POS_3 = 550
-UNLOCK_CHECK_3 = 560  # Threshold check for ID 3
+UNLOCK_POS_3 = 560
+UNLOCK_CHECK_3 = 570  # Threshold check for ID 3
 
 # Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers
 SERVO_LIMITS = {
