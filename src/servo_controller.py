@@ -30,7 +30,7 @@ SC_SPEED = 1500
 # Locking Targets
 LOCK_POS_1 = 250
 LOCK_POS_2 = 550
-LOCK_POS_3 = 750
+LOCK_POS_3 = 740
 
 # Unlocking Targets
 UNLOCK_POS_1 = 2100
