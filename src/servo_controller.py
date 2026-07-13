@@ -28,13 +28,13 @@ ST_ACC = 200
 SC_SPEED = 1500
 
 # Locking Targets
-LOCK_POS_1 = 400
+LOCK_POS_1 = 350
 LOCK_POS_2 = 480
 LOCK_POS_3 = 740
 
 # Unlocking Targets
 UNLOCK_POS_1 = 2100
-UNLOCK_POS_2 = 700
+UNLOCK_POS_2 = 650
 UNLOCK_POS_3 = 550
 UNLOCK_CHECK_3 = 560  # Threshold check for ID 3
 
