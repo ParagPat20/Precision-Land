@@ -28,14 +28,14 @@ ST_ACC = 200
 SC_SPEED = 1500
 
 # Locking Targets
-LOCK_POS_1 = 250
+LOCK_POS_1 = 200
 LOCK_POS_2 = 550
-LOCK_POS_3 = 740
+LOCK_POS_3 = 750
 
 # Unlocking Targets
 UNLOCK_POS_1 = 2100
-UNLOCK_POS_2 = 780
-UNLOCK_POS_3 = 540
+UNLOCK_POS_2 = 770
+UNLOCK_POS_3 = 560
 UNLOCK_CHECK_3 = 540  # Threshold check for ID 3
 
 # Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers
