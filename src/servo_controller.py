@@ -21,7 +21,7 @@ except ImportError:
     except ImportError as e:
         _SDK_IMPORT_ERROR = e
 
-# --- CONFIGURATION CONSTANTS FOR LOCK/UNLOCK SEQUENCE ---
+# --- CONFIGURATION CONSTANTS FOR LOCK SEQUENCE ONLY ---
 # Speeds & Accel
 ST_SPEED = 2400
 ST_ACC = 200
@@ -32,7 +32,7 @@ LOCK_POS_1 = 200
 LOCK_POS_2 = 550
 LOCK_POS_3 = 750
 
-# Unlocking Targets
+# Unlocking Targets (DEPRECATED - No longer used)
 UNLOCK_POS_1 = 2100
 UNLOCK_POS_2 = 750
 UNLOCK_POS_3 = 560
@@ -101,6 +101,9 @@ class ServoController:
     so this controller follows that bus protocol unless changed later.
     ID 1: ST3215
     ID 2 & 3: SC09
+    
+    NOTE: This version performs LOCKING SEQUENCE ONLY on startup and during operation.
+    Unlocking functionality has been removed.
     """
     def __init__(self, vehicle, port_name=None, baudrate=1000000, is_mission_active_cb=None):
         if _SDK_IMPORT_ERROR is not None:
@@ -131,7 +134,7 @@ class ServoController:
         self.st3215_locked = False
         self.sc09_locked = False
 
-        # Lock / Unlock sequence state variables
+        # Lock sequence state variables
         self.servo6_raw = 0
         self.last_servo6_raw_rx_time = 0
         self.last_stream_request_time = 0
@@ -275,6 +278,8 @@ class ServoController:
         Sets the home position offset, max and min positions for all servos.
         st_config: dict with 'min', 'max', 'home'
         sc09_configs: dict mapping sid to dict with 'min', 'max'
+        
+        Moves all servos to LOCK positions on startup (LOCK ONLY).
         """
         if not self.connected:
             print("[SERVO] Cannot initialize: Not connected.")
@@ -323,15 +328,15 @@ class ServoController:
                     if not self._lock_eprom(sid):
                         continue
 
-                    # Initialize servos directly to their Unlock sequence positions on startup
+                    # Initialize servos directly to LOCK positions on startup (LOCK ONLY - NO UNLOCK)
                     if sid == 1:
-                        target_pos = UNLOCK_POS_1
+                        target_pos = LOCK_POS_1
                         speed_val = 2400
                     elif sid == 2:
-                        target_pos = UNLOCK_POS_2
+                        target_pos = LOCK_POS_2
                         speed_val = 1500
                     elif sid == 3:
-                        target_pos = UNLOCK_POS_3
+                        target_pos = LOCK_POS_3
                         speed_val = 1500
                     else:
                         target_pos = self._home_position_for(sid)
@@ -343,20 +348,19 @@ class ServoController:
                         result, error = handler.WritePosEx(sid, target_pos, speed_val, 50)
                     else:
                         result, error = handler.WritePos(sid, target_pos, 0, speed_val)
-                    if not self._result_ok(sid, "move to unlocking position", result, error, handler):
+                    if not self._result_ok(sid, "move to locking position", result, error, handler):
                         continue
 
-                print(f"[SERVO] Servo ID {sid} initialized.")
+                print(f"[SERVO] Servo ID {sid} initialized to LOCK position.")
             except Exception as e:
                 print(f"[SERVO] Error initializing servo ID {sid}: {e}")
                 # Prevent "Port is in use!" subsequent errors
                 if hasattr(self, "portHandler") and self.portHandler:
                     self.portHandler.is_using = False
 
-        # Startup sequence: Wait 2 seconds, then execute the locked sequence
+        # Startup sequence: Immediately execute the locking sequence (no delay before lock)
         def startup_locking_thread():
-            time.sleep(2.0)
-            print("[SERVO] Startup delay complete. Executing locked sequence...")
+            print("[SERVO] Executing locking sequence...")
             self.perform_locking()
 
         threading.Thread(target=startup_locking_thread, daemon=True, name="ServoStartupLocking").start()
@@ -754,6 +758,7 @@ class ServoController:
         return False
 
     def perform_locking(self):
+        """Execute locking sequence."""
         self.sequence_active = True
         try:
             print("\n--- STARTING NATIVE LOCKING SEQUENCE ---")
@@ -774,25 +779,9 @@ class ServoController:
             self.sequence_active = False
 
     def perform_unlocking(self):
-        self.sequence_active = True
-        try:
-            print("\n--- STARTING NATIVE UNLOCKING SEQUENCE ---")
-            print(f"Step 1: Servo 3 (SC) -> {UNLOCK_POS_3}")
-            self.robust_move_sc_single(3, UNLOCK_POS_3, SC_SPEED)
-            
-            print(f"\nStep 2: Servo 2 (SC) -> {UNLOCK_POS_2}")
-            self.robust_move_sc_single(2, UNLOCK_POS_2, SC_SPEED)
-            
-            print(f"\nStep 3: Servo 1 (ST) -> {UNLOCK_POS_1}")
-            self.robust_move_st_single(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
-            
-            print("\nUnlocking sequence complete!")
-            self.last_state = 'unlock'
-        except Exception as e:
-            print(f"[SERVO] Unlocking sequence failed: {e}")
-            traceback.print_exc()
-        finally:
-            self.sequence_active = False
+        """Unlocking functionality has been removed. This method is deprecated and does nothing."""
+        print("[SERVO] perform_unlocking() has been disabled. Only locking sequence is available.")
+        return
 
     def start_monitoring(self):
         if self._running:
@@ -808,6 +797,7 @@ class ServoController:
             self._thread.join(timeout=1.0)
 
     def _monitor_loop(self):
+        """Monitor loop - LOCK sequence only, no unlock."""
         print("[SERVO] Monitor loop started successfully.")
         while self._running:
             try:
@@ -823,42 +813,27 @@ class ServoController:
                     ch6 = self.servo6_raw
 
                 if ch6 > 0:
+                    # Only lock trigger - no unlock trigger
                     should_lock = ch6 > 1500
-                    target_state = 'lock' if should_lock else 'unlock'
                     
-                    if target_state != self.last_triggered_state and not self.sequence_active:
-                        self.last_triggered_state = target_state
-                        if target_state == 'lock':
-                            print(f"[SERVO] Triggering LOCK sequence (Ch6/Servo6 Raw: {ch6})")
-                            threading.Thread(target=self.perform_locking, daemon=True, name="LockSequenceThread").start()
-                        else:
-                            print(f"[SERVO] Triggering UNLOCK sequence (Ch6/Servo6 Raw: {ch6})")
-                            threading.Thread(target=self.perform_unlocking, daemon=True, name="UnlockSequenceThread").start()
+                    if should_lock and self.last_triggered_state != 'lock' and not self.sequence_active:
+                        self.last_triggered_state = 'lock'
+                        print(f"[SERVO] Triggering LOCK sequence (Ch6/Servo6 Raw: {ch6})")
+                        threading.Thread(target=self.perform_locking, daemon=True, name="LockSequenceThread").start()
                 
                 # Active Background Holding Loop
-                # If a sequence is NOT active, re-enforce the target state positions at 10Hz
-                if not self.sequence_active and self.last_state in ['lock', 'unlock']:
+                # If a sequence is NOT active, re-enforce the LOCK positions at 10Hz
+                if not self.sequence_active and self.last_state == 'lock':
                     with self._io_lock:
-                        if self.last_state == 'lock':
-                            # Servo 1 (ST)
-                            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                            self.stsHandler.WritePosEx(1, LOCK_POS_1, ST_SPEED, ST_ACC)
-                            # Servo 2 (SC)
-                            self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                            self.scsHandler.WritePos(2, LOCK_POS_2, 0, SC_SPEED)
-                            # Servo 3 (SC)
-                            self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                            self.scsHandler.WritePos(3, LOCK_POS_3, 0, SC_SPEED)
-                        elif self.last_state == 'unlock':
-                            # Servo 1 (ST)
-                            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                            self.stsHandler.WritePosEx(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
-                            # Servo 2 (SC)
-                            self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                            self.scsHandler.WritePos(2, UNLOCK_POS_2, 0, SC_SPEED)
-                            # Servo 3 (SC)
-                            self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                            self.scsHandler.WritePos(3, UNLOCK_POS_3, 0, SC_SPEED)
+                        # Servo 1 (ST)
+                        self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                        self.stsHandler.WritePosEx(1, LOCK_POS_1, ST_SPEED, ST_ACC)
+                        # Servo 2 (SC)
+                        self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                        self.scsHandler.WritePos(2, LOCK_POS_2, 0, SC_SPEED)
+                        # Servo 3 (SC)
+                        self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                        self.scsHandler.WritePos(3, LOCK_POS_3, 0, SC_SPEED)
 
             except Exception as e:
                 print(f"[SERVO] Monitor loop error: {e}")
