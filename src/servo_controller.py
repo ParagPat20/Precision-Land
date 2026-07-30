@@ -102,8 +102,9 @@ class ServoController:
     ID 1: ST3215
     ID 2 & 3: SC09
     
-    NOTE: This version performs LOCKING SEQUENCE ONLY on startup and during operation.
-    Unlocking functionality has been removed.
+    PWM Channel 6 mapping:
+    - HIGH (> 1500): Unlocking sequence
+    - LOW (<= 1500): Locking sequence
     """
     def __init__(self, vehicle, port_name=None, baudrate=1000000, is_mission_active_cb=None):
         if _SDK_IMPORT_ERROR is not None:
@@ -779,9 +780,26 @@ class ServoController:
             self.sequence_active = False
 
     def perform_unlocking(self):
-        """Unlocking functionality has been removed. This method is deprecated and does nothing."""
-        print("[SERVO] perform_unlocking() has been disabled. Only locking sequence is available.")
-        return
+        """Execute unlocking sequence."""
+        self.sequence_active = True
+        try:
+            print("\n--- STARTING NATIVE UNLOCKING SEQUENCE ---")
+            print(f"Step 1: Servo 3 (SC) -> {UNLOCK_POS_3}")
+            self.robust_move_sc_single(3, UNLOCK_POS_3, SC_SPEED)
+            
+            print(f"\nStep 2: Servo 2 (SC) -> {UNLOCK_POS_2}")
+            self.robust_move_sc_single(2, UNLOCK_POS_2, SC_SPEED)
+            
+            print(f"\nStep 3: Servo 1 (ST) -> {UNLOCK_POS_1}")
+            self.robust_move_st_single(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
+            
+            print("\nUnlocking sequence complete!")
+            self.last_state = 'unlock'
+        except Exception as e:
+            print(f"[SERVO] Unlocking sequence failed: {e}")
+            traceback.print_exc()
+        finally:
+            self.sequence_active = False
 
     def start_monitoring(self):
         if self._running:
@@ -797,7 +815,7 @@ class ServoController:
             self._thread.join(timeout=1.0)
 
     def _monitor_loop(self):
-        """Monitor loop - LOCK sequence only, no unlock."""
+        """Monitor loop - UNLOCK when PWM > 1500 (HIGH), LOCK when PWM <= 1500 (LOW)."""
         print("[SERVO] Monitor loop started successfully.")
         while self._running:
             try:
@@ -813,27 +831,42 @@ class ServoController:
                     ch6 = self.servo6_raw
 
                 if ch6 > 0:
-                    # Only lock trigger - no unlock trigger
-                    should_lock = ch6 > 1500
+                    # HIGH (> 1500) = UNLOCK, LOW (<= 1500) = LOCK
+                    target_state = 'unlock' if ch6 > 1500 else 'lock'
                     
-                    if should_lock and self.last_triggered_state != 'lock' and not self.sequence_active:
-                        self.last_triggered_state = 'lock'
-                        print(f"[SERVO] Triggering LOCK sequence (Ch6/Servo6 Raw: {ch6})")
-                        threading.Thread(target=self.perform_locking, daemon=True, name="LockSequenceThread").start()
+                    if target_state != self.last_triggered_state and not self.sequence_active:
+                        self.last_triggered_state = target_state
+                        if target_state == 'unlock':
+                            print(f"[SERVO] Triggering UNLOCK sequence (Ch6/Servo6 Raw: {ch6} - HIGH)")
+                            threading.Thread(target=self.perform_unlocking, daemon=True, name="UnlockSequenceThread").start()
+                        else:
+                            print(f"[SERVO] Triggering LOCK sequence (Ch6/Servo6 Raw: {ch6} - LOW)")
+                            threading.Thread(target=self.perform_locking, daemon=True, name="LockSequenceThread").start()
                 
                 # Active Background Holding Loop
-                # If a sequence is NOT active, re-enforce the LOCK positions at 10Hz
-                if not self.sequence_active and self.last_state == 'lock':
+                # If a sequence is NOT active, re-enforce the target state positions at 10Hz
+                if not self.sequence_active and self.last_state in ['lock', 'unlock']:
                     with self._io_lock:
-                        # Servo 1 (ST)
-                        self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                        self.stsHandler.WritePosEx(1, LOCK_POS_1, ST_SPEED, ST_ACC)
-                        # Servo 2 (SC)
-                        self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                        self.scsHandler.WritePos(2, LOCK_POS_2, 0, SC_SPEED)
-                        # Servo 3 (SC)
-                        self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                        self.scsHandler.WritePos(3, LOCK_POS_3, 0, SC_SPEED)
+                        if self.last_state == 'lock':
+                            # Servo 1 (ST)
+                            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                            self.stsHandler.WritePosEx(1, LOCK_POS_1, ST_SPEED, ST_ACC)
+                            # Servo 2 (SC)
+                            self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(2, LOCK_POS_2, 0, SC_SPEED)
+                            # Servo 3 (SC)
+                            self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(3, LOCK_POS_3, 0, SC_SPEED)
+                        elif self.last_state == 'unlock':
+                            # Servo 1 (ST)
+                            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                            self.stsHandler.WritePosEx(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
+                            # Servo 2 (SC)
+                            self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(2, UNLOCK_POS_2, 0, SC_SPEED)
+                            # Servo 3 (SC)
+                            self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                            self.scsHandler.WritePos(3, UNLOCK_POS_3, 0, SC_SPEED)
 
             except Exception as e:
                 print(f"[SERVO] Monitor loop error: {e}")
