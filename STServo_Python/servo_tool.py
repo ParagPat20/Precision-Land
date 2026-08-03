@@ -154,7 +154,7 @@ def draw_menu():
     
     print(f"\n{C_YEL}┌── Direct Command Shell Reference ──────────────────────────┐{C_RST}")
     print(f"{C_YEL}│{C_RST}  act <id>                     │ move [id] <pos> [spd] [acc] {C_YEL}│{C_RST}")
-    print(f"{C_YEL}│{C_RST}  ping [id/all]                │ rotate [id] <f/b> [spd/pwm] {C_YEL}│{C_RST}")
+    print(f"{C_YEL}│{C_RST}  ping [id/all]                │ rotate [id] <f/b> [spd] [t/r]{C_YEL}│{C_RST}")
     print(f"{C_YEL}│{C_RST}  center [id]                  │ torque [id] <on/off/1/0>    {C_YEL}│{C_RST}")
     print(f"{C_YEL}│{C_RST}  relax                        │ diag [id]                   {C_YEL}│{C_RST}")
     print(f"{C_YEL}│{C_RST}  record <id1,id2,...> [file]  │ play [file] / mon [ids]     {C_YEL}│{C_RST}")
@@ -178,6 +178,34 @@ def get_int(prompt, default=None, min_val=None, max_val=None):
                 else:
                     return None
             num = int(val)
+            if min_val is not None and num < min_val:
+                print(f"{C_RED}Value must be >= {min_val}. Try again.{C_RST}")
+                continue
+            if max_val is not None and num > max_val:
+                print(f"{C_RED}Value must be <= {max_val}. Try again.{C_RST}")
+                continue
+            return num
+        except ValueError:
+            print(f"{C_RED}Invalid input. Enter a valid number, 'b' to go back, or press Enter.{C_RST}")
+
+def get_float(prompt, default=None, min_val=None, max_val=None):
+    """
+    Robust float input helper.
+    - Pressing Enter returns the default (if provided), otherwise cancels (returns None).
+    - Entering 'b', 'back', 'q', or 'quit' cancels and returns None.
+    - Validates bounds and data types.
+    """
+    while True:
+        try:
+            val = input(f"{prompt}").strip()
+            if val.lower() in ['b', 'back', 'q', 'quit']:
+                return None
+            if not val:
+                if default is not None:
+                    return default
+                else:
+                    return None
+            num = float(val)
             if min_val is not None and num < min_val:
                 print(f"{C_RED}Value must be >= {min_val}. Try again.{C_RST}")
                 continue
@@ -655,53 +683,170 @@ def center_align_servo(sts_handler, sc_handler, active_id):
     else:
         print(f"{C_RED}Error: {handler.getTxRxResult(res)}{C_RST}")
 
+def run_continuous_rotation(sts_handler, sc_handler, sid, direction='f', speed_pwm=None, control_mode='rotations', target_val=1.0):
+    """
+    Executes continuous rotation for a specified duration (seconds) or rotation count (rotations with 0.1 resolution).
+    - control_mode: 'rotations' or 'time'
+    - target_val: float value (e.g. 1.1 rotations or 5.0 seconds)
+    """
+    servo_type = get_servo_type(sts_handler, sid)
+    handler = sts_handler if servo_type == 'ST' else sc_handler
+    
+    dir_str = str(direction).lower()
+    sign = 1 if dir_str in ['f', 'for', 'forward', 'cw', '1'] else -1
+    dir_label = "Forward (CW)" if sign > 0 else "Backward (CCW)"
+    
+    if speed_pwm is None:
+        speed_pwm = 1000 if servo_type == 'ST' else 500
+        
+    if servo_type == 'ST':
+        speed_val = abs(int(speed_pwm)) * sign
+    else:
+        pwm_val = abs(int(speed_pwm)) * sign
+        
+    if control_mode == 'rotations':
+        target_rotations = round(float(target_val), 2)
+        steps_per_rev = 4096.0 if servo_type == 'ST' else 1024.0
+        target_steps = target_rotations * steps_per_rev
+        half_rev = steps_per_rev / 2.0
+        
+        pos_start, _, res, _ = handler.ReadPosSpeed(sid)
+        if res != COMM_SUCCESS:
+            print(f"{C_RED}Error reading initial position for Servo {sid}: {handler.getTxRxResult(res)}{C_RST}")
+            return
+            
+        print(f"\n{C_GREEN}Rotating Servo {sid} ({dir_label}) for {target_rotations:.1f} rotations ({target_steps:.0f} encoder steps)...{C_RST}")
+        print(f"Resolution: 0.1 rotations (1/10th rev) | Press {C_YEL}Ctrl+C{C_RST} to stop early.\n")
+        
+        if servo_type == 'ST':
+            handler.WheelMode(sid)
+            res, err = handler.WriteSpec(sid, speed_val, 50)
+        else:
+            handler.PWMMode(sid)
+            res, err = handler.WritePWM(sid, pwm_val)
+            
+        if res != COMM_SUCCESS:
+            print(f"{C_RED}Error running rotation: {handler.getTxRxResult(res)}{C_RST}")
+            return
+            
+        last_pos = pos_start
+        accumulated_steps = 0.0
+        start_t = time.time()
+        max_timeout = max(120.0, target_rotations * 15.0)
+        
+        try:
+            while accumulated_steps < target_steps:
+                if (time.time() - start_t) > max_timeout:
+                    print(f"\n{C_YEL}Safety timeout reached ({max_timeout:.0f}s). Stopping.{C_RST}")
+                    break
+                    
+                curr_pos, _, res_read, _ = handler.ReadPosSpeed(sid)
+                if res_read == COMM_SUCCESS:
+                    delta = curr_pos - last_pos
+                    if delta > half_rev:
+                        delta -= steps_per_rev
+                    elif delta < -half_rev:
+                        delta += steps_per_rev
+                        
+                    accumulated_steps += abs(delta)
+                    last_pos = curr_pos
+                    
+                    completed_rot = accumulated_steps / steps_per_rev
+                    pct = min(100.0, (accumulated_steps / target_steps) * 100.0)
+                    sys.stdout.write(f"\rProgress: {completed_rot:.2f} / {target_rotations:.1f} rotations ({pct:.1f}%)... ")
+                    sys.stdout.flush()
+                    
+                time.sleep(0.01)
+        except KeyboardInterrupt:
+            print(f"\n{C_YEL}Rotation interrupted by user!{C_RST}")
+            
+        # Stop command
+        if servo_type == 'ST':
+            handler.WriteSpec(sid, 0, 50)
+        else:
+            handler.WritePWM(sid, 0)
+            
+        final_rot = accumulated_steps / steps_per_rev
+        print(f"\n{C_GREEN}Stopped Servo {sid}. Completed: {final_rot:.2f} / {target_rotations:.1f} rotations.{C_RST}")
+        
+    else: # control_mode == 'time'
+        duration = float(target_val)
+        print(f"\n{C_GREEN}Rotating Servo {sid} ({dir_label}) for {duration:.1f} seconds...{C_RST}")
+        print(f"Press {C_YEL}Ctrl+C{C_RST} to stop early.\n")
+        
+        if servo_type == 'ST':
+            handler.WheelMode(sid)
+            res, err = handler.WriteSpec(sid, speed_val, 50)
+        else:
+            handler.PWMMode(sid)
+            res, err = handler.WritePWM(sid, pwm_val)
+            
+        if res != COMM_SUCCESS:
+            print(f"{C_RED}Error running rotation: {handler.getTxRxResult(res)}{C_RST}")
+            return
+            
+        start_t = time.time()
+        end_t = start_t + duration
+        try:
+            while time.time() < end_t:
+                rem = max(0.0, end_t - time.time())
+                sys.stdout.write(f"\rTime remaining: {rem:.1f} seconds... ")
+                sys.stdout.flush()
+                time.sleep(0.05)
+            print(f"\rTime remaining: 0.0 seconds... stopping.")
+        except KeyboardInterrupt:
+            print(f"\n{C_YEL}Rotation interrupted by user!{C_RST}")
+            
+        # Stop command
+        if servo_type == 'ST':
+            handler.WriteSpec(sid, 0, 50)
+        else:
+            handler.WritePWM(sid, 0)
+            
+        print(f"{C_GREEN}Stopped Servo {sid}.{C_RST}")
+
 def continuous_rotation(sts_handler, sc_handler, active_id):
     """
-    Continuous rotation with a safety timer (runs for 5s then stops).
+    Continuous rotation with configurable duration (seconds) or rotation count (0.1 resolution).
     """
-    print_header("Continuous Rotation (5-Second Run)")
-    print("Guidance: Configures and spins the servo like a motor for exactly 5 seconds.")
-    print("  - ST Series: Speed is controlled via rate (-3000 to 3000).")
-    print("  - SC Series: Speed is controlled via PWM duty cycle (-1000 to 1000).\n")
+    print_header("Continuous Rotation Control")
+    print("Guidance: Configures and spins the servo in continuous rotation mode.")
+    print("  - ST Series: Speed is controlled via rate (1 to 3000).")
+    print("  - SC Series: Speed is controlled via PWM duty cycle (1 to 1000).")
+    print("  - Target modes: Time (seconds) OR Number of Rotations (0.1 resolution, e.g. 1.1 rotations = 1 rev + 1/10 rev).\n")
     
     sid = get_int(f"Enter Servo ID [Default: {active_id}]: ", default=active_id)
     if sid is None: return
     
     servo_type = get_servo_type(sts_handler, sid)
-    handler = sts_handler if servo_type == 'ST' else sc_handler
     
+    direction = input("Enter Direction (f: Forward/CW, b: Backward/CCW) [Default: f]: ").strip().lower()
+    if not direction:
+        direction = 'f'
+    elif direction in ['b', 'back', 'q', 'quit']:
+        if direction in ['q', 'quit']:
+            return
+            
     if servo_type == 'ST':
-        spd = get_int("Speed (-3000 to 3000) [Default: 1000]: ", default=1000, min_val=-3000, max_val=3000)
+        spd = get_int("Speed (1 to 3000) [Default: 1000]: ", default=1000, min_val=1, max_val=3000)
+        if spd is None: return
+    else:
+        spd = get_int("PWM Value (1 to 1000) [Default: 500]: ", default=500, min_val=1, max_val=1000)
         if spd is None: return
         
-        handler.WheelMode(sid)
-        res, err = handler.WriteSpec(sid, spd, 50)
+    print("\nSelect Rotation Control Mode:")
+    print("  1. By Rotations (e.g. 1.0, 1.1, 0.5, 2.3 rotations)")
+    print("  2. By Time / Duration (seconds, e.g. 5.0s, 3.5s)")
+    mode_choice = input("Select mode (1 or 2) [Default: 1]: ").strip()
+    
+    if mode_choice == '2':
+        duration = get_float("Enter run duration in seconds [Default: 5.0]: ", default=5.0, min_val=0.1, max_val=3600.0)
+        if duration is None: return
+        run_continuous_rotation(sts_handler, sc_handler, sid, direction=direction, speed_pwm=spd, control_mode='time', target_val=duration)
     else:
-        pwm = get_int("PWM Value (-1000 to 1000) [Default: 500]: ", default=500, min_val=-1000, max_val=1000)
-        if pwm is None: return
-        
-        handler.PWMMode(sid)
-        res, err = handler.WritePWM(sid, pwm)
-        
-    if res == COMM_SUCCESS:
-        print(f"\n{C_GREEN}Running rotation... Press Ctrl+C to cancel early.{C_RST}")
-        try:
-            for i in range(5, 0, -1):
-                sys.stdout.write(f"\rTime remaining: {i} seconds... ")
-                sys.stdout.flush()
-                time.sleep(1)
-            print(f"\rTime remaining: 0 seconds... stopping.")
-        except KeyboardInterrupt:
-            print("\nInterrupted! Stopping immediately.")
-            
-        # Send stop command
-        if servo_type == 'ST':
-            handler.WriteSpec(sid, 0, 50)
-        else:
-            handler.WritePWM(sid, 0)
-        print(f"{C_GREEN}Servo {sid} stopped.{C_RST}")
-    else:
-        print(f"{C_RED}Error running rotation: {handler.getTxRxResult(res)}{C_RST}")
+        rotations = get_float("Enter number of rotations (0.1 resolution, e.g. 1.1) [Default: 1.0]: ", default=1.0, min_val=0.1, max_val=1000.0)
+        if rotations is None: return
+        run_continuous_rotation(sts_handler, sc_handler, sid, direction=direction, speed_pwm=spd, control_mode='rotations', target_val=rotations)
 
 def emergency_relax(sts_handler):
     """
@@ -1144,79 +1289,70 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
             print(f"{C_RED}Error centering servo {sid}: {handler.getTxRxResult(res)}{C_RST}")
         return active_id, True
         
-    # 5. rotate [id] <f/b> [speed/pwm]
+    # 5. rotate [id] <f/b> [speed/pwm] [time/rotations]
     elif cmd == 'rotate':
         if not args:
-            print(f"{C_RED}Usage: rotate [id] <f/b> [speed/pwm]{C_RST}")
+            print(f"{C_RED}Usage: rotate [id] <f/b> [speed/pwm] [time/rotations (e.g. 1.1r or 5s)]{C_RST}")
             return active_id, True
         try:
-            # Parse arguments
-            if len(args) == 1:
-                # Omitted ID: rotate <f/b>
-                if active_id is None:
-                    print(f"{C_RED}Error: Specify servo ID or set active servo first. Usage: rotate <id> <f/b>{C_RST}")
-                    return active_id, True
-                sid = active_id
-                direction = args[0].lower()
-                speed_arg = None
-            elif len(args) >= 2:
-                # Check if first arg is direction or ID
-                if args[0].lower() in ['f', 'for', 'forward', 'b', 'back', 'backward']:
-                    # Omitted ID: rotate <f/b> [speed/pwm]
-                    if active_id is None:
-                        print(f"{C_RED}Error: Specify servo ID or set active servo first.{C_RST}")
-                        return active_id, True
-                    sid = active_id
-                    direction = args[0].lower()
-                    speed_arg = int(args[1]) if len(args) > 1 else None
-                else:
-                    # ID and direction provided: rotate <id> <f/b> [speed/pwm]
-                    sid = int(args[0])
-                    direction = args[1].lower()
-                    speed_arg = int(args[2]) if len(args) > 2 else None
-                    
-            servo_type = get_servo_type(sts_handler, sid)
-            handler = sts_handler if servo_type == 'ST' else sc_handler
+            rem_args = list(args)
+            sid = active_id
             
-            if direction not in ['f', 'for', 'forward', 'b', 'back', 'backward']:
+            # Check if first argument is a numeric ID
+            if rem_args[0].isdigit() or (rem_args[0].startswith('-') and rem_args[0][1:].isdigit()):
+                sid = int(rem_args.pop(0))
+                
+            if sid is None:
+                print(f"{C_RED}Error: Specify servo ID or set active servo first. Usage: rotate <id> <f/b>{C_RST}")
+                return active_id, True
+                
+            if not rem_args:
+                print(f"{C_RED}Usage: rotate [id] <f/b> [speed/pwm] [time/rotations]{C_RST}")
+                return active_id, True
+                
+            direction = rem_args.pop(0).lower()
+            if direction not in ['f', 'for', 'forward', 'b', 'back', 'backward', 'cw', 'ccw']:
                 print(f"{C_RED}Direction must be f (forward) or b (backward).{C_RST}")
                 return active_id, True
                 
-            sign = 1 if direction in ['f', 'for', 'forward'] else -1
+            servo_type = get_servo_type(sts_handler, sid)
+            default_speed = 1000 if servo_type == 'ST' else 500
+            speed_val = default_speed
             
-            if servo_type == 'ST':
-                speed_val = speed_arg if speed_arg is not None else 1000
-                speed_val = abs(speed_val) * sign
-                
-                handler.WheelMode(sid)
-                res, err = handler.WriteSpec(sid, speed_val, 50)
-            else:
-                pwm_val = speed_arg if speed_arg is not None else 500
-                pwm_val = abs(pwm_val) * sign
-                
-                handler.PWMMode(sid)
-                res, err = handler.WritePWM(sid, pwm_val)
-                
-            if res == COMM_SUCCESS:
-                print(f"{C_GREEN}Rotating servo {sid} for 5 seconds...{C_RST}")
-                try:
-                    for i in range(5, 0, -1):
-                        sys.stdout.write(f"\rTime remaining: {i} seconds... ")
-                        sys.stdout.flush()
-                        time.sleep(1)
-                    print(f"\rTime remaining: 0 seconds... stopping.")
-                except KeyboardInterrupt:
-                    print("\nInterrupted!")
-                
-                if servo_type == 'ST':
-                    handler.WriteSpec(sid, 0, 50)
+            control_mode = 'time'
+            target_val = 5.0
+            
+            # Check remaining arguments for [speed/pwm] [time/rotations]
+            if rem_args:
+                arg_peek = rem_args[0].lower()
+                # If pure integer without decimals or unit suffix, it's speed
+                if arg_peek.isdigit():
+                    speed_val = int(rem_args.pop(0))
+                    
+            if rem_args:
+                target_str = rem_args.pop(0).lower()
+                if target_str.startswith('r=') or target_str.startswith('rot='):
+                    control_mode = 'rotations'
+                    target_val = float(target_str.split('=')[1])
+                elif target_str.startswith('t=') or target_str.startswith('time='):
+                    control_mode = 'time'
+                    target_val = float(target_str.split('=')[1])
+                elif target_str.endswith('r') or target_str.endswith('rot'):
+                    control_mode = 'rotations'
+                    target_val = float(target_str.rstrip('rot').rstrip('r'))
+                elif target_str.endswith('s') or target_str.endswith('sec'):
+                    control_mode = 'time'
+                    target_val = float(target_str.rstrip('sec').rstrip('s'))
+                elif '.' in target_str:
+                    control_mode = 'rotations'
+                    target_val = float(target_str)
                 else:
-                    handler.WritePWM(sid, 0)
-                print(f"{C_GREEN}Stopped servo {sid}.{C_RST}")
-            else:
-                print(f"{C_RED}Error: {handler.getTxRxResult(res)}{C_RST}")
-        except ValueError:
-            print(f"{C_RED}Invalid numeric arguments.{C_RST}")
+                    control_mode = 'time'
+                    target_val = float(target_str)
+                    
+            run_continuous_rotation(sts_handler, sc_handler, sid, direction=direction, speed_pwm=speed_val, control_mode=control_mode, target_val=target_val)
+        except Exception as e:
+            print(f"{C_RED}Invalid arguments for rotate command: {e}{C_RST}")
         return active_id, True
         
     # 6. torque [id] <on/off/1/0>
