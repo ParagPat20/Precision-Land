@@ -28,15 +28,21 @@ ST_ACC = 200
 SC_SPEED = 1500
 
 # Locking Targets
-LOCK_POS_1 = 200
+LOCK_POS_1 = "Continuous Rotation (Forward Speed 3000, 1.25 Rotations)"
 LOCK_POS_2 = 550
 LOCK_POS_3 = 715
 
-# Unlocking Targets (DEPRECATED - No longer used)
-UNLOCK_POS_1 = 2100
+# Unlocking Targets
+UNLOCK_POS_1 = "Continuous Rotation (Backward Speed 3000, 1.25 Rotations)"
 UNLOCK_POS_2 = 750
 UNLOCK_POS_3 = 540
 UNLOCK_CHECK_3 = 540  # Threshold check for ID 3
+
+# Servo 1 (ST3215) Continuous Rotation Parameters
+ST_LOCK_SPEED_1 = 3000
+ST_LOCK_ROTATIONS_1 = 1.25
+ST_UNLOCK_SPEED_1 = 3000
+ST_UNLOCK_ROTATIONS_1 = 1.25
 
 # Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers
 SERVO_LIMITS = {
@@ -329,30 +335,20 @@ class ServoController:
                     if not self._lock_eprom(sid):
                         continue
 
-                    # Initialize servos directly to LOCK positions on startup (LOCK ONLY - NO UNLOCK)
+                    # Initialize servos directly to LOCK state on startup
                     if sid == 1:
-                        target_pos = LOCK_POS_1
-                        speed_val = 2400
-                    elif sid == 2:
-                        target_pos = LOCK_POS_2
-                        speed_val = 1500
-                    elif sid == 3:
-                        target_pos = LOCK_POS_3
-                        speed_val = 1500
-                    else:
-                        target_pos = self._home_position_for(sid)
-                        speed_val = 500
-
-                    if is_sts:
-                        if not self._write1(sid, STS_MODE, 0, "set position mode"):
+                        if not self._write1(sid, STS_MODE, 1, "set wheel mode"):
                             continue
-                        result, error = handler.WritePosEx(sid, target_pos, speed_val, 50)
+                        result, error = handler.WriteSpec(sid, 0, 50)
                     else:
+                        target_pos = LOCK_POS_2 if sid == 2 else (LOCK_POS_3 if sid == 3 else self._home_position_for(sid))
+                        speed_val = 1500 if sid in [2, 3] else 500
                         result, error = handler.WritePos(sid, target_pos, 0, speed_val)
-                    if not self._result_ok(sid, "move to locking position", result, error, handler):
+
+                    if not self._result_ok(sid, "initialize locking state", result, error, handler):
                         continue
 
-                print(f"[SERVO] Servo ID {sid} initialized to LOCK position.")
+                print(f"[SERVO] Servo ID {sid} initialized to LOCK state.")
             except Exception as e:
                 print(f"[SERVO] Error initializing servo ID {sid}: {e}")
                 # Prevent "Port is in use!" subsequent errors
@@ -758,13 +754,77 @@ class ServoController:
         print(f"  -> Timeout reached for SC servos! Did not fully complete.")
         return False
 
+    def rotate_st_continuous(self, sid=1, direction='f', speed=3000, rotations=1.25):
+        """
+        Rotates ST3215 servo (ID 1) in continuous rotation mode (Wheel mode) for exact rotation count.
+        - direction: 'f' (Forward/CW) or 'b' (Backward/CCW)
+        - speed: speed magnitude (e.g. 3000)
+        - rotations: rotation count (e.g. 1.25)
+        """
+        sid = int(sid)
+        sign = 1 if str(direction).lower() in ['f', 'for', 'forward', 'cw', '1'] else -1
+        speed_val = abs(int(speed)) * sign
+        dir_label = "Forward (CW)" if sign > 0 else "Backward (CCW)"
+        
+        target_rotations = round(float(rotations), 2)
+        steps_per_rev = 4096.0
+        target_steps = target_rotations * steps_per_rev
+        half_rev = steps_per_rev / 2.0
+        
+        print(f"[SERVO] Rotating Servo {sid} ({dir_label}) continuous: speed {abs(speed)}, rotations {target_rotations:.2f} ({target_steps:.0f} steps)...")
+        
+        with self._io_lock:
+            self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
+            pos_start, spd_start, res, error = self.stsHandler.ReadPosSpeed(sid)
+            if res != COMM_SUCCESS:
+                print(f"[SERVO] Error reading initial position for Servo {sid}: {self.stsHandler.getTxRxResult(res)}")
+                return False
+                
+            self.stsHandler.WheelMode(sid)
+            res_spec, err_spec = self.stsHandler.WriteSpec(sid, speed_val, 50)
+            if res_spec != COMM_SUCCESS:
+                print(f"[SERVO] Error starting rotation on Servo {sid}: {self.stsHandler.getTxRxResult(res_spec)}")
+                return False
+
+        last_pos = pos_start
+        accumulated_steps = 0.0
+        start_t = time.time()
+        max_timeout = max(10.0, target_rotations * 10.0)
+        
+        while accumulated_steps < target_steps:
+            if (time.time() - start_t) > max_timeout:
+                print(f"[SERVO] Safety timeout ({max_timeout:.1f}s) reached during ID {sid} continuous rotation!")
+                break
+                
+            time.sleep(0.01)
+            
+            with self._io_lock:
+                curr_pos, _, res_read, _ = self.stsHandler.ReadPosSpeed(sid)
+                
+            if res_read == COMM_SUCCESS:
+                delta = curr_pos - last_pos
+                if delta > half_rev:
+                    delta -= steps_per_rev
+                elif delta < -half_rev:
+                    delta += steps_per_rev
+                    
+                accumulated_steps += abs(delta)
+                last_pos = curr_pos
+
+        with self._io_lock:
+            self.stsHandler.WriteSpec(sid, 0, 50)
+            
+        final_rot = accumulated_steps / steps_per_rev
+        print(f"[SERVO] Servo {sid} continuous rotation finished: completed {final_rot:.2f} / {target_rotations:.2f} rotations.")
+        return True
+
     def perform_locking(self):
         """Execute locking sequence."""
         self.sequence_active = True
         try:
             print("\n--- STARTING NATIVE LOCKING SEQUENCE ---")
-            print(f"Step 1: Servo 1 (ST) -> {LOCK_POS_1}")
-            self.robust_move_st_single(1, LOCK_POS_1, ST_SPEED, ST_ACC)
+            print(f"Step 1: Servo 1 (ST) -> Continuous Rotation Forward Speed {ST_LOCK_SPEED_1}, Rotations {ST_LOCK_ROTATIONS_1}")
+            self.rotate_st_continuous(1, direction='f', speed=ST_LOCK_SPEED_1, rotations=ST_LOCK_ROTATIONS_1)
             
             print("\nWaiting 1s for mechanical settlement...")
             time.sleep(1.0)
@@ -790,8 +850,8 @@ class ServoController:
             print(f"\nStep 2: Servo 2 (SC) -> {UNLOCK_POS_2}")
             self.robust_move_sc_single(2, UNLOCK_POS_2, SC_SPEED)
             
-            print(f"\nStep 3: Servo 1 (ST) -> {UNLOCK_POS_1}")
-            self.robust_move_st_single(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
+            print(f"\nStep 3: Servo 1 (ST) -> Continuous Rotation Backward Speed {ST_UNLOCK_SPEED_1}, Rotations {ST_UNLOCK_ROTATIONS_1}")
+            self.rotate_st_continuous(1, direction='b', speed=ST_UNLOCK_SPEED_1, rotations=ST_UNLOCK_ROTATIONS_1)
             
             print("\nUnlocking sequence complete!")
             self.last_state = 'unlock'
@@ -847,10 +907,11 @@ class ServoController:
                 # If a sequence is NOT active, re-enforce the target state positions at 10Hz
                 if not self.sequence_active and self.last_state in ['lock', 'unlock']:
                     with self._io_lock:
+                        # Servo 1 (ST) - Hold torque and zero speed in continuous wheel mode
+                        self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                        self.stsHandler.WriteSpec(1, 0, 50)
+
                         if self.last_state == 'lock':
-                            # Servo 1 (ST)
-                            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                            self.stsHandler.WritePosEx(1, LOCK_POS_1, ST_SPEED, ST_ACC)
                             # Servo 2 (SC)
                             self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
                             self.scsHandler.WritePos(2, LOCK_POS_2, 0, SC_SPEED)
@@ -858,9 +919,6 @@ class ServoController:
                             self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
                             self.scsHandler.WritePos(3, LOCK_POS_3, 0, SC_SPEED)
                         elif self.last_state == 'unlock':
-                            # Servo 1 (ST)
-                            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                            self.stsHandler.WritePosEx(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
                             # Servo 2 (SC)
                             self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
                             self.scsHandler.WritePos(2, UNLOCK_POS_2, 0, SC_SPEED)

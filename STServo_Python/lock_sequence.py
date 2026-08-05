@@ -272,10 +272,62 @@ def robust_move_sc_pair(sc_handler, sid2, target2, sid3, target3, speed, timeout
     print(f"  -> Timeout reached for SC servos! Did not fully complete.")
     return False
 
+def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotations=1.25):
+    sid = int(sid)
+    sign = 1 if str(direction).lower() in ['f', 'for', 'forward', 'cw', '1'] else -1
+    speed_val = abs(int(speed)) * sign
+    dir_label = "Forward (CW)" if sign > 0 else "Backward (CCW)"
+    
+    target_rotations = round(float(rotations), 2)
+    steps_per_rev = 4096.0
+    target_steps = target_rotations * steps_per_rev
+    half_rev = steps_per_rev / 2.0
+    
+    print(f"Rotating Servo {sid} ({dir_label}) continuous: speed {abs(speed)}, rotations {target_rotations:.2f} ({target_steps:.0f} steps)...")
+    
+    sts_handler.write1ByteTxRx(sid, 40, 1) # Enable torque
+    pos_start, res, _ = sts_handler.ReadPos(sid)
+    if res != COMM_SUCCESS:
+        print(f"Error reading initial position for Servo {sid}: {sts_handler.getTxRxResult(res)}")
+        return False
+        
+    sts_handler.WheelMode(sid)
+    res_spec, _ = sts_handler.WriteSpec(sid, speed_val, 50)
+    if res_spec != COMM_SUCCESS:
+        print(f"Error starting rotation on Servo {sid}: {sts_handler.getTxRxResult(res_spec)}")
+        return False
+
+    last_pos = pos_start
+    accumulated_steps = 0.0
+    start_t = time.time()
+    max_timeout = max(10.0, target_rotations * 10.0)
+    
+    while accumulated_steps < target_steps:
+        if (time.time() - start_t) > max_timeout:
+            print(f"Safety timeout ({max_timeout:.1f}s) reached during ID {sid} continuous rotation!")
+            break
+            
+        time.sleep(0.01)
+        pos, res_read, _ = sts_handler.ReadPos(sid)
+        if res_read == COMM_SUCCESS:
+            delta = pos - last_pos
+            if delta > half_rev:
+                delta -= steps_per_rev
+            elif delta < -half_rev:
+                delta += steps_per_rev
+                
+            accumulated_steps += abs(delta)
+            last_pos = pos
+
+    sts_handler.WriteSpec(sid, 0, 50)
+    final_rot = accumulated_steps / steps_per_rev
+    print(f"Servo {sid} continuous rotation finished: completed {final_rot:.2f} / {target_rotations:.2f} rotations.")
+    return True
+
 def perform_locking(sts_handler, sc_handler):
     print("\n--- LOCKING SEQUENCE ---")
-    print(f"Step 1: Servo 1 -> {LOCK_POS_1}")
-    robust_move_st_single(sts_handler, 1, LOCK_POS_1, ST_SPEED, ST_ACC)
+    print(f"Step 1: Servo 1 -> Continuous Rotation Forward Speed 3000, 1.25 Rotations")
+    rotate_st_continuous(sts_handler, 1, direction='f', speed=3000, rotations=1.25)
     
     print("\nWaiting 1s for mechanical settlement...")
     time.sleep(1.0)
@@ -289,8 +341,8 @@ def perform_unlocking(sts_handler, sc_handler):
     print(f"Step 1: Servo 2 -> {UNLOCK_POS_2} & Servo 3 -> {UNLOCK_POS_3} (Checking if <= {UNLOCK_CHECK_3})")
     robust_move_sc_pair(sc_handler, 2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='<=')
     
-    print(f"\nStep 2: Servo 1 -> {UNLOCK_POS_1}")
-    robust_move_st_single(sts_handler, 1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
+    print(f"\nStep 2: Servo 1 -> Continuous Rotation Backward Speed 3000, 1.25 Rotations")
+    rotate_st_continuous(sts_handler, 1, direction='b', speed=3000, rotations=1.25)
     print("\nUnlocking sequence complete!")
 
 if __name__ == '__main__':
@@ -340,17 +392,16 @@ if __name__ == '__main__':
                 break
                 
         # Active Background Holding Loop (PID Compensator)
-        # If a servo resets, this immediately re-enables torque and pushes the target again
+        # If a servo resets, this immediately re-enables torque and pushes target state
+        sts_handler.write1ByteTxRx(1, 40, 1)
+        sts_handler.WriteSpec(1, 0, 50)
+        
         if last_state == 'lock':
-            sts_handler.write1ByteTxRx(1, 40, 1)
-            sts_handler.WritePosEx(1, LOCK_POS_1, ST_SPEED, ST_ACC)
             sc_handler.write1ByteTxRx(2, 40, 1)
             sc_handler.WritePos(2, LOCK_POS_2, 0, SC_SPEED)
             sc_handler.write1ByteTxRx(3, 40, 1)
             sc_handler.WritePos(3, LOCK_POS_3, 0, SC_SPEED)
         elif last_state == 'unlock':
-            sts_handler.write1ByteTxRx(1, 40, 1)
-            sts_handler.WritePosEx(1, UNLOCK_POS_1, ST_SPEED, ST_ACC)
             sc_handler.write1ByteTxRx(2, 40, 1)
             sc_handler.WritePos(2, UNLOCK_POS_2, 0, SC_SPEED)
             sc_handler.write1ByteTxRx(3, 40, 1)
