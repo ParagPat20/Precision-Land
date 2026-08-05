@@ -335,20 +335,18 @@ class ServoController:
                     if not self._lock_eprom(sid):
                         continue
 
-                    # Initialize servos directly to LOCK state on startup
+                    # Initialize servos (enable holding torque & set mode) on startup
                     if sid == 1:
                         if not self._write1(sid, STS_MODE, 1, "set wheel mode"):
                             continue
                         result, error = handler.WriteSpec(sid, 0, 50)
                     else:
-                        target_pos = LOCK_POS_2 if sid == 2 else (LOCK_POS_3 if sid == 3 else self._home_position_for(sid))
-                        speed_val = 1500 if sid in [2, 3] else 500
-                        result, error = handler.WritePos(sid, target_pos, 0, speed_val)
+                        result, error = handler.write1ByteTxRx(sid, SCSCL_TORQUE_ENABLE, 1)
 
-                    if not self._result_ok(sid, "initialize locking state", result, error, handler):
+                    if not self._result_ok(sid, "initialize torque state", result, error, handler):
                         continue
 
-                print(f"[SERVO] Servo ID {sid} initialized to LOCK state.")
+                print(f"[SERVO] Servo ID {sid} initialized.")
             except Exception as e:
                 print(f"[SERVO] Error initializing servo ID {sid}: {e}")
                 # Prevent "Port is in use!" subsequent errors
