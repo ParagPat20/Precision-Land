@@ -141,13 +141,18 @@ class ServoController:
         self.st3215_locked = False
         self.sc09_locked = False
 
+        # State file for persistence across Pi reboots
+        self.state_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "servo_state.json"))
+        
         # Lock sequence state variables
         self.servo6_raw = 0
         self.last_servo6_raw_rx_time = 0
         self.last_stream_request_time = 0
         self.sequence_active = False
-        self.last_triggered_state = 'lock'
-        self.last_state = 'lock'
+        
+        saved_st = self._load_saved_state()
+        self.last_triggered_state = saved_st
+        self.last_state = saved_st
 
         # Register MAVLink message listener for Servo Output Channel 6
         if self.vehicle:
@@ -158,6 +163,55 @@ class ServoController:
                 print(f"[SERVO] Warning: Failed to add SERVO_OUTPUT_RAW message listener: {e}")
 
         self._connect()
+
+    def _load_saved_state(self):
+        try:
+            if os.path.exists(self.state_file):
+                import json
+                with open(self.state_file, 'r') as f:
+                    data = json.load(f)
+                    st = data.get("last_state", "lock")
+                    if st in ["lock", "unlock"]:
+                        return st
+        except Exception as e:
+            print(f"[SERVO] Note: Failed to read state file {self.state_file}: {e}")
+        return "lock"
+
+    def _save_state(self, state):
+        try:
+            import json
+            data = {"last_state": state, "updated_at": time.time()}
+            with open(self.state_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"[SERVO] Warning: Failed to write state file {self.state_file}: {e}")
+
+    def detect_physical_state(self):
+        """
+        Detects physical lock state on reboot by reading magnetic encoder feedback of SC servos (IDs 2 & 3).
+        Falls back to saved state file if serial communication fails.
+        """
+        if not self.connected:
+            return self._load_saved_state()
+
+        try:
+            with self._io_lock:
+                pos2, res2, _ = self.scsHandler.ReadPos(2)
+                pos3, res3, _ = self.scsHandler.ReadPos(3)
+
+            if res2 == COMM_SUCCESS and res3 == COMM_SUCCESS:
+                # Calculate proximity to LOCK positions vs UNLOCK positions
+                dist_lock = abs(pos2 - LOCK_POS_2) + abs(pos3 - LOCK_POS_3)
+                dist_unlock = abs(pos2 - UNLOCK_POS_2) + abs(pos3 - UNLOCK_POS_3)
+                
+                detected = 'lock' if dist_lock <= dist_unlock else 'unlock'
+                print(f"[SERVO] Hardware encoder check on boot: Pos2={pos2}, Pos3={pos3} -> Detected state: '{detected}'")
+                self._save_state(detected)
+                return detected
+        except Exception as e:
+            print(f"[SERVO] Note: Encoder check fallback to state file: {e}")
+
+        return self._load_saved_state()
 
     def _connect(self):
         try:
@@ -285,8 +339,6 @@ class ServoController:
         Sets the home position offset, max and min positions for all servos.
         st_config: dict with 'min', 'max', 'home'
         sc09_configs: dict mapping sid to dict with 'min', 'max'
-        
-        Moves all servos to LOCK positions on startup (LOCK ONLY).
         """
         if not self.connected:
             print("[SERVO] Cannot initialize: Not connected.")
@@ -335,7 +387,7 @@ class ServoController:
                     if not self._lock_eprom(sid):
                         continue
 
-                    # Initialize servos (enable holding torque & set mode) on startup
+                    # Enable holding torque & mode on startup without moving Servos 2 & 3 prematurely
                     if sid == 1:
                         if not self._write1(sid, STS_MODE, 1, "set wheel mode"):
                             continue
@@ -349,13 +401,17 @@ class ServoController:
                 print(f"[SERVO] Servo ID {sid} initialized.")
             except Exception as e:
                 print(f"[SERVO] Error initializing servo ID {sid}: {e}")
-                # Prevent "Port is in use!" subsequent errors
                 if hasattr(self, "portHandler") and self.portHandler:
                     self.portHandler.is_using = False
 
-        # Startup sequence: Immediately execute the locking sequence (no delay before lock)
+        # Detect current physical state on boot/restart using magnetic encoders & state file
+        boot_state = self.detect_physical_state()
+        self.last_state = boot_state
+        self.last_triggered_state = boot_state
+
+        # Startup sequence: Perform state-aware locking check
         def startup_locking_thread():
-            print("[SERVO] Executing locking sequence...")
+            print(f"[SERVO] Startup state check: Mechanism is '{self.last_state}'. Verifying lock state...")
             self.perform_locking()
 
         threading.Thread(target=startup_locking_thread, daemon=True, name="ServoStartupLocking").start()
@@ -816,11 +872,26 @@ class ServoController:
         print(f"[SERVO] Servo {sid} continuous rotation finished: completed {final_rot:.2f} / {target_rotations:.2f} rotations.")
         return True
 
-    def perform_locking(self):
-        """Execute locking sequence."""
+    def perform_locking(self, force=False):
+        """
+        Execute locking sequence.
+        If force is False and mechanism is already locked, skips Servo 1 continuous rotation
+        to prevent over-rewinding or straining the cable/motor.
+        """
         self.sequence_active = True
         try:
             print("\n--- STARTING NATIVE LOCKING SEQUENCE ---")
+            
+            if self.last_state == 'lock' and not force:
+                print("[SERVO] Mechanism is ALREADY LOCKED. Skipping Servo 1 wire rewind to prevent cable/motor strain.")
+                with self._io_lock:
+                    self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                    self.stsHandler.WriteSpec(1, 0, 50)
+                print(f"Ensuring latches (Servo 2 & 3) are held at {LOCK_POS_2} & {LOCK_POS_3}...")
+                self.robust_move_sc_pair(2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='>=')
+                print("[SERVO] Locking state verified!")
+                return
+
             print(f"Step 1: Servo 1 (ST) -> Continuous Rotation Forward Speed {ST_LOCK_SPEED_1}, Rotations {ST_LOCK_ROTATIONS_1}")
             self.rotate_st_continuous(1, direction='f', speed=ST_LOCK_SPEED_1, rotations=ST_LOCK_ROTATIONS_1)
             
@@ -837,11 +908,24 @@ class ServoController:
         finally:
             self.sequence_active = False
 
-    def perform_unlocking(self):
-        """Execute unlocking sequence."""
+    def perform_unlocking(self, force=False):
+        """
+        Execute unlocking sequence.
+        If force is False and mechanism is already unlocked, skips redundant moves.
+        """
         self.sequence_active = True
         try:
             print("\n--- STARTING NATIVE UNLOCKING SEQUENCE ---")
+            
+            if self.last_state == 'unlock' and not force:
+                print("[SERVO] Mechanism is ALREADY UNLOCKED. Skipping redundant unlock rotation.")
+                with self._io_lock:
+                    self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                    self.stsHandler.WriteSpec(1, 0, 50)
+                self.robust_move_sc_single(3, UNLOCK_POS_3, SC_SPEED)
+                self.robust_move_sc_single(2, UNLOCK_POS_2, SC_SPEED)
+                return
+
             print(f"Step 1: Servo 3 (SC) -> {UNLOCK_POS_3}")
             self.robust_move_sc_single(3, UNLOCK_POS_3, SC_SPEED)
             
