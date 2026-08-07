@@ -1124,6 +1124,20 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         elif sub == '2':
             print(f"\n{C_YEL}=== EXECUTING UNLOCK SEQUENCE ==={C_RST}")
             un = config['unlock']
+            
+            # Read live position of Servo 3 to check if lid is ALREADY unlocked
+            pos3_curr, res3, _ = sc_handler.ReadPos(3)
+            if res3 == COMM_SUCCESS and pos3_curr <= (un['sc3_pos'] + 30):
+                print(f"{C_CYA}[SAFETY GUARD] Servo 3 live position ({pos3_curr}) indicates lid is ALREADY UNLOCKED (<= {un['sc3_pos'] + 30})!{C_RST}")
+                print(f"{C_YEL}[SAFETY GUARD] Skipping redundant unlock rotation.{C_RST}")
+                sc_handler.write1ByteTxRx(3, 40, 1)
+                sc_handler.WritePos(3, un['sc3_pos'], 0, un['sc_speed'])
+                sc_handler.write1ByteTxRx(2, 40, 1)
+                sc_handler.WritePos(2, un['sc2_pos'], 0, un['sc_speed'])
+                print(f"{C_GREEN}[UNLOCK COMPLETE] Unlocking state verified!{C_RST}")
+                input("\nPress Enter to continue...")
+                continue
+
             print(f"Step 1: Servo 3 & 2 -> Pos {un['sc3_pos']} & {un['sc2_pos']}...")
             sc_handler.write1ByteTxRx(3, 40, 1)
             sc_handler.WritePos(3, un['sc3_pos'], 0, un['sc_speed'])
@@ -1146,8 +1160,8 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             if sid is None: continue
             direction = input("Enter Direction (f: Forward, b: Backward) [Default: f]: ").strip().lower() or 'f'
             spd = get_int("Speed (1 to 3000) [Default: 3000]: ", default=3000, min_val=1, max_val=3000)
-            rot = get_float("Rotations count [Default: 1.3]: ", default=1.3, min_val=0.1, max_val=100.0)
-            abs_pos = get_int("Absolute Snap Position (0-4095) [Default: 450]: ", default=450, min_val=0, max_val=4095)
+            rot = get_float("Rollover Laps count [Default: 2.0]: ", default=2.0, min_val=0.1, max_val=100.0)
+            abs_pos = get_int("Absolute Target Snap Position (0-4095) [Default: 3000]: ", default=3000, min_val=0, max_val=4095)
             
             run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=sid, direction=direction, speed=spd, rotations=rot, abs_target_pos=abs_pos)
             input("\nPress Enter to continue...")
