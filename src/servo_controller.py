@@ -957,7 +957,7 @@ class ServoController:
                     return
                     
                 with self._io_lock:
-                    pos3, _, res3, _ = self.scHandler.ReadPosSpeed(3)
+                    pos3, res3, _ = self.scsHandler.ReadPos(3)
                 if res3 == COMM_SUCCESS and pos3 >= (LOCK_POS_3 - 50):
                     print(f"[SERVO SAFETY] Servo 3 live position ({pos3}) indicates lid is ALREADY CLOSED/LOCKED (>= {LOCK_POS_3 - 50})!")
                     print("[SERVO SAFETY] Skipping Servo 1 rotation to prevent over-tightening or cable breakage.")
