@@ -1025,7 +1025,7 @@ def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction=
 
     # Stop wheel rotation
     sts_handler.WriteSpec(sid, 0, 50)
-    print(f"\n{C_GREEN}Wheel rotation finished. Accumulated steps: {accumulated_steps:.0f} ({accumulated_steps/steps_per_rev:.2f} revs).{C_RST}")
+    print(f"\n{C_GREEN}Wheel rotation finished after {rollover_count} rollover lap(s).{C_RST}")
 
     if abs_target_pos is not None:
         abs_target_pos = int(abs_target_pos)
