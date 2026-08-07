@@ -28,21 +28,21 @@ ST_ACC = 200
 SC_SPEED = 1500
 
 # Locking Targets
-LOCK_POS_1 = "Continuous Rotation (Forward Speed 3000, 1.25 Rotations)"
+LOCK_POS_1 = "Continuous Rotation (Forward Speed 3000, 1.3 Rotations)"
 LOCK_POS_2 = 550
 LOCK_POS_3 = 715
 
 # Unlocking Targets
-UNLOCK_POS_1 = "Continuous Rotation (Backward Speed 3000, 1.25 Rotations)"
+UNLOCK_POS_1 = "Continuous Rotation (Backward Speed 3000, 1.3 Rotations)"
 UNLOCK_POS_2 = 750
 UNLOCK_POS_3 = 540
 UNLOCK_CHECK_3 = 540  # Threshold check for ID 3
 
 # Servo 1 (ST3215) Continuous Rotation Parameters
 ST_LOCK_SPEED_1 = 3000
-ST_LOCK_ROTATIONS_1 = 1.25
+ST_LOCK_ROTATIONS_1 = 1.3
 ST_UNLOCK_SPEED_1 = 3000
-ST_UNLOCK_ROTATIONS_1 = 1.25
+ST_UNLOCK_ROTATIONS_1 = 1.3
 
 # Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers
 SERVO_LIMITS = {
@@ -808,12 +808,12 @@ class ServoController:
         print(f"  -> Timeout reached for SC servos! Did not fully complete.")
         return False
 
-    def rotate_st_continuous(self, sid=1, direction='f', speed=3000, rotations=1.25):
+    def rotate_st_continuous(self, sid=1, direction='f', speed=3000, rotations=1.3):
         """
         Rotates ST3215 servo (ID 1) in continuous rotation mode (Wheel mode) for exact rotation count.
         - direction: 'f' (Forward/CW) or 'b' (Backward/CCW)
         - speed: speed magnitude (e.g. 3000)
-        - rotations: rotation count (e.g. 1.25)
+        - rotations: rotation count (e.g. 1.3)
         """
         sid = int(sid)
         sign = 1 if str(direction).lower() in ['f', 'for', 'forward', 'cw', '1'] else -1
