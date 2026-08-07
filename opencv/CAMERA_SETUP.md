@@ -1,39 +1,19 @@
-# Raspberry Pi Module 3 NoIR Wide Camera Configuration
+# Precision Landing Camera Configuration (OV9281 Mono & 64MP Pi Camera)
 
-## Camera Specifications
+## Supported Camera Configurations
 
-- **Camera Model**: Raspberry Pi Module 3 NoIR (No Infrared Filter), Wide Angle
-- **Native Resolution**: 2304x1296 pixels
-- **Aspect Ratio**: 16:9 (Wide)
-- **Field of View**: 120° (Ultra-wide)
-- **Max Frame Rate**: 50 fps at native resolution
-- **Pixel Format**: SBGGR10 (10-bit Bayer)
+### 1. OV9281 USB Monochrome Camera (12MP / 120° Wide FOV) - Recommended Default
+- **Type**: USB Global Shutter Monochrome (Black & White) Camera
+- **Resolution**: 1280x720 (Full HD / 720p 16:9 120° Wide FOV)
+- **FPS**: 60 - 120 FPS (High Performance MJPG throughput)
+- **Focus**: Fixed Focus (No Autofocus needed/supported)
+- **Processing Advantage**: Ultra-fast grayscale capture with minimal CPU load
 
-## Resolution Configuration
-
-### Native Resolution (2304x1296)
-- **Pros**: Maximum quality, full sensor utilization
-- **Cons**: Slower processing, higher computational load
-- **Use case**: High-precision applications where speed is not critical
-
-### Recommended Resolution (640x360)
-- **Pros**: 
-  - ~13x faster processing than native
-  - Preserves 16:9 aspect ratio (maintains 120° FOV)
-  - Good balance of quality and performance
-  - Suitable for real-time applications
-- **Cons**: Lower resolution than native
-- **Use case**: Real-time precision landing, ArUco detection
-
-### Aspect Ratio Comparison
-
-| Resolution | Aspect Ratio | FOV Preserved | Processing Speed |
-|------------|--------------|---------------|------------------|
-| 2304x1296  | 16:9 ✅      | 120° ✅       | 1x (slowest)     |
-| 640x360    | 16:9 ✅      | 120° ✅       | ~13x faster      |
-| 640x480    | 4:3 ❌       | ~90° ❌       | ~10x faster      |
-
-**Important**: Always use 16:9 aspect ratio (e.g., 640x360) to preserve the 120° wide field of view!
+### 2. Arducam 64MP / Pi Camera Module 3 (Picamera2)
+- **Type**: CSI Pi Camera Module
+- **Resolution**: 640x360 (Default for reduced CPU load on high-MP sensor)
+- **FPS**: 30 FPS
+- **Focus**: Continuous Autofocus (`AfMode: 2`) enabled via Picamera2
 
 ## Camera Calibration
 

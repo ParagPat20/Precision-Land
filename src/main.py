@@ -1124,7 +1124,8 @@ parser.add_argument('--no-video', action='store_true', help="Disable the camera 
 parser.add_argument('--no-record', action='store_true', help="Disable automatic video recording during armed state.")
 parser.add_argument('--no-servo', action='store_true', help="Disable servo controller initialization and monitoring.")
 parser.add_argument('--no-camera', action='store_true', help="Disable camera and vision tracking system entirely.")
-parser.add_argument('--resolution', default='640x360', help="Camera resolution WxH (default: 640x360 for high/stable FPS).")
+parser.add_argument('--resolution', default='1280x720', help="Camera resolution WxH (default: 1280x720 for OV9281 mono full resolution; 640x360 for 64MP).")
+parser.add_argument('--fps', type=int, default=60, help="Camera target FPS for high performance (default: 60).")
 args = parser.parse_args()
 
 if args.no_camera:
@@ -1137,7 +1138,7 @@ try:
     _w, _h = map(int, args.resolution.split('x'))
     camera_resolution = [_w, _h]
 except Exception:
-    camera_resolution = [640, 360]
+    camera_resolution = [1280, 720]
 
 def handle_signal(signum, frame):
     print("\n[SYSTEM] Termination signal received. Exiting cleanly...")
@@ -1547,7 +1548,8 @@ else:
             camera_matrix=camera_matrix,
             camera_distortion=camera_distortion,
             camera_size=camera_resolution,
-            calib_size=[640, 480]
+            calib_size=[640, 480],
+            target_fps=args.fps
         )
         camera_active = True
     except Exception as e:

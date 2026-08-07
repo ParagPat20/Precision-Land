@@ -85,11 +85,12 @@ class ArucoSingleTracker():
                 marker_size,
                 camera_matrix,
                 camera_distortion,
-                camera_size=[640,360],  # Default: 640x360 for 16:9 wide FOV (120°), native: 2304x1296
+                camera_size=[1280,720],  # Default: 1280x720 for OV9281 full resolution (120° FOV mono), or 640x360 for 64MP
                 show_video=False,
                 axis_scale=0.03,
                 use_picamera=None,
-                calib_size=[640, 480]   # Calibration resolution (matches cameraMatrix_webcam.txt)
+                calib_size=[640, 480],   # Calibration resolution (matches cameraMatrix_webcam.txt)
+                target_fps=60
                 ):
         
         
@@ -97,6 +98,7 @@ class ArucoSingleTracker():
         self.marker_size    = marker_size
         self._show_video    = show_video
         self._axis_scale    = axis_scale
+        self.target_fps     = target_fps
         
         # Scale camera matrix if requested camera size differs from calibration resolution
         self._camera_matrix = np.array(camera_matrix, dtype=np.float32)
@@ -150,13 +152,13 @@ class ArucoSingleTracker():
                 pass
             self._detector = None
 
-        # Decide capture backend (Picamera2 vs OpenCV) with graceful fallback
-        # use_picamera: True forces Picamera2, False forces OpenCV, None auto-detect
+        # Decide capture backend (Picamera2 vs OpenCV USB Camera) with graceful fallback
+        # use_picamera: True forces Picamera2 (64MP), False forces OpenCV (OV9281 USB), None auto-detect
         self._use_picamera = False
         if use_picamera is True and _PICAMERA2_AVAILABLE:
             self._use_picamera = True
         elif use_picamera is None and _PICAMERA2_AVAILABLE:
-            # Auto-enable if library is available
+            # Auto-enable Picamera2 if library is available and initialization succeeds (64MP Camera with AF)
             try:
                 self._picam2 = Picamera2()
                 # Configure camera with specified resolution
@@ -164,28 +166,50 @@ class ArucoSingleTracker():
                 self._picam2.configure(cfg)
                 self._picam2.start()
                 
-                # Enable Continuous Autofocus for Arducam 64MP OV64A40
-                # Continuous autofocus keeps adjusting focus as the drone moves
+                # Enable Continuous Autofocus for 64MP Camera (OV64A40)
+                # 64MP has Autofocus; OV9281 USB mono camera does not.
                 try:
                     self._picam2.set_controls({"AfMode": 2})  # AfMode: 2 = Continuous Autofocus
-                    print("[CAMERA] Autofocus enabled (Continuous mode)")
+                    print("[CAMERA] 64MP Camera detected via Picamera2: Continuous Autofocus enabled")
                 except Exception as af_error:
-                    print(f"[CAMERA] Warning: Could not enable autofocus: {af_error}")
+                    print(f"[CAMERA] Warning: Could not enable 64MP autofocus: {af_error}")
                 
                 time.sleep(0.5)  # warmup for camera and autofocus to stabilize
                 self._use_picamera = True
-                print(f"[CAMERA] Picamera2 initialized successfully at {camera_size[0]}x{camera_size[1]}")
+                print(f"[CAMERA] Picamera2 (64MP AF) initialized successfully at {camera_size[0]}x{camera_size[1]}")
             except Exception:
                 self._use_picamera = False
 
         if self._use_picamera:
             self._cap = None
         else:
-            #--- Capture the videocamera (this may also be a video or a picture)
+            #--- USB Video Capture (OV9281 Mono B&W 12MP 120° Wide camera)
+            # OV9281 is a fixed-focus USB camera (no AF controls needed) with high FPS mono capability.
             self._cap = cv2.VideoCapture(0)
-            #-- Set the camera size as the one it was calibrated with
+            
+            # Configure high-throughput MJPEG format for full resolution & high FPS
+            try:
+                self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            except Exception:
+                pass
+                
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_size[0])
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_size[1])
+            
+            try:
+                self._cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+            except Exception:
+                pass
+                
+            try:
+                self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+
+            actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            actual_fps = float(self._cap.get(cv2.CAP_PROP_FPS))
+            print(f"[CAMERA] USB Camera (OV9281 Mono B&W) initialized: {actual_w}x{actual_h} @ {actual_fps:.0f} FPS (Full Res/FPS, Fixed Focus)")
 
         #-- Font for the text in the image
         self.font = cv2.FONT_HERSHEY_PLAIN
@@ -277,18 +301,23 @@ class ArucoSingleTracker():
                 continue
 
             # Expose the most recent frame to callers (copy to avoid accidental mutation).
-            # Keeping this inside the capture loop ensures it's set even when loop=False.
+            # Expose the most recent frame to callers (copy to avoid accidental mutation).
+            # Convert single-channel mono images to BGR for display/recording compatibility.
+            if len(frame.shape) == 2 or (len(frame.shape) == 3 and frame.shape[2] == 1):
+                gray = frame if len(frame.shape) == 2 else frame[:, :, 0]
+                frame_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            else:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                frame_bgr = frame
+
             try:
                 with self._frame_lock:
-                    self.last_frame = frame.copy()
+                    self.last_frame = frame_bgr.copy()
                     self.last_frame_ts = time.time()
             except Exception:
                 pass
 
             self._update_fps_read()
-            
-            #-- Convert in gray scale
-            gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) #-- remember, OpenCV stores color images in Blue, Green, Red
 
             #-- Find all the aruco markers in the image
             if self._use_new_api:

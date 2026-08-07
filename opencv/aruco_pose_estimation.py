@@ -166,7 +166,7 @@ except Exception:
 #-- Raspberry Pi Module 3 NoIR Wide: native 2304x1296 (16:9, 120° FOV)
 #-- Recommended: 640x360 for faster processing while preserving wide aspect ratio
 CALIB_W, CALIB_H = 640, 480  # Calibration resolution (matches 640x480 calibration images)
-REQ_W, REQ_H = 640, 360      # Requested resolution (640x360 for 16:9 wide FOV)
+REQ_W, REQ_H = 1280, 720     # Default requested resolution (1280x720 for OV9281 full res 120° FOV)
 
 use_picamera = False
 cap = None
@@ -177,6 +177,10 @@ if _PICAMERA2_AVAILABLE:
         _cfg = _picam2.create_preview_configuration(main={"size": (REQ_W, REQ_H)})
         _picam2.configure(_cfg)
         _picam2.start()
+        try:
+            _picam2.set_controls({"AfMode": 2})  # Continuous Autofocus for 64MP camera
+        except Exception:
+            pass
         time.sleep(0.5)
         use_picamera = True
     except Exception:
@@ -184,8 +188,20 @@ if _PICAMERA2_AVAILABLE:
 
 if not use_picamera:
     cap = cv2.VideoCapture(0)
+    try:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    except Exception:
+        pass
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, REQ_W)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, REQ_H)
+    try:
+        cap.set(cv2.CAP_PROP_FPS, 60)
+    except Exception:
+        pass
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
 
 #-- Read back actual frame size and scale intrinsics if different from calibration
 if use_picamera:
