@@ -1086,7 +1086,7 @@ def init_firebase_listener():
 
 
 def resolve_vehicle_connection_path(manual_path=None):
-    """Pick a stable /dev/serial/by-id path: Prolific USB–serial (telemetry) first, then Pixhawk."""
+    """Pick a stable /dev/serial/by-id path: Prolific USB-serial (telemetry) first, then Pixhawk."""
     if manual_path:
         return manual_path
 
