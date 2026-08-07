@@ -902,7 +902,7 @@ SEQUENCE_CONFIG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 DEFAULT_SEQUENCE_CONFIG = {
     "lock": {
         "st_speed": 3000,
-        "st_rotations": 1.0,
+        "st_rotations": 2.0,
         "st_abs_target": 3000,
         "sc2_pos": 550,
         "sc3_pos": 715,
@@ -910,7 +910,7 @@ DEFAULT_SEQUENCE_CONFIG = {
     },
     "unlock": {
         "st_speed": 3000,
-        "st_rotations": 1.0,
+        "st_rotations": 2.0,
         "st_abs_target": 3000,
         "sc2_pos": 750,
         "sc3_pos": 540,
@@ -940,7 +940,7 @@ def save_sequence_config(config_data):
         print(f"{C_RED}Failed to save sequence configuration: {e}{C_RST}")
         return False
 
-def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=3000, rotations=1.0, abs_target_pos=3000):
+def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=3000, rotations=2.0, abs_target_pos=3000):
     """
     Executes continuous wheel rotation on ST3215 by counting 0-4096 rollover laps.
     When target rollover count is reached, it monitors the encoder until arriving at abs_target_pos (e.g. 3000),

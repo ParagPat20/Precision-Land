@@ -44,22 +44,22 @@ ST_ACC = 200
 SC_SPEED = 1500
 
 # Locking Targets
-LOCK_POS_1 = "Continuous Rotation (Forward Speed 3000, 1 Rollover Lap -> Absolute Snap to 3000)"
+LOCK_POS_1 = "Continuous Rotation (Forward Speed 3000, 2 Rollover Laps -> Absolute Snap to 3000)"
 LOCK_POS_2 = 550
 LOCK_POS_3 = 715
 
 # Unlocking Targets
-UNLOCK_POS_1 = "Continuous Rotation (Backward Speed 3000, 1 Rollover Lap -> Absolute Snap to 3000)"
+UNLOCK_POS_1 = "Continuous Rotation (Backward Speed 3000, 2 Rollover Laps -> Absolute Snap to 3000)"
 UNLOCK_POS_2 = 750
 UNLOCK_POS_3 = 540
 UNLOCK_CHECK_3 = 540  # Threshold check for ID 3
 
 # Servo 1 (ST3215) Continuous Rotation & Absolute Target Parameters
 ST_LOCK_SPEED_1 = 3000
-ST_LOCK_ROTATIONS_1 = 1.0  # 1 rollover lap (crossing 4096 -> 0)
+ST_LOCK_ROTATIONS_1 = 2.0  # 2 rollover laps (crossing 4096 -> 0)
 ST_LOCK_ABS_TARGET_1 = 3000
 ST_UNLOCK_SPEED_1 = 3000
-ST_UNLOCK_ROTATIONS_1 = 1.0  # 1 rollover lap (crossing 0 -> 4096)
+ST_UNLOCK_ROTATIONS_1 = 2.0  # 2 rollover laps (crossing 0 -> 4096)
 ST_UNLOCK_ABS_TARGET_1 = 3000
 
 # Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers

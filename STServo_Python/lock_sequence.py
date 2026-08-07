@@ -293,7 +293,7 @@ def robust_move_sc_pair(sc_handler, sid2, target2, sid3, target3, speed, timeout
     print(f"  -> Timeout reached for SC servos! Did not fully complete.")
     return False
 
-def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotations=1.0, abs_target=3000):
+def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotations=2.0, abs_target=3000):
     sid = int(sid)
     is_forward = str(direction).lower() in ['f', 'for', 'forward', 'cw', '1']
     sign = 1 if is_forward else -1
@@ -380,8 +380,8 @@ def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotation
 
 def perform_locking(sts_handler, sc_handler):
     print("\n--- LOCKING SEQUENCE ---")
-    print(f"Step 1: Servo 1 -> Continuous Rotation Forward Speed 3000, 1 Rollover Lap -> Snap to 3000")
-    rotate_st_continuous(sts_handler, 1, direction='f', speed=3000, rotations=1.0, abs_target=3000)
+    print(f"Step 1: Servo 1 -> Continuous Rotation Forward Speed 3000, 2 Rollover Laps -> Snap to 3000")
+    rotate_st_continuous(sts_handler, 1, direction='f', speed=3000, rotations=2.0, abs_target=3000)
     
     print("\nWaiting 1s for mechanical settlement...")
     time.sleep(1.0)
@@ -395,8 +395,8 @@ def perform_unlocking(sts_handler, sc_handler):
     print(f"Step 1: Servo 2 -> {UNLOCK_POS_2} & Servo 3 -> {UNLOCK_POS_3} (Checking if <= {UNLOCK_CHECK_3})")
     robust_move_sc_pair(sc_handler, 2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='<=')
     
-    print(f"\nStep 2: Servo 1 -> Continuous Rotation Backward Speed 3000, 1.3 Rotations, Snap to 3000")
-    rotate_st_continuous(sts_handler, 1, direction='b', speed=3000, rotations=1.3, abs_target=3000)
+    print(f"\nStep 2: Servo 1 -> Continuous Rotation Backward Speed 3000, 2 Rollover Laps, Snap to 3000")
+    rotate_st_continuous(sts_handler, 1, direction='b', speed=3000, rotations=2.0, abs_target=3000)
     print("\nUnlocking sequence complete!")
 
 if __name__ == '__main__':
