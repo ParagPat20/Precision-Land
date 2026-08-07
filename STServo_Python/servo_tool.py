@@ -678,7 +678,9 @@ def center_align_servo(sts_handler, sc_handler, active_id):
         acc = get_int("Acceleration (0-254) [Default: 50]: ", default=50, min_val=0, max_val=254)
         if acc is None: return
         
+        handler.WriteSpec(sid, 0, 50) # Stop wheel velocity
         handler.write1ByteTxRx(sid, 33, 0) # Position mode
+        handler.write1ByteTxRx(sid, 40, 1) # Enable torque
         res, err = handler.WritePosEx(sid, center_pos, spd, acc)
     else:
         spd = get_int("Speed (0-1500) [Default: 800]: ", default=800, min_val=0, max_val=1500)
@@ -1591,7 +1593,9 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
                 spd = speed_val if speed_val is not None else 2400
                 acc = acc_val if acc_val is not None else 50
                 
+                handler.WriteSpec(sid, 0, 50) # Stop continuous wheel velocity first
                 handler.write1ByteTxRx(sid, 33, 0) # Pos mode
+                handler.write1ByteTxRx(sid, 40, 1) # Enable torque
                 res, err = handler.WritePosEx(sid, pos, spd, acc)
             else:
                 spd = speed_val if speed_val is not None else 1000
@@ -1972,7 +1976,9 @@ def main():
                 acc = get_int("Acceleration (0-254) [Default: 50]: ", default=50, min_val=0, max_val=254)
                 if acc is None: continue
                 
-                sts_handler.write1ByteTxRx(sid, 33, 0) # Pos mode
+                sts_handler.WriteSpec(sid, 0, 50) # Stop continuous wheel velocity first
+                sts_handler.write1ByteTxRx(sid, 33, 0) # Switch to Position Control Mode (0)
+                sts_handler.write1ByteTxRx(sid, 40, 1) # Enable torque
                 res, err = sts_handler.WritePosEx(sid, pos, spd, acc)
             else:
                 spd = get_int("Speed (0-1500) [Default: 1000]: ", default=1000, min_val=0, max_val=1500)
