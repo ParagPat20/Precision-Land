@@ -6,6 +6,27 @@ import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from STservo_sdk import *
 
+def check_emergency_stop():
+    """
+    Non-blocking check for keyboard keypress (Spacebar, 'q', 's', ESC, or any key) on Windows/Linux.
+    Allows instant emergency stop during active motor movement loops.
+    """
+    if os.name == 'nt':
+        import msvcrt
+        if msvcrt.kbhit():
+            try:
+                msvcrt.getch()
+            except Exception:
+                pass
+            return True
+    else:
+        import select
+        dr, dw, de = select.select([sys.stdin], [], [], 0)
+        if dr != []:
+            sys.stdin.read(1)
+            return True
+    return False
+
 # --- Cross-Platform Non-Blocking Input ---
 if os.name == 'nt':
     import msvcrt
@@ -272,18 +293,15 @@ def robust_move_sc_pair(sc_handler, sid2, target2, sid3, target3, speed, timeout
     print(f"  -> Timeout reached for SC servos! Did not fully complete.")
     return False
 
-def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotations=1.3):
+def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotations=1.0, abs_target=3000):
     sid = int(sid)
-    sign = 1 if str(direction).lower() in ['f', 'for', 'forward', 'cw', '1'] else -1
+    is_forward = str(direction).lower() in ['f', 'for', 'forward', 'cw', '1']
+    sign = 1 if is_forward else -1
     speed_val = abs(int(speed)) * sign
-    dir_label = "Forward (CW)" if sign > 0 else "Backward (CCW)"
+    dir_label = "Forward (CW)" if is_forward else "Backward (CCW)"
+    target_rollovers = max(1, int(round(float(rotations))))
     
-    target_rotations = round(float(rotations), 2)
-    steps_per_rev = 4096.0
-    target_steps = target_rotations * steps_per_rev
-    half_rev = steps_per_rev / 2.0
-    
-    print(f"Rotating Servo {sid} ({dir_label}) continuous: speed {abs(speed)}, rotations {target_rotations:.2f} ({target_steps:.0f} steps)...")
+    print(f"Rotating Servo {sid} ({dir_label}): speed {abs(speed)}, target rollovers {target_rollovers}, target absolute position {abs_target}...")
     
     sts_handler.write1ByteTxRx(sid, 40, 1) # Enable torque
     pos_start, res, _ = sts_handler.ReadPos(sid)
@@ -298,36 +316,72 @@ def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotation
         return False
 
     last_pos = pos_start
-    accumulated_steps = 0.0
+    rollover_count = 0
     start_t = time.time()
-    max_timeout = max(10.0, target_rotations * 10.0)
+    max_timeout = max(12.0, target_rollovers * 10.0)
     
-    while accumulated_steps < target_steps:
+    while True:
+        if check_emergency_stop():
+            print("EMERGENCY STOP TRIGGERED BY USER KEYPRESS! Halting Servo 1!")
+            sts_handler.write1ByteTxRx(254, 40, 0)
+            sts_handler.WriteSpec(sid, 0, 50)
+            return False
+
         if (time.time() - start_t) > max_timeout:
             print(f"Safety timeout ({max_timeout:.1f}s) reached during ID {sid} continuous rotation!")
             break
             
-        time.sleep(0.01)
+        time.sleep(0.005)
         pos, res_read, _ = sts_handler.ReadPos(sid)
-        if res_read == COMM_SUCCESS:
-            delta = pos - last_pos
-            if delta > half_rev:
-                delta -= steps_per_rev
-            elif delta < -half_rev:
-                delta += steps_per_rev
+        if res_read == COMM_SUCCESS and 0 <= pos <= 4095:
+            if is_forward:
+                if last_pos > 2500 and pos < 1500:
+                    rollover_count += 1
+                    print(f"Rollover #{rollover_count} detected (Forward 4096 -> 0)")
                 
-            accumulated_steps += abs(delta)
+                if rollover_count >= target_rollovers:
+                    if abs_target is None or pos >= (int(abs_target) - 60):
+                        print(f"Target absolute position reached on rollover lap {rollover_count}: Pos {pos} >= {abs_target}")
+                        break
+            else:
+                if last_pos < 1500 and pos > 2500:
+                    rollover_count += 1
+                    print(f"Rollover #{rollover_count} detected (Backward 0 -> 4096)")
+                
+                if rollover_count >= target_rollovers:
+                    if abs_target is None or pos <= (int(abs_target) + 60):
+                        print(f"Target absolute position reached on rollover lap {rollover_count}: Pos {pos} <= {abs_target}")
+                        break
+                        
             last_pos = pos
 
     sts_handler.WriteSpec(sid, 0, 50)
-    final_rot = accumulated_steps / steps_per_rev
-    print(f"Servo {sid} continuous rotation finished: completed {final_rot:.2f} / {target_rotations:.2f} rotations.")
+    print(f"Servo {sid} continuous wheel rotation completed {rollover_count} rollover laps.")
+    
+    if abs_target is not None:
+        abs_target = int(abs_target)
+        print(f"Snapping Servo {sid} to Absolute Position {abs_target} (switching to Position Mode 33->0)...")
+        sts_handler.write1ByteTxRx(sid, 33, 0)
+        sts_handler.write1ByteTxRx(sid, 40, 1)
+        sts_handler.WritePosEx(sid, abs_target, 2400, 50)
+        
+        snap_start_t = time.time()
+        final_p = -1
+        while time.time() - snap_start_t < 2.5:
+            time.sleep(0.05)
+            p, res_s, _ = sts_handler.ReadPos(sid)
+            if res_s == COMM_SUCCESS:
+                final_p = p
+                if abs(p - abs_target) <= 30:
+                    break
+        print(f"Servo {sid} absolute position locked: Final Encoder Pos = {final_p} (Target = {abs_target})")
+
     return True
 
 def perform_locking(sts_handler, sc_handler):
     print("\n--- LOCKING SEQUENCE ---")
-    print(f"Step 1: Servo 1 -> Continuous Rotation Forward Speed 3000, 1.3 Rotations")
-    rotate_st_continuous(sts_handler, 1, direction='f', speed=3000, rotations=1.3)
+    print(f"Step 1: Servo 1 -> Continuous Rotation Forward Speed 3000, 1 Rollover Lap -> Snap to 3000")
+    rotate_st_continuous(sts_handler, 1, direction='f', speed=3000, rotations=1.0, abs_target=3000)
     
     print("\nWaiting 1s for mechanical settlement...")
     time.sleep(1.0)
@@ -341,8 +395,8 @@ def perform_unlocking(sts_handler, sc_handler):
     print(f"Step 1: Servo 2 -> {UNLOCK_POS_2} & Servo 3 -> {UNLOCK_POS_3} (Checking if <= {UNLOCK_CHECK_3})")
     robust_move_sc_pair(sc_handler, 2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='<=')
     
-    print(f"\nStep 2: Servo 1 -> Continuous Rotation Backward Speed 3000, 1.3 Rotations")
-    rotate_st_continuous(sts_handler, 1, direction='b', speed=3000, rotations=1.3)
+    print(f"\nStep 2: Servo 1 -> Continuous Rotation Backward Speed 3000, 1.3 Rotations, Snap to 3000")
+    rotate_st_continuous(sts_handler, 1, direction='b', speed=3000, rotations=1.3, abs_target=3000)
     print("\nUnlocking sequence complete!")
 
 if __name__ == '__main__':

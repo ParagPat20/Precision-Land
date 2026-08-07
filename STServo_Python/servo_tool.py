@@ -220,6 +220,21 @@ def get_float(prompt, default=None, min_val=None, max_val=None):
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
+def check_emergency_stop():
+    """
+    Non-blocking check for keyboard keypress (Spacebar, 'q', 's', ESC, or any key) on Windows/Linux.
+    Allows instant emergency stop during active motor movement loops.
+    """
+    if os.name == 'nt':
+        import msvcrt
+        if msvcrt.kbhit():
+            try:
+                msvcrt.getch()
+            except Exception:
+                pass
+            return True
+    return False
+
 # Known models for ST and SC series servos
 KNOWN_ST_MODELS = {3215, 3015, 3020, 4315, 4020, 80, 10, 777}
 KNOWN_SC_MODELS = {15, 9, 230, 309, 1029, 1284}
@@ -737,6 +752,18 @@ def run_continuous_rotation(sts_handler, sc_handler, sid, direction='f', speed_p
         
         try:
             while accumulated_steps < target_steps:
+                if check_emergency_stop():
+                    print(f"\n{C_RED}===================================================={C_RST}")
+                    print(f"{C_RED}[EMERGENCY STOP TRIGGERED BY USER KEYPRESS!]{C_RST}")
+                    print(f"{C_RED}Disabling torque and halting Servo {sid} immediately!{C_RST}")
+                    print(f"{C_RED}===================================================={C_RST}")
+                    handler.write1ByteTxRx(254, 40, 0)
+                    if servo_type == 'ST':
+                        handler.WriteSpec(sid, 0, 50)
+                    else:
+                        handler.WritePWM(sid, 0)
+                    return
+
                 if (time.time() - start_t) > max_timeout:
                     print(f"\n{C_YEL}Safety timeout reached ({max_timeout:.0f}s). Stopping.{C_RST}")
                     break
@@ -754,7 +781,7 @@ def run_continuous_rotation(sts_handler, sc_handler, sid, direction='f', speed_p
                     
                     completed_rot = accumulated_steps / steps_per_rev
                     pct = min(100.0, (accumulated_steps / target_steps) * 100.0)
-                    sys.stdout.write(f"\rProgress: {completed_rot:.2f} / {target_rotations:.1f} rotations ({pct:.1f}%)... ")
+                    sys.stdout.write(f"\rProgress: {completed_rot:.2f} / {target_rotations:.1f} rot ({pct:.1f}%) | [PRESS ANY KEY TO EMERGENCY STOP]... ")
                     sys.stdout.flush()
                     
                 time.sleep(0.01)
@@ -773,7 +800,7 @@ def run_continuous_rotation(sts_handler, sc_handler, sid, direction='f', speed_p
     else: # control_mode == 'time'
         duration = float(target_val)
         print(f"\n{C_GREEN}Rotating Servo {sid} ({dir_label}) for {duration:.1f} seconds...{C_RST}")
-        print(f"Press {C_YEL}Ctrl+C{C_RST} to stop early.\n")
+        print(f"{C_RED}[EMERGENCY STOP READY] Press ANY KEY or Ctrl+C at any time to INSTANTLY HALT!{C_RST}\n")
         
         if servo_type == 'ST':
             handler.WheelMode(sid)
@@ -790,8 +817,19 @@ def run_continuous_rotation(sts_handler, sc_handler, sid, direction='f', speed_p
         end_t = start_t + duration
         try:
             while time.time() < end_t:
+                if check_emergency_stop():
+                    print(f"\n{C_RED}===================================================={C_RST}")
+                    print(f"{C_RED}[EMERGENCY STOP TRIGGERED BY USER KEYPRESS!]{C_RST}")
+                    print(f"{C_RED}Disabling torque and halting Servo {sid} immediately!{C_RST}")
+                    print(f"{C_RED}===================================================={C_RST}")
+                    handler.write1ByteTxRx(254, 40, 0)
+                    if servo_type == 'ST':
+                        handler.WriteSpec(sid, 0, 50)
+                    else:
+                        handler.WritePWM(sid, 0)
+                    return
                 rem = max(0.0, end_t - time.time())
-                sys.stdout.write(f"\rTime remaining: {rem:.1f} seconds... ")
+                sys.stdout.write(f"\rTime remaining: {rem:.1f} seconds | [PRESS ANY KEY TO EMERGENCY STOP]... ")
                 sys.stdout.flush()
                 time.sleep(0.05)
             print(f"\rTime remaining: 0.0 seconds... stopping.")
@@ -808,13 +846,16 @@ def run_continuous_rotation(sts_handler, sc_handler, sid, direction='f', speed_p
 
 def continuous_rotation(sts_handler, sc_handler, active_id):
     """
-    Continuous rotation with configurable duration (seconds) or rotation count (0.1 resolution).
+    Continuous rotation with options for:
+    1. Rollover Laps + Absolute Snap Target (User Mode)
+    2. Standard Rotations by step count
+    3. Time / Duration in seconds
     """
     print_header("Continuous Rotation Control")
     print("Guidance: Configures and spins the servo in continuous rotation mode.")
-    print("  - ST Series: Speed is controlled via rate (1 to 3000).")
-    print("  - SC Series: Speed is controlled via PWM duty cycle (1 to 1000).")
-    print("  - Target modes: Time (seconds) OR Number of Rotations (0.1 resolution, e.g. 1.1 rotations = 1 rev + 1/10 rev).\n")
+    print("  - ST Series: Speed rate (1 to 3000).")
+    print("  - SC Series: PWM duty cycle (1 to 1000).")
+    print(f"  - {C_RED}[EMERGENCY STOP READY] Press ANY KEY or Ctrl+C at any time during movement to INSTANTLY HALT!{C_RST}\n")
     
     sid = get_int(f"Enter Servo ID [Default: {active_id}]: ", default=active_id)
     if sid is None: return
@@ -829,18 +870,24 @@ def continuous_rotation(sts_handler, sc_handler, active_id):
             return
             
     if servo_type == 'ST':
-        spd = get_int("Speed (1 to 3000) [Default: 1000]: ", default=1000, min_val=1, max_val=3000)
+        spd = get_int("Speed (1 to 3000) [Default: 3000]: ", default=3000, min_val=1, max_val=3000)
         if spd is None: return
     else:
         spd = get_int("PWM Value (1 to 1000) [Default: 500]: ", default=500, min_val=1, max_val=1000)
         if spd is None: return
         
     print("\nSelect Rotation Control Mode:")
-    print("  1. By Rotations (e.g. 1.0, 1.1, 0.5, 2.3 rotations)")
-    print("  2. By Time / Duration (seconds, e.g. 5.0s, 3.5s)")
-    mode_choice = input("Select mode (1 or 2) [Default: 1]: ").strip()
+    print("  1. Rollover Laps + Absolute Snap Target (Crossing 0-4096 -> Snap to Target Pos)")
+    print("  2. By Rotations (e.g. 1.0, 1.3, 0.5, 2.0 rotations)")
+    print("  3. By Time / Duration (seconds, e.g. 5.0s, 3.5s)")
+    mode_choice = input("Select mode (1, 2 or 3) [Default: 1]: ").strip() or '1'
     
-    if mode_choice == '2':
+    if mode_choice == '1':
+        rotations = get_float("Enter Rollover Laps count (e.g. 1.0 for 1 lap crossing 4096/0) [Default: 1.0]: ", default=1.0, min_val=1.0, max_val=50.0)
+        if rotations is None: return
+        abs_target = get_int("Enter Absolute Target Snap Position (0-4095, or Enter for 3000) [Default: 3000]: ", default=3000, min_val=0, max_val=4095)
+        run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=sid, direction=direction, speed=spd, rotations=rotations, abs_target_pos=abs_target)
+    elif mode_choice == '3':
         duration = get_float("Enter run duration in seconds [Default: 5.0]: ", default=5.0, min_val=0.1, max_val=3600.0)
         if duration is None: return
         run_continuous_rotation(sts_handler, sc_handler, sid, direction=direction, speed_pwm=spd, control_mode='time', target_val=duration)
@@ -855,16 +902,16 @@ SEQUENCE_CONFIG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 DEFAULT_SEQUENCE_CONFIG = {
     "lock": {
         "st_speed": 3000,
-        "st_rotations": 1.3,
-        "st_abs_target": 450,
+        "st_rotations": 1.0,
+        "st_abs_target": 3000,
         "sc2_pos": 550,
         "sc3_pos": 715,
         "sc_speed": 1500
     },
     "unlock": {
         "st_speed": 3000,
-        "st_rotations": 1.3,
-        "st_abs_target": 2100,
+        "st_rotations": 1.0,
+        "st_abs_target": 3000,
         "sc2_pos": 750,
         "sc3_pos": 540,
         "sc_speed": 1500
@@ -893,11 +940,11 @@ def save_sequence_config(config_data):
         print(f"{C_RED}Failed to save sequence configuration: {e}{C_RST}")
         return False
 
-def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=3000, rotations=1.3, abs_target_pos=450):
+def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=3000, rotations=1.0, abs_target_pos=3000):
     """
-    Executes continuous wheel rotation on ST3215, stops wheel mode, switches back to 
-    Position Control Mode (Mode 0), and commands an exact Absolute Encoder Position (0-4095).
-    This eliminates residual coasting drift completely!
+    Executes continuous wheel rotation on ST3215 by counting 0-4096 rollover laps.
+    When target rollover count is reached, it monitors the encoder until arriving at abs_target_pos (e.g. 3000),
+    then switches to Position Control Mode (Mode 0) and locks absolute position with zero drift!
     """
     sid = int(sid)
     servo_type = get_servo_type(sts_handler, sid)
@@ -905,16 +952,14 @@ def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction=
         print(f"{C_RED}Continuous rotation with absolute snap is designed for ST series servos.{C_RST}")
         return False
 
-    sign = 1 if str(direction).lower() in ['f', 'for', 'forward', 'cw', '1'] else -1
+    is_forward = str(direction).lower() in ['f', 'for', 'forward', 'cw', '1']
+    sign = 1 if is_forward else -1
     speed_val = abs(int(speed)) * sign
-    dir_label = "Forward (CW)" if sign > 0 else "Backward (CCW)"
-    target_rotations = round(float(rotations), 2)
-    steps_per_rev = 4096.0
-    target_steps = target_rotations * steps_per_rev
-    half_rev = steps_per_rev / 2.0
+    dir_label = "Forward (CW)" if is_forward else "Backward (CCW)"
+    target_rollovers = max(1, int(round(float(rotations))))
 
-    print(f"\n{C_CYA}--- Step 1: Continuous Rotation ---{C_RST}")
-    print(f"Rotating Servo {sid} ({dir_label}): speed {abs(speed)}, rotations {target_rotations:.2f} ({target_steps:.0f} steps)...")
+    print(f"\n{C_CYA}--- Step 1: Continuous Rotation (Rollover Laps + Absolute Snap) ---{C_RST}")
+    print(f"Rotating Servo {sid} ({dir_label}): speed {abs(speed)}, target rollovers {target_rollovers}, target absolute position {abs_target_pos}...")
 
     # Read start position
     sts_handler.write1ByteTxRx(sid, 40, 1) # Torque Enable
@@ -931,28 +976,49 @@ def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction=
         return False
 
     last_pos = pos_start
-    accumulated_steps = 0.0
+    rollover_count = 0
     start_t = time.time()
-    max_timeout = max(10.0, target_rotations * 10.0)
+    max_timeout = max(12.0, target_rollovers * 10.0)
 
     try:
-        while accumulated_steps < target_steps:
+        while True:
+            if check_emergency_stop():
+                print(f"\n{C_RED}===================================================={C_RST}")
+                print(f"{C_RED}[EMERGENCY STOP TRIGGERED BY USER KEYPRESS!]{C_RST}")
+                print(f"{C_RED}Disabling torque and halting Servo {sid} immediately!{C_RST}")
+                print(f"{C_RED}===================================================={C_RST}")
+                sts_handler.write1ByteTxRx(254, 40, 0)
+                sts_handler.WriteSpec(sid, 0, 50)
+                return False
+
             if (time.time() - start_t) > max_timeout:
                 print(f"\n{C_YEL}Safety timeout reached during continuous rotation!{C_RST}")
                 break
-            time.sleep(0.01)
+            time.sleep(0.005)
             curr_pos, res_read, _ = sts_handler.ReadPos(sid)
-            if res_read == COMM_SUCCESS:
-                delta = curr_pos - last_pos
-                if delta > half_rev:
-                    delta -= steps_per_rev
-                elif delta < -half_rev:
-                    delta += steps_per_rev
-                accumulated_steps += abs(delta)
+            if res_read == COMM_SUCCESS and 0 <= curr_pos <= 4095:
+                # Detect boundary rollover
+                if is_forward:
+                    if last_pos > 2500 and curr_pos < 1500:
+                        rollover_count += 1
+                        print(f"\n{C_GREEN}Rollover #{rollover_count} detected (Forward 4096 -> 0){C_RST}")
+                    
+                    if rollover_count >= target_rollovers:
+                        if abs_target_pos is None or curr_pos >= (int(abs_target_pos) - 60):
+                            print(f"\n{C_GREEN}Target absolute position reached on rollover lap {rollover_count}: Pos {curr_pos} >= {abs_target_pos}{C_RST}")
+                            break
+                else:
+                    if last_pos < 1500 and curr_pos > 2500:
+                        rollover_count += 1
+                        print(f"\n{C_GREEN}Rollover #{rollover_count} detected (Backward 0 -> 4096){C_RST}")
+                    
+                    if rollover_count >= target_rollovers:
+                        if abs_target_pos is None or curr_pos <= (int(abs_target_pos) + 60):
+                            print(f"\n{C_GREEN}Target absolute position reached on rollover lap {rollover_count}: Pos {curr_pos} <= {abs_target_pos}{C_RST}")
+                            break
+                            
                 last_pos = curr_pos
-                completed_rot = accumulated_steps / steps_per_rev
-                pct = min(100.0, (accumulated_steps / target_steps) * 100.0)
-                sys.stdout.write(f"\rWheel Progress: {completed_rot:.2f} / {target_rotations:.2f} rot ({pct:.1f}%)... ")
+                sys.stdout.write(f"\rWheel Mode: Rollover {rollover_count}/{target_rollovers} | Live Pos: {curr_pos} | Target: {abs_target_pos} | [PRESS ANY KEY TO EMERGENCY STOP]... ")
                 sys.stdout.flush()
     except KeyboardInterrupt:
         print(f"\n{C_YEL}Wheel rotation interrupted!{C_RST}")

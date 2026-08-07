@@ -4,6 +4,22 @@ import glob
 import time
 import threading
 import traceback
+import math
+
+def check_emergency_stop():
+    """
+    Non-blocking check for keyboard keypress (Spacebar, 'q', 's', ESC, or any key) on Windows/Linux.
+    Allows instant emergency stop during active motor movement loops.
+    """
+    if os.name == 'nt':
+        import msvcrt
+        if msvcrt.kbhit():
+            try:
+                msvcrt.getch()
+            except Exception:
+                pass
+            return True
+    return False
 
 # Add STServo SDK to the path
 _SDK_ROOT_1 = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "STServo_Python"))
@@ -28,21 +44,23 @@ ST_ACC = 200
 SC_SPEED = 1500
 
 # Locking Targets
-LOCK_POS_1 = "Continuous Rotation (Forward Speed 3000, 1.3 Rotations)"
+LOCK_POS_1 = "Continuous Rotation (Forward Speed 3000, 1 Rollover Lap -> Absolute Snap to 3000)"
 LOCK_POS_2 = 550
 LOCK_POS_3 = 715
 
 # Unlocking Targets
-UNLOCK_POS_1 = "Continuous Rotation (Backward Speed 3000, 1.3 Rotations)"
+UNLOCK_POS_1 = "Continuous Rotation (Backward Speed 3000, 1 Rollover Lap -> Absolute Snap to 3000)"
 UNLOCK_POS_2 = 750
 UNLOCK_POS_3 = 540
 UNLOCK_CHECK_3 = 540  # Threshold check for ID 3
 
-# Servo 1 (ST3215) Continuous Rotation Parameters
+# Servo 1 (ST3215) Continuous Rotation & Absolute Target Parameters
 ST_LOCK_SPEED_1 = 3000
-ST_LOCK_ROTATIONS_1 = 1.3
+ST_LOCK_ROTATIONS_1 = 1.0  # 1 rollover lap (crossing 4096 -> 0)
+ST_LOCK_ABS_TARGET_1 = 3000
 ST_UNLOCK_SPEED_1 = 3000
-ST_UNLOCK_ROTATIONS_1 = 1.3
+ST_UNLOCK_ROTATIONS_1 = 1.0  # 1 rollover lap (crossing 0 -> 4096)
+ST_UNLOCK_ABS_TARGET_1 = 3000
 
 # Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers
 SERVO_LIMITS = {
@@ -808,24 +826,25 @@ class ServoController:
         print(f"  -> Timeout reached for SC servos! Did not fully complete.")
         return False
 
-    def rotate_st_continuous(self, sid=1, direction='f', speed=3000, rotations=1.3):
+    def rotate_st_continuous(self, sid=1, direction='f', speed=3000, rotations=1.0, abs_target=3000):
         """
-        Rotates ST3215 servo (ID 1) in continuous rotation mode (Wheel mode) for exact rotation count.
+        Rotates ST3215 servo (ID 1) in continuous Wheel Mode by counting 0-4096 rollover laps.
+        When target rollover count is reached, it monitors the encoder until arriving at abs_target (e.g. 3000),
+        then switches to Position Control Mode (33 -> 0) and locks absolute position with zero drift!
         - direction: 'f' (Forward/CW) or 'b' (Backward/CCW)
         - speed: speed magnitude (e.g. 3000)
-        - rotations: rotation count (e.g. 1.3)
+        - rotations: target rollover count (1.0 = 1 full lap crossing 4096/0)
+        - abs_target: absolute encoder position (0-4095)
         """
         sid = int(sid)
-        sign = 1 if str(direction).lower() in ['f', 'for', 'forward', 'cw', '1'] else -1
+        is_forward = str(direction).lower() in ['f', 'for', 'forward', 'cw', '1']
+        sign = 1 if is_forward else -1
         speed_val = abs(int(speed)) * sign
-        dir_label = "Forward (CW)" if sign > 0 else "Backward (CCW)"
+        dir_label = "Forward (CW)" if is_forward else "Backward (CCW)"
         
-        target_rotations = round(float(rotations), 2)
-        steps_per_rev = 4096.0
-        target_steps = target_rotations * steps_per_rev
-        half_rev = steps_per_rev / 2.0
+        target_rollovers = max(1, int(round(float(rotations))))
         
-        print(f"[SERVO] Rotating Servo {sid} ({dir_label}) continuous: speed {abs(speed)}, rotations {target_rotations:.2f} ({target_steps:.0f} steps)...")
+        print(f"[SERVO] Rotating Servo {sid} ({dir_label}): speed {abs(speed)}, target rollovers {target_rollovers}, final absolute target position {abs_target}...")
         
         with self._io_lock:
             self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
@@ -841,35 +860,81 @@ class ServoController:
                 return False
 
         last_pos = pos_start
-        accumulated_steps = 0.0
+        rollover_count = 0
         start_t = time.time()
-        max_timeout = max(10.0, target_rotations * 10.0)
+        max_timeout = max(12.0, target_rollovers * 10.0)
         
-        while accumulated_steps < target_steps:
+        while True:
+            if check_emergency_stop():
+                print(f"[SERVO] EMERGENCY STOP TRIGGERED BY USER KEYPRESS! Halting Servo {sid}!")
+                with self._io_lock:
+                    self.stsHandler.write1ByteTxRx(254, 40, 0)
+                    self.stsHandler.WriteSpec(sid, 0, 50)
+                return False
+
             if (time.time() - start_t) > max_timeout:
-                print(f"[SERVO] Safety timeout ({max_timeout:.1f}s) reached during ID {sid} continuous rotation!")
+                print(f"[SERVO] Safety timeout ({max_timeout:.1f}s) reached during ID {sid} rotation!")
                 break
                 
-            time.sleep(0.01)
+            time.sleep(0.005)
             
             with self._io_lock:
                 curr_pos, _, res_read, _ = self.stsHandler.ReadPosSpeed(sid)
                 
-            if res_read == COMM_SUCCESS:
-                delta = curr_pos - last_pos
-                if delta > half_rev:
-                    delta -= steps_per_rev
-                elif delta < -half_rev:
-                    delta += steps_per_rev
+            if res_read == COMM_SUCCESS and 0 <= curr_pos <= 4095:
+                # Detect boundary rollover
+                if is_forward:
+                    # Forward rollover: last_pos near 4096 (e.g. > 2500) and curr_pos near 0 (e.g. < 1500)
+                    if last_pos > 2500 and curr_pos < 1500:
+                        rollover_count += 1
+                        print(f"[SERVO] Rollover #{rollover_count} detected (Forward 4096 -> 0)")
                     
-                accumulated_steps += abs(delta)
+                    # If target rollovers reached, check arrival at absolute target position
+                    if rollover_count >= target_rollovers:
+                        if abs_target is None or curr_pos >= (int(abs_target) - 60):
+                            print(f"[SERVO] Rollover {rollover_count} complete & target absolute position reached: Pos {curr_pos} >= {abs_target}")
+                            break
+                else:
+                    # Backward rollover: last_pos near 0 (e.g. < 1500) and curr_pos near 4096 (e.g. > 2500)
+                    if last_pos < 1500 and curr_pos > 2500:
+                        rollover_count += 1
+                        print(f"[SERVO] Rollover #{rollover_count} detected (Backward 0 -> 4096)")
+                    
+                    # If target rollovers reached, check arrival at absolute target position
+                    if rollover_count >= target_rollovers:
+                        if abs_target is None or curr_pos <= (int(abs_target) + 60):
+                            print(f"[SERVO] Rollover {rollover_count} complete & target absolute position reached: Pos {curr_pos} <= {abs_target}")
+                            break
+                            
                 last_pos = curr_pos
 
+        # Stop wheel rotation
         with self._io_lock:
             self.stsHandler.WriteSpec(sid, 0, 50)
             
-        final_rot = accumulated_steps / steps_per_rev
-        print(f"[SERVO] Servo {sid} continuous rotation finished: completed {final_rot:.2f} / {target_rotations:.2f} rotations.")
+        print(f"[SERVO] Servo {sid} continuous wheel rotation completed {rollover_count} rollover laps.")
+        
+        # Absolute Position Lock (Mode 0)
+        if abs_target is not None:
+            abs_target = int(abs_target)
+            print(f"[SERVO] Snapping Servo {sid} to Absolute Target {abs_target} (switching to Position Mode 33->0)...")
+            with self._io_lock:
+                self._write1(sid, STS_MODE, 0, "set position mode")
+                self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
+                self.stsHandler.WritePosEx(sid, abs_target, 2400, 50)
+            
+            snap_start_t = time.time()
+            final_p = -1
+            while time.time() - snap_start_t < 2.5:
+                time.sleep(0.05)
+                with self._io_lock:
+                    p, _, r_snap, _ = self.stsHandler.ReadPosSpeed(sid)
+                if r_snap == COMM_SUCCESS:
+                    final_p = p
+                    if abs(p - abs_target) <= 30:
+                        break
+            print(f"[SERVO] Servo {sid} absolute position locked: Final Encoder Pos = {final_p} (Target = {abs_target})")
+
         return True
 
     def perform_locking(self, force=False):
@@ -892,8 +957,8 @@ class ServoController:
                 print("[SERVO] Locking state verified!")
                 return
 
-            print(f"Step 1: Servo 1 (ST) -> Continuous Rotation Forward Speed {ST_LOCK_SPEED_1}, Rotations {ST_LOCK_ROTATIONS_1}")
-            self.rotate_st_continuous(1, direction='f', speed=ST_LOCK_SPEED_1, rotations=ST_LOCK_ROTATIONS_1)
+            print(f"Step 1: Servo 1 (ST) -> Continuous Rotation Forward Speed {ST_LOCK_SPEED_1}, Rotations {ST_LOCK_ROTATIONS_1}, Snap to {ST_LOCK_ABS_TARGET_1}")
+            self.rotate_st_continuous(1, direction='f', speed=ST_LOCK_SPEED_1, rotations=ST_LOCK_ROTATIONS_1, abs_target=ST_LOCK_ABS_TARGET_1)
             
             print("\nWaiting 1s for mechanical settlement...")
             time.sleep(1.0)
@@ -932,8 +997,8 @@ class ServoController:
             print(f"\nStep 2: Servo 2 (SC) -> {UNLOCK_POS_2}")
             self.robust_move_sc_single(2, UNLOCK_POS_2, SC_SPEED)
             
-            print(f"\nStep 3: Servo 1 (ST) -> Continuous Rotation Backward Speed {ST_UNLOCK_SPEED_1}, Rotations {ST_UNLOCK_ROTATIONS_1}")
-            self.rotate_st_continuous(1, direction='b', speed=ST_UNLOCK_SPEED_1, rotations=ST_UNLOCK_ROTATIONS_1)
+            print(f"\nStep 3: Servo 1 (ST) -> Continuous Rotation Backward Speed {ST_UNLOCK_SPEED_1}, Rotations {ST_UNLOCK_ROTATIONS_1}, Snap to {ST_UNLOCK_ABS_TARGET_1}")
+            self.rotate_st_continuous(1, direction='b', speed=ST_UNLOCK_SPEED_1, rotations=ST_UNLOCK_ROTATIONS_1, abs_target=ST_UNLOCK_ABS_TARGET_1)
             
             print("\nUnlocking sequence complete!")
             self.last_state = 'unlock'
