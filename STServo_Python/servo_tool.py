@@ -1062,15 +1062,18 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
     config = load_sequence_config()
 
     while True:
+        lk_laps = config['lock'].get('st_rollovers', config['lock'].get('st_rotations', 2.0))
+        un_laps = config['unlock'].get('st_rollovers', config['unlock'].get('st_rotations', 2.0))
+        
         print_header("Lock & Unlock Sequence Manager")
         print(f"Current Config Summary:")
-        print(f"  {C_CYA}LOCK Sequence:{C_RST}   Servo 1: Forward {config['lock']['st_rotations']} rot @ {config['lock']['st_speed']} -> Abs Snap to {config['lock']['st_abs_target']} | SC2: {config['lock']['sc2_pos']} | SC3: {config['lock']['sc3_pos']}")
-        print(f"  {C_CYA}UNLOCK Sequence:{C_RST} Servo 3: {config['unlock']['sc3_pos']} | Servo 2: {config['unlock']['sc2_pos']} -> Servo 1: Backward {config['unlock']['st_rotations']} rot @ {config['unlock']['st_speed']} -> Abs Snap to {config['unlock']['st_abs_target']}")
+        print(f"  {C_CYA}LOCK Sequence:{C_RST}   Servo 1: Forward {lk_laps} Rollover Laps @ {config['lock']['st_speed']} -> Abs Snap to {config['lock']['st_abs_target']} | SC2: {config['lock']['sc2_pos']} | SC3: {config['lock']['sc3_pos']}")
+        print(f"  {C_CYA}UNLOCK Sequence:{C_RST} Servo 3: {config['unlock']['sc3_pos']} | Servo 2: {config['unlock']['sc2_pos']} -> Servo 1: Backward {un_laps} Rollover Laps @ {config['unlock']['st_speed']} -> Abs Snap to {config['unlock']['st_abs_target']}")
         print("\nOptions:")
         print("  1. Test/Execute LOCK Sequence (Continuous + Absolute Snap)")
         print("  2. Test/Execute UNLOCK Sequence (Continuous + Absolute Snap)")
         print("  3. Test Single Servo Continuous + Absolute Move")
-        print("  4. Edit Sequence Parameters (Rotations, Speeds, Absolute Targets)")
+        print("  4. Edit Sequence Parameters (Rollover Laps, Speeds, Absolute Targets)")
         print("  5. Save Configuration to JSON File (servo_sequences.json)")
         print("  6. Load Configuration from JSON File")
         print("  0. Return to Main Menu")
@@ -1083,6 +1086,7 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             print(f"\n{C_YEL}=== EXECUTING LOCK SEQUENCE ==={C_RST}")
             lk = config['lock']
             un = config['unlock']
+            lk_laps = lk.get('st_rollovers', lk.get('st_rotations', 2.0))
             
             # Read live position of Servo 3 to check if lid is ALREADY closed/locked
             pos3_curr, res3, _ = sc_handler.ReadPos(3)
@@ -1104,8 +1108,8 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             sc_handler.WritePos(2, un['sc2_pos'], 0, lk['sc_speed'])
             time.sleep(1.0)
             
-            print(f"\nStep 1: Servo 1 -> Continuous Rotation Forward ({lk['st_rotations']} rot @ speed {lk['st_speed']}) + Absolute Snap to {lk['st_abs_target']}...")
-            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=lk['st_speed'], rotations=lk['st_rotations'], abs_target_pos=lk['st_abs_target'])
+            print(f"\nStep 1: Servo 1 -> Continuous Rotation Forward ({lk_laps} Rollover Laps @ speed {lk['st_speed']}) + Absolute Snap to {lk['st_abs_target']}...")
+            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=lk['st_speed'], rotations=lk_laps, abs_target_pos=lk['st_abs_target'])
             
             time.sleep(1.0)
             print(f"\nStep 2: Servo 2 & 3 -> Pos {lk['sc2_pos']} & {lk['sc3_pos']}...")
@@ -1124,6 +1128,7 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         elif sub == '2':
             print(f"\n{C_YEL}=== EXECUTING UNLOCK SEQUENCE ==={C_RST}")
             un = config['unlock']
+            un_laps = un.get('st_rollovers', un.get('st_rotations', 2.0))
             
             # Read live position of Servo 3 to check if lid is ALREADY unlocked
             pos3_curr, res3, _ = sc_handler.ReadPos(3)
@@ -1145,8 +1150,8 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             sc_handler.WritePos(2, un['sc2_pos'], 0, un['sc_speed'])
             time.sleep(1.0)
             
-            print(f"\nStep 2: Servo 1 -> Continuous Rotation Backward ({un['st_rotations']} rot @ speed {un['st_speed']}) + Absolute Snap to {un['st_abs_target']}...")
-            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='b', speed=un['st_speed'], rotations=un['st_rotations'], abs_target_pos=un['st_abs_target'])
+            print(f"\nStep 2: Servo 1 -> Continuous Rotation Backward ({un_laps} Rollover Laps @ speed {un['st_speed']}) + Absolute Snap to {un['st_abs_target']}...")
+            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='b', speed=un['st_speed'], rotations=un_laps, abs_target_pos=un['st_abs_target'])
             time.sleep(1.0)
             
             pos1, _, _, _ = sts_handler.ReadPosSpeed(1)
@@ -1175,8 +1180,11 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             target_key = 'lock' if ed_choice == '1' else 'unlock'
             cfg_sub = config[target_key]
             
+            curr_laps = cfg_sub.get('st_rollovers', cfg_sub.get('st_rotations', 2.0))
             print(f"\nEditing {target_key.upper()} Sequence:")
-            cfg_sub['st_rotations'] = get_float(f"Servo 1 Rotations [Current: {cfg_sub['st_rotations']}]: ", default=cfg_sub['st_rotations'], min_val=0.1, max_val=50.0)
+            new_laps = get_float(f"Servo 1 Rollover Laps [Current: {curr_laps}]: ", default=curr_laps, min_val=0.1, max_val=50.0)
+            cfg_sub['st_rollovers'] = new_laps
+            cfg_sub['st_rotations'] = new_laps
             cfg_sub['st_speed'] = get_int(f"Servo 1 Speed [Current: {cfg_sub['st_speed']}]: ", default=cfg_sub['st_speed'], min_val=100, max_val=3000)
             cfg_sub['st_abs_target'] = get_int(f"Servo 1 Absolute Target Snap (0-4095) [Current: {cfg_sub['st_abs_target']}]: ", default=cfg_sub['st_abs_target'], min_val=0, max_val=4095)
             cfg_sub['sc2_pos'] = get_int(f"Servo 2 Target Position [Current: {cfg_sub['sc2_pos']}]: ", default=cfg_sub['sc2_pos'], min_val=0, max_val=1023)
