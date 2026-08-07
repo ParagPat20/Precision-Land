@@ -947,15 +947,23 @@ class ServoController:
         try:
             print("\n--- STARTING NATIVE LOCKING SEQUENCE ---")
             
-            if self.last_state == 'lock' and not force:
-                print("[SERVO] Mechanism is ALREADY LOCKED. Skipping Servo 1 wire rewind to prevent cable/motor strain.")
+            if not force:
+                if self.last_state == 'lock':
+                    print("[SERVO SAFETY] Mechanism is ALREADY LOCKED (last_state='lock'). Skipping lock sequence to prevent cable strain.")
+                    with self._io_lock:
+                        self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+                        self.stsHandler.WriteSpec(1, 0, 50)
+                    self.robust_move_sc_pair(2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='>=')
+                    return
+                    
                 with self._io_lock:
-                    self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                    self.stsHandler.WriteSpec(1, 0, 50)
-                print(f"Ensuring latches (Servo 2 & 3) are held at {LOCK_POS_2} & {LOCK_POS_3}...")
-                self.robust_move_sc_pair(2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='>=')
-                print("[SERVO] Locking state verified!")
-                return
+                    pos3, _, res3, _ = self.scHandler.ReadPosSpeed(3)
+                if res3 == COMM_SUCCESS and pos3 >= (LOCK_POS_3 - 50):
+                    print(f"[SERVO SAFETY] Servo 3 live position ({pos3}) indicates lid is ALREADY CLOSED/LOCKED (>= {LOCK_POS_3 - 50})!")
+                    print("[SERVO SAFETY] Skipping Servo 1 rotation to prevent over-tightening or cable breakage.")
+                    self.robust_move_sc_pair(2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='>=')
+                    self.last_state = 'lock'
+                    return
 
             print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({UNLOCK_POS_2} & {UNLOCK_POS_3}) so they do not interfere with Servo 1...")
             self.robust_move_sc_single(3, UNLOCK_POS_3, SC_SPEED)

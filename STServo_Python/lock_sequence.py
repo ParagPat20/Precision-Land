@@ -380,7 +380,17 @@ def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotation
 
 def perform_locking(sts_handler, sc_handler):
     print("\n--- LOCKING SEQUENCE ---")
-    print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({UNLOCK_POS_2} & {UNLOCK_POS_3}) so they do not interfere with Servo 1...")
+    
+    # Read live position of Servo 3 to check if lid is ALREADY closed/locked
+    pos3, res3, _ = sc_handler.ReadPos(3)
+    if res3 == COMM_SUCCESS and pos3 >= (LOCK_POS_3 - 50):
+        print(f"[SAFETY GUARD] Servo 3 live position ({pos3}) indicates lid is ALREADY CLOSED/LOCKED (>= {LOCK_POS_3 - 50})!")
+        print("[SAFETY GUARD] Skipping Servo 1 rotation to prevent over-tightening or cable breakage.")
+        robust_move_sc_pair(sc_handler, 2, LOCK_POS_2, 3, LOCK_POS_3, SC_SPEED, check_target3=LOCK_POS_3, check_dir3='>=')
+        print("[LOCK COMPLETE] Locking state verified!")
+        return
+
+    print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({UNLOCK_POS_2} & {UNLOCK_POS_3})...")
     robust_move_sc_pair(sc_handler, 2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='<=')
     
     print(f"\nStep 1: Servo 1 -> Continuous Rotation Forward Speed 3000, 2 Rollover Laps -> Snap to 3000")

@@ -1084,6 +1084,19 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             lk = config['lock']
             un = config['unlock']
             
+            # Read live position of Servo 3 to check if lid is ALREADY closed/locked
+            pos3_curr, res3, _ = sc_handler.ReadPos(3)
+            if res3 == COMM_SUCCESS and pos3_curr >= (lk['sc3_pos'] - 50):
+                print(f"{C_RED}[SAFETY GUARD] Servo 3 live position ({pos3_curr}) indicates lid is ALREADY CLOSED/LOCKED (>= {lk['sc3_pos'] - 50})!{C_RST}")
+                print(f"{C_YEL}[SAFETY GUARD] Skipping Servo 1 rotation to prevent over-tightening or cable breakage.{C_RST}")
+                sc_handler.write1ByteTxRx(2, 40, 1)
+                sc_handler.WritePos(2, lk['sc2_pos'], 0, lk['sc_speed'])
+                sc_handler.write1ByteTxRx(3, 40, 1)
+                sc_handler.WritePos(3, lk['sc3_pos'], 0, lk['sc_speed'])
+                print(f"{C_GREEN}[LOCK COMPLETE] Locking state verified!{C_RST}")
+                input("\nPress Enter to continue...")
+                continue
+
             print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({un['sc2_pos']} & {un['sc3_pos']}) so they do not interfere with Servo 1...")
             sc_handler.write1ByteTxRx(3, 40, 1)
             sc_handler.WritePos(3, un['sc3_pos'], 0, lk['sc_speed'])
