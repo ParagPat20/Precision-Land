@@ -380,7 +380,10 @@ def rotate_st_continuous(sts_handler, sid=1, direction='f', speed=3000, rotation
 
 def perform_locking(sts_handler, sc_handler):
     print("\n--- LOCKING SEQUENCE ---")
-    print(f"Step 1: Servo 1 -> Continuous Rotation Forward Speed 3000, 2 Rollover Laps -> Snap to 3000")
+    print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({UNLOCK_POS_2} & {UNLOCK_POS_3}) so they do not interfere with Servo 1...")
+    robust_move_sc_pair(sc_handler, 2, UNLOCK_POS_2, 3, UNLOCK_POS_3, SC_SPEED, check_target3=UNLOCK_CHECK_3, check_dir3='<=')
+    
+    print(f"\nStep 1: Servo 1 -> Continuous Rotation Forward Speed 3000, 2 Rollover Laps -> Snap to 3000")
     rotate_st_continuous(sts_handler, 1, direction='f', speed=3000, rotations=2.0, abs_target=3000)
     
     print("\nWaiting 1s for mechanical settlement...")

@@ -957,7 +957,11 @@ class ServoController:
                 print("[SERVO] Locking state verified!")
                 return
 
-            print(f"Step 1: Servo 1 (ST) -> Continuous Rotation Forward Speed {ST_LOCK_SPEED_1}, Rotations {ST_LOCK_ROTATIONS_1}, Snap to {ST_LOCK_ABS_TARGET_1}")
+            print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({UNLOCK_POS_2} & {UNLOCK_POS_3}) so they do not interfere with Servo 1...")
+            self.robust_move_sc_single(3, UNLOCK_POS_3, SC_SPEED)
+            self.robust_move_sc_single(2, UNLOCK_POS_2, SC_SPEED)
+            
+            print(f"\nStep 1: Servo 1 (ST) -> Continuous Rotation Forward Speed {ST_LOCK_SPEED_1}, Rotations {ST_LOCK_ROTATIONS_1}, Snap to {ST_LOCK_ABS_TARGET_1}")
             self.rotate_st_continuous(1, direction='f', speed=ST_LOCK_SPEED_1, rotations=ST_LOCK_ROTATIONS_1, abs_target=ST_LOCK_ABS_TARGET_1)
             
             print("\nWaiting 1s for mechanical settlement...")

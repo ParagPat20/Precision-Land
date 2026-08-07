@@ -1082,7 +1082,16 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         elif sub == '1':
             print(f"\n{C_YEL}=== EXECUTING LOCK SEQUENCE ==={C_RST}")
             lk = config['lock']
-            print(f"Step 1: Servo 1 -> Continuous Rotation Forward ({lk['st_rotations']} rot @ speed {lk['st_speed']}) + Absolute Snap to {lk['st_abs_target']}...")
+            un = config['unlock']
+            
+            print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({un['sc2_pos']} & {un['sc3_pos']}) so they do not interfere with Servo 1...")
+            sc_handler.write1ByteTxRx(3, 40, 1)
+            sc_handler.WritePos(3, un['sc3_pos'], 0, lk['sc_speed'])
+            sc_handler.write1ByteTxRx(2, 40, 1)
+            sc_handler.WritePos(2, un['sc2_pos'], 0, lk['sc_speed'])
+            time.sleep(1.0)
+            
+            print(f"\nStep 1: Servo 1 -> Continuous Rotation Forward ({lk['st_rotations']} rot @ speed {lk['st_speed']}) + Absolute Snap to {lk['st_abs_target']}...")
             run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=lk['st_speed'], rotations=lk['st_rotations'], abs_target_pos=lk['st_abs_target'])
             
             time.sleep(1.0)
