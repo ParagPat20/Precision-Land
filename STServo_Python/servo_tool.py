@@ -148,8 +148,9 @@ def draw_menu():
     print(f"{C_BLUE}│{C_RST} 10. Read Device Config      11. Set Servo ID               {C_BLUE}│{C_RST}")
     print(f"{C_BLUE}│{C_RST} 12. Set Angle Limits        13. Set Position Offset (ST)   {C_BLUE}│{C_RST}")
     print(f"{C_BLUE}│{C_RST} 14. Teach-Playback Recorder                                 {C_BLUE}│{C_RST}")
-    print(f"{C_BLUE}├── Advanced & Debug ────────────────────────────────────────┤{C_RST}")
-    print(f"{C_BLUE}│{C_RST} 15. Advanced Debugging      0. Exit Dashboard              {C_BLUE}│{C_RST}")
+    print(f"{C_BLUE}├── Sequence & Debug ────────────────────────────────────────┤{C_RST}")
+    print(f"{C_BLUE}│{C_RST} 15. Lock/Unlock Sequence    16. Advanced Debugging Menu    {C_BLUE}│{C_RST}")
+    print(f"{C_BLUE}│{C_RST}  0. Exit Dashboard                                          {C_BLUE}│{C_RST}")
     print(f"{C_BLUE}└────────────────────────────────────────────────────────────┘{C_RST}")
     
     print(f"\n{C_YEL}┌── Direct Command Shell Reference ──────────────────────────┐{C_RST}")
@@ -848,6 +849,248 @@ def continuous_rotation(sts_handler, sc_handler, active_id):
         if rotations is None: return
         run_continuous_rotation(sts_handler, sc_handler, sid, direction=direction, speed_pwm=spd, control_mode='rotations', target_val=rotations)
 
+# --- LOCK / UNLOCK SEQUENCE & ABSOLUTE POSITION SNAP TOOL ---
+SEQUENCE_CONFIG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "servo_sequences.json"))
+
+DEFAULT_SEQUENCE_CONFIG = {
+    "lock": {
+        "st_speed": 3000,
+        "st_rotations": 1.3,
+        "st_abs_target": 450,
+        "sc2_pos": 550,
+        "sc3_pos": 715,
+        "sc_speed": 1500
+    },
+    "unlock": {
+        "st_speed": 3000,
+        "st_rotations": 1.3,
+        "st_abs_target": 2100,
+        "sc2_pos": 750,
+        "sc3_pos": 540,
+        "sc_speed": 1500
+    }
+}
+
+def load_sequence_config():
+    """Load sequence configuration from JSON file or return defaults."""
+    try:
+        if os.path.exists(SEQUENCE_CONFIG_FILE):
+            with open(SEQUENCE_CONFIG_FILE, 'r') as f:
+                data = json.load(f)
+                return data
+    except Exception as e:
+        print(f"{C_RED}Warning loading sequence file: {e}{C_RST}")
+    return json.loads(json.dumps(DEFAULT_SEQUENCE_CONFIG))
+
+def save_sequence_config(config_data):
+    """Save sequence configuration data to JSON file."""
+    try:
+        with open(SEQUENCE_CONFIG_FILE, 'w') as f:
+            json.dump(config_data, f, indent=2)
+        print(f"{C_GREEN}Saved sequence configuration to: {SEQUENCE_CONFIG_FILE}{C_RST}")
+        return True
+    except Exception as e:
+        print(f"{C_RED}Failed to save sequence configuration: {e}{C_RST}")
+        return False
+
+def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=3000, rotations=1.3, abs_target_pos=450):
+    """
+    Executes continuous wheel rotation on ST3215, stops wheel mode, switches back to 
+    Position Control Mode (Mode 0), and commands an exact Absolute Encoder Position (0-4095).
+    This eliminates residual coasting drift completely!
+    """
+    sid = int(sid)
+    servo_type = get_servo_type(sts_handler, sid)
+    if servo_type != 'ST':
+        print(f"{C_RED}Continuous rotation with absolute snap is designed for ST series servos.{C_RST}")
+        return False
+
+    sign = 1 if str(direction).lower() in ['f', 'for', 'forward', 'cw', '1'] else -1
+    speed_val = abs(int(speed)) * sign
+    dir_label = "Forward (CW)" if sign > 0 else "Backward (CCW)"
+    target_rotations = round(float(rotations), 2)
+    steps_per_rev = 4096.0
+    target_steps = target_rotations * steps_per_rev
+    half_rev = steps_per_rev / 2.0
+
+    print(f"\n{C_CYA}--- Step 1: Continuous Rotation ---{C_RST}")
+    print(f"Rotating Servo {sid} ({dir_label}): speed {abs(speed)}, rotations {target_rotations:.2f} ({target_steps:.0f} steps)...")
+
+    # Read start position
+    sts_handler.write1ByteTxRx(sid, 40, 1) # Torque Enable
+    pos_start, res, _ = sts_handler.ReadPos(sid)
+    if res != COMM_SUCCESS:
+        print(f"{C_RED}Error reading start position: {sts_handler.getTxRxResult(res)}{C_RST}")
+        return False
+
+    print(f"Start Encoder Position: {pos_start}")
+    sts_handler.WheelMode(sid)
+    res_spec, _ = sts_handler.WriteSpec(sid, speed_val, 50)
+    if res_spec != COMM_SUCCESS:
+        print(f"{C_RED}Error starting Wheel Mode: {sts_handler.getTxRxResult(res_spec)}{C_RST}")
+        return False
+
+    last_pos = pos_start
+    accumulated_steps = 0.0
+    start_t = time.time()
+    max_timeout = max(10.0, target_rotations * 10.0)
+
+    try:
+        while accumulated_steps < target_steps:
+            if (time.time() - start_t) > max_timeout:
+                print(f"\n{C_YEL}Safety timeout reached during continuous rotation!{C_RST}")
+                break
+            time.sleep(0.01)
+            curr_pos, res_read, _ = sts_handler.ReadPos(sid)
+            if res_read == COMM_SUCCESS:
+                delta = curr_pos - last_pos
+                if delta > half_rev:
+                    delta -= steps_per_rev
+                elif delta < -half_rev:
+                    delta += steps_per_rev
+                accumulated_steps += abs(delta)
+                last_pos = curr_pos
+                completed_rot = accumulated_steps / steps_per_rev
+                pct = min(100.0, (accumulated_steps / target_steps) * 100.0)
+                sys.stdout.write(f"\rWheel Progress: {completed_rot:.2f} / {target_rotations:.2f} rot ({pct:.1f}%)... ")
+                sys.stdout.flush()
+    except KeyboardInterrupt:
+        print(f"\n{C_YEL}Wheel rotation interrupted!{C_RST}")
+
+    # Stop wheel rotation
+    sts_handler.WriteSpec(sid, 0, 50)
+    print(f"\n{C_GREEN}Wheel rotation finished. Accumulated steps: {accumulated_steps:.0f} ({accumulated_steps/steps_per_rev:.2f} revs).{C_RST}")
+
+    if abs_target_pos is not None:
+        abs_target_pos = int(abs_target_pos)
+        print(f"\n{C_CYA}--- Step 2: Absolute Encoder Position Snap ---{C_RST}")
+        print(f"Switching Servo {sid} to Position Mode (33 -> 0) and commanding absolute target: {abs_target_pos}...")
+        
+        # Switch mode from Wheel Mode (1) back to Position Control Mode (0)
+        sts_handler.write1ByteTxRx(sid, 33, 0)
+        sts_handler.write1ByteTxRx(sid, 40, 1) # Ensure torque enabled
+        
+        # Send absolute position move
+        res_move, _ = sts_handler.WritePosEx(sid, abs_target_pos, 2400, 50)
+        if res_move == COMM_SUCCESS:
+            start_snap_t = time.time()
+            final_pos = -1
+            while time.time() - start_snap_t < 3.0:
+                time.sleep(0.1)
+                pos_snap, res_s, _ = sts_handler.ReadPos(sid)
+                if res_s == COMM_SUCCESS:
+                    final_pos = pos_snap
+                    if abs(pos_snap - abs_target_pos) <= 30:
+                        break
+            err_deg = (abs(final_pos - abs_target_pos) / 4096.0) * 360.0 if final_pos >= 0 else 0.0
+            print(f"{C_GREEN}[ZERO DRIFT SNAP SUCCESS] Final Position: {final_pos} | Target: {abs_target_pos} (Error: {abs(final_pos - abs_target_pos)} steps / {err_deg:.2f}°){C_RST}")
+        else:
+            print(f"{C_RED}Error commanding absolute snap: {sts_handler.getTxRxResult(res_move)}{C_RST}")
+
+    return True
+
+def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
+    """
+    Interactive Lock and Unlock sequence tester, parameter editor, and JSON config saver/loader.
+    """
+    config = load_sequence_config()
+
+    while True:
+        print_header("Lock & Unlock Sequence Manager")
+        print(f"Current Config Summary:")
+        print(f"  {C_CYA}LOCK Sequence:{C_RST}   Servo 1: Forward {config['lock']['st_rotations']} rot @ {config['lock']['st_speed']} -> Abs Snap to {config['lock']['st_abs_target']} | SC2: {config['lock']['sc2_pos']} | SC3: {config['lock']['sc3_pos']}")
+        print(f"  {C_CYA}UNLOCK Sequence:{C_RST} Servo 3: {config['unlock']['sc3_pos']} | Servo 2: {config['unlock']['sc2_pos']} -> Servo 1: Backward {config['unlock']['st_rotations']} rot @ {config['unlock']['st_speed']} -> Abs Snap to {config['unlock']['st_abs_target']}")
+        print("\nOptions:")
+        print("  1. Test/Execute LOCK Sequence (Continuous + Absolute Snap)")
+        print("  2. Test/Execute UNLOCK Sequence (Continuous + Absolute Snap)")
+        print("  3. Test Single Servo Continuous + Absolute Move")
+        print("  4. Edit Sequence Parameters (Rotations, Speeds, Absolute Targets)")
+        print("  5. Save Configuration to JSON File (servo_sequences.json)")
+        print("  6. Load Configuration from JSON File")
+        print("  0. Return to Main Menu")
+
+        sub = input("\nSelect option (0-6): ").strip()
+        if sub == '0':
+            break
+
+        elif sub == '1':
+            print(f"\n{C_YEL}=== EXECUTING LOCK SEQUENCE ==={C_RST}")
+            lk = config['lock']
+            print(f"Step 1: Servo 1 -> Continuous Rotation Forward ({lk['st_rotations']} rot @ speed {lk['st_speed']}) + Absolute Snap to {lk['st_abs_target']}...")
+            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=lk['st_speed'], rotations=lk['st_rotations'], abs_target_pos=lk['st_abs_target'])
+            
+            time.sleep(1.0)
+            print(f"\nStep 2: Servo 2 & 3 -> Pos {lk['sc2_pos']} & {lk['sc3_pos']}...")
+            sc_handler.write1ByteTxRx(2, 40, 1)
+            sc_handler.WritePos(2, lk['sc2_pos'], 0, lk['sc_speed'])
+            sc_handler.write1ByteTxRx(3, 40, 1)
+            sc_handler.WritePos(3, lk['sc3_pos'], 0, lk['sc_speed'])
+            time.sleep(1.0)
+            
+            pos1, _, _, _ = sts_handler.ReadPosSpeed(1)
+            pos2, _, _, _ = sc_handler.ReadPosSpeed(2)
+            pos3, _, _, _ = sc_handler.ReadPosSpeed(3)
+            print(f"{C_GREEN}[LOCK COMPLETE] Final Positions: ID 1: {pos1} | ID 2: {pos2} | ID 3: {pos3}{C_RST}")
+            input("\nPress Enter to continue...")
+
+        elif sub == '2':
+            print(f"\n{C_YEL}=== EXECUTING UNLOCK SEQUENCE ==={C_RST}")
+            un = config['unlock']
+            print(f"Step 1: Servo 3 & 2 -> Pos {un['sc3_pos']} & {un['sc2_pos']}...")
+            sc_handler.write1ByteTxRx(3, 40, 1)
+            sc_handler.WritePos(3, un['sc3_pos'], 0, un['sc_speed'])
+            sc_handler.write1ByteTxRx(2, 40, 1)
+            sc_handler.WritePos(2, un['sc2_pos'], 0, un['sc_speed'])
+            time.sleep(1.0)
+            
+            print(f"\nStep 2: Servo 1 -> Continuous Rotation Backward ({un['st_rotations']} rot @ speed {un['st_speed']}) + Absolute Snap to {un['st_abs_target']}...")
+            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='b', speed=un['st_speed'], rotations=un['st_rotations'], abs_target_pos=un['st_abs_target'])
+            time.sleep(1.0)
+            
+            pos1, _, _, _ = sts_handler.ReadPosSpeed(1)
+            pos2, _, _, _ = sc_handler.ReadPosSpeed(2)
+            pos3, _, _, _ = sc_handler.ReadPosSpeed(3)
+            print(f"{C_GREEN}[UNLOCK COMPLETE] Final Positions: ID 1: {pos1} | ID 2: {pos2} | ID 3: {pos3}{C_RST}")
+            input("\nPress Enter to continue...")
+
+        elif sub == '3':
+            sid = get_int("Enter Servo ID [Default: 1]: ", default=1)
+            if sid is None: continue
+            direction = input("Enter Direction (f: Forward, b: Backward) [Default: f]: ").strip().lower() or 'f'
+            spd = get_int("Speed (1 to 3000) [Default: 3000]: ", default=3000, min_val=1, max_val=3000)
+            rot = get_float("Rotations count [Default: 1.3]: ", default=1.3, min_val=0.1, max_val=100.0)
+            abs_pos = get_int("Absolute Snap Position (0-4095) [Default: 450]: ", default=450, min_val=0, max_val=4095)
+            
+            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=sid, direction=direction, speed=spd, rotations=rot, abs_target_pos=abs_pos)
+            input("\nPress Enter to continue...")
+
+        elif sub == '4':
+            print(f"\n{C_CYA}--- Edit Sequence Parameters ---{C_RST}")
+            print("1. Edit Lock Sequence Parameters")
+            print("2. Edit Unlock Sequence Parameters")
+            ed_choice = input("Choice (1 or 2): ").strip()
+            
+            target_key = 'lock' if ed_choice == '1' else 'unlock'
+            cfg_sub = config[target_key]
+            
+            print(f"\nEditing {target_key.upper()} Sequence:")
+            cfg_sub['st_rotations'] = get_float(f"Servo 1 Rotations [Current: {cfg_sub['st_rotations']}]: ", default=cfg_sub['st_rotations'], min_val=0.1, max_val=50.0)
+            cfg_sub['st_speed'] = get_int(f"Servo 1 Speed [Current: {cfg_sub['st_speed']}]: ", default=cfg_sub['st_speed'], min_val=100, max_val=3000)
+            cfg_sub['st_abs_target'] = get_int(f"Servo 1 Absolute Target Snap (0-4095) [Current: {cfg_sub['st_abs_target']}]: ", default=cfg_sub['st_abs_target'], min_val=0, max_val=4095)
+            cfg_sub['sc2_pos'] = get_int(f"Servo 2 Target Position [Current: {cfg_sub['sc2_pos']}]: ", default=cfg_sub['sc2_pos'], min_val=0, max_val=1023)
+            cfg_sub['sc3_pos'] = get_int(f"Servo 3 Target Position [Current: {cfg_sub['sc3_pos']}]: ", default=cfg_sub['sc3_pos'], min_val=0, max_val=1023)
+            
+            print(f"{C_GREEN}Updated in-memory parameters for {target_key.upper()} sequence.{C_RST}")
+
+        elif sub == '5':
+            save_sequence_config(config)
+            time.sleep(1.5)
+
+        elif sub == '6':
+            config = load_sequence_config()
+            print(f"{C_GREEN}Reloaded configuration file.{C_RST}")
+            time.sleep(1.5)
+
 def emergency_relax(sts_handler):
     """
     Broadcasts a torque disable (0) to all servos on the bus.
@@ -1461,7 +1704,32 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
         filename = args[0] if args else "recorded_motion.json"
         play_motion(sts_handler, sc_handler, filename)
         return active_id, True
-        
+
+    # 11. seq / sequence / lock / unlock / absrot
+    elif cmd in ['seq', 'sequence', 'lock', 'unlock', 'absrot']:
+        if cmd == 'lock':
+            print(f"\n{C_YEL}Executing LOCK Sequence via shell...{C_RST}")
+            config = load_sequence_config()
+            lk = config['lock']
+            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=lk['st_speed'], rotations=lk['st_rotations'], abs_target_pos=lk['st_abs_target'])
+            sc_handler.write1ByteTxRx(2, 40, 1)
+            sc_handler.WritePos(2, lk['sc2_pos'], 0, lk['sc_speed'])
+            sc_handler.write1ByteTxRx(3, 40, 1)
+            sc_handler.WritePos(3, lk['sc3_pos'], 0, lk['sc_speed'])
+        elif cmd == 'unlock':
+            print(f"\n{C_YEL}Executing UNLOCK Sequence via shell...{C_RST}")
+            config = load_sequence_config()
+            un = config['unlock']
+            sc_handler.write1ByteTxRx(3, 40, 1)
+            sc_handler.WritePos(3, un['sc3_pos'], 0, un['sc_speed'])
+            sc_handler.write1ByteTxRx(2, 40, 1)
+            sc_handler.WritePos(2, un['sc2_pos'], 0, un['sc_speed'])
+            time.sleep(0.5)
+            run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='b', speed=un['st_speed'], rotations=un['st_rotations'], abs_target_pos=un['st_abs_target'])
+        else:
+            manage_lock_unlock_sequences(sts_handler, sc_handler, active_id)
+        return active_id, True
+
     return active_id, False
 
 def main():
@@ -1890,6 +2158,10 @@ def main():
             print_menu_next = True
             
         elif choice == '15':
+            manage_lock_unlock_sequences(sts_handler, sc_handler, active_id)
+            print_menu_next = True
+            
+        elif choice == '16':
             advanced_debugging_menu(sts_handler, sc_handler, active_id)
             print_menu_next = True
             
