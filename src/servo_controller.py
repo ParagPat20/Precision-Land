@@ -1042,7 +1042,6 @@ class ServoController:
                     print("[SERVO SAFETY] Mechanism is ALREADY LOCKED (last_state='lock'). Skipping lock sequence to prevent cable strain.")
                     with self._io_lock:
                         self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                        self.stsHandler.WriteSpec(1, 0, 50)
                     self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='>=')
                     return
                     
@@ -1094,7 +1093,6 @@ class ServoController:
                 print("[SERVO] Mechanism is ALREADY UNLOCKED. Skipping redundant unlock rotation.")
                 with self._io_lock:
                     self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                    self.stsHandler.WriteSpec(1, 0, 50)
                 self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='<=')
                 return
 
@@ -1159,9 +1157,8 @@ class ServoController:
                 if not self.sequence_active and self.last_state in ['lock', 'unlock']:
                     seq_cfg = self.load_sequence_config()
                     with self._io_lock:
-                        # Servo 1 (ST) - Hold torque and zero speed in continuous wheel mode
+                        # Servo 1 (ST) - Maintain holding torque in Position Control Mode
                         self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                        self.stsHandler.WriteSpec(1, 0, 50)
 
                         if self.last_state == 'lock':
                             lock_c = seq_cfg["lock"]
