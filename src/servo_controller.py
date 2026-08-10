@@ -951,10 +951,10 @@ class ServoController:
                 curr_pos, _, res_read, _ = self.stsHandler.ReadPosSpeed(sid)
                 
             if res_read == COMM_SUCCESS and 0 <= curr_pos <= 4095:
-                # Detect boundary rollover
+                delta = curr_pos - last_pos
+                # Detect boundary rollover (both step delta jump and range boundary)
                 if is_forward:
-                    # Forward rollover: last_pos near 4096 (e.g. > 2500) and curr_pos near 0 (e.g. < 1500)
-                    if last_pos > 2500 and curr_pos < 1500:
+                    if delta < -1500 or (last_pos > 2500 and curr_pos < 1500):
                         rollover_count += 1
                         print(f"[SERVO] Rollover #{rollover_count} detected (Forward 4096 -> 0)")
                     
@@ -964,8 +964,7 @@ class ServoController:
                             print(f"[SERVO] Rollover {rollover_count} complete & target absolute position reached: Pos {curr_pos} >= {abs_target}")
                             break
                 else:
-                    # Backward rollover: last_pos near 0 (e.g. < 1500) and curr_pos near 4096 (e.g. > 2500)
-                    if last_pos < 1500 and curr_pos > 2500:
+                    if delta > 1500 or (last_pos < 1500 and curr_pos > 2500):
                         rollover_count += 1
                         print(f"[SERVO] Rollover #{rollover_count} detected (Backward 0 -> 4096)")
                     
@@ -998,6 +997,7 @@ class ServoController:
             abs_target = int(abs_target)
             print(f"[SERVO] Snapping Servo {sid} to Absolute Target {abs_target} (switching to Position Mode 33->0)...")
             with self._io_lock:
+                self.stsHandler.WriteSpec(sid, 0, 50)
                 self._write1(sid, STS_MODE, 0, "set position mode")
                 self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
                 self.stsHandler.WritePosEx(sid, abs_target, 2400, 50)
@@ -1007,8 +1007,8 @@ class ServoController:
             while time.time() - snap_start_t < 2.5:
                 time.sleep(0.05)
                 with self._io_lock:
-                    p, _, r_snap, _ = self.stsHandler.ReadPosSpeed(sid)
-                if r_snap == COMM_SUCCESS:
+                    p, res_s, _ = self.stsHandler.ReadPos(sid)
+                if res_s == COMM_SUCCESS:
                     final_p = p
                     if abs(p - abs_target) <= 30:
                         break
@@ -1056,8 +1056,7 @@ class ServoController:
                     return
 
             print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({unlock_sc2} & {unlock_sc3}) so they do not interfere with Servo 1...")
-            self.robust_move_sc_single(3, unlock_sc3, sc_speed)
-            self.robust_move_sc_single(2, unlock_sc2, sc_speed)
+            self.robust_move_sc_pair(2, unlock_sc2, 3, unlock_sc3, sc_speed, check_target3=unlock_sc3, check_dir3='<=')
             
             print(f"\nStep 1: Servo 1 (ST) -> Continuous Rotation Forward Speed {st_speed}, Rotations {st_rotations}, Snap to {st_abs_target}")
             self.rotate_st_continuous(1, direction='f', speed=st_speed, rotations=st_rotations, abs_target=st_abs_target)
@@ -1096,17 +1095,13 @@ class ServoController:
                 with self._io_lock:
                     self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
                     self.stsHandler.WriteSpec(1, 0, 50)
-                self.robust_move_sc_single(3, sc3_pos, sc_speed)
-                self.robust_move_sc_single(2, sc2_pos, sc_speed)
+                self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='<=')
                 return
 
-            print(f"Step 1: Servo 3 (SC) -> {sc3_pos}")
-            self.robust_move_sc_single(3, sc3_pos, sc_speed)
+            print(f"Step 1: Servo 3 & 2 (SC) -> {sc3_pos} & {sc2_pos}")
+            self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='<=')
             
-            print(f"\nStep 2: Servo 2 (SC) -> {sc2_pos}")
-            self.robust_move_sc_single(2, sc2_pos, sc_speed)
-            
-            print(f"\nStep 3: Servo 1 (ST) -> Continuous Rotation Backward Speed {st_speed}, Rotations {st_rotations}, Snap to {st_abs_target}")
+            print(f"\nStep 2: Servo 1 (ST) -> Continuous Rotation Backward Speed {st_speed}, Rotations {st_rotations}, Snap to {st_abs_target}")
             self.rotate_st_continuous(1, direction='b', speed=st_speed, rotations=st_rotations, abs_target=st_abs_target)
             
             print("\nUnlocking sequence complete!")

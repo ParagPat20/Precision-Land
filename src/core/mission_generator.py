@@ -37,7 +37,7 @@ class DeliveryTemplate:
             commands=[
                 TemplateCommand('home', {'location': '{HOME_LOCATION}', 'alt': 0}),
                 TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
-                TemplateCommand('changeSpeed', {'speed': '{FLY_SPEED}'}),
+                TemplateCommand('changeSpeed', {'speed_type': 1, 'speed': '{FLY_SPEED}'}),
                 TemplateCommand('waypoint', {
                     'location': '{DELIVERY_LOCATION}',
                     'alt': '{CRUISE_ALT}'
@@ -52,21 +52,37 @@ class DeliveryTemplate:
                 TemplateCommand('delay', {
                     'seconds': '{DROP_DELAY}'
                 }),
-                TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
+                # 1. Set slow climb speed for parcel unloading ascent
+                TemplateCommand('changeSpeed', {
+                    'speed_type': 2, # 2 = Climb Speed (Vertical m/s)
+                    'speed': '{UNLOAD_CLIMB_SPEED}'
+                }),
+                # 2. Slow takeoff to 5m altitude (pulling lid open smoothly)
+                TemplateCommand('takeoff', {'alt': '{UNLOAD_TAKEOFF_ALT}'}),
+                # 3. Lock lid once parcel is clear at 5m
                 TemplateCommand('doSetServo', {
                     'servo': '{SERVO_NUM}',
                     'pwm': '{LID_LOCK_PWM}'
                 }),
                 TemplateCommand('delay', {
-                    'seconds': 5.0
+                    'seconds': 3.0
                 }),
+                # 4. Restore normal climb speed and climb to cruise altitude
+                TemplateCommand('changeSpeed', {
+                    'speed_type': 2, # 2 = Climb Speed (Vertical m/s)
+                    'speed': '{NORMAL_CLIMB_SPEED}'
+                }),
+                TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
                 TemplateCommand('rtl', {}),
             ],
             default_values={
                 'TAKEOFF_ALT': 30.0,
                 'CRUISE_ALT': 30.0,
-                'LID_UNLOCK_PWM': 1000,
-                'LID_LOCK_PWM': 1900,
+                'UNLOAD_TAKEOFF_ALT': 5.0,
+                'UNLOAD_CLIMB_SPEED': 0.5, # 0.5 m/s slow climb rate during parcel unloading
+                'NORMAL_CLIMB_SPEED': 2.5, # 2.5 m/s normal climb rate
+                'LID_UNLOCK_PWM': 1900,
+                'LID_LOCK_PWM': 1000,
                 'SERVO_NUM': 6,
                 'DROP_DELAY': 5.0,
                 'FLY_SPEED': 0.0,
@@ -155,9 +171,10 @@ class DeliveryTemplate:
 
             elif cmd.type == 'changeSpeed':
                 speed = float(temp_params.get('speed', 0))
-                if speed <= 0:
+                speed_type = float(temp_params.get('speed_type', 1)) # 0/1 = Groundspeed, 2 = Climb Speed, 3 = Descent Speed
+                if speed <= 0 and speed_type in (0, 1):
                     continue
-                p1 = 1.0
+                p1 = speed_type
                 p2 = speed
                 p3 = -1.0 # -1 indicates no change to throttle. 0.0 would kill the motors!
 
