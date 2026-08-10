@@ -904,15 +904,15 @@ SEQUENCE_CONFIG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 DEFAULT_SEQUENCE_CONFIG = {
     "lock": {
         "st_speed": 3000,
-        "st_rotations": 2.0,
-        "st_abs_target": 3000,
+        "st_rotations": 3.0,
+        "st_abs_target": 1200,
         "sc2_pos": 550,
         "sc3_pos": 715,
         "sc_speed": 1500
     },
     "unlock": {
         "st_speed": 3000,
-        "st_rotations": 2.0,
+        "st_rotations": 3.0,
         "st_abs_target": 3000,
         "sc2_pos": 750,
         "sc3_pos": 540,
