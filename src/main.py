@@ -960,6 +960,9 @@ def status_publisher_thread():
         time.sleep(TELEMETRY_INTERVAL_SEC)
 
 
+# Control Command Handling (Remote ARM / TAKEOFF / MODE_CHANGE)
+ALLOWED_MODES = {'LAND', 'RTL', 'AUTO', 'GUIDED', 'BRAKE'}
+
 # Track processed control command IDs to prevent duplicate trigger loops
 processed_control_ids = set()
 processed_control_lock = threading.Lock()
