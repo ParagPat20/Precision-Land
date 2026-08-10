@@ -12,19 +12,30 @@ def check_emergency_stop():
     Allows instant emergency stop during active motor movement loops.
     """
     if os.name == 'nt':
-        import msvcrt
-        if msvcrt.kbhit():
-            try:
+        try:
+            import msvcrt
+            if msvcrt.kbhit():
                 msvcrt.getch()
-            except Exception:
-                pass
-            return True
+                return True
+        except Exception:
+            pass
     else:
-        import select
-        dr, dw, de = select.select([sys.stdin], [], [], 0)
-        if dr != []:
-            sys.stdin.read(1)
-            return True
+        try:
+            import select
+            import termios
+            import tty
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.0)
+                if rlist:
+                    sys.stdin.read(1)
+                    return True
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
     return False
 
 # --- Cross-Platform Non-Blocking Input ---

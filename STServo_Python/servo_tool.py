@@ -226,13 +226,20 @@ def check_emergency_stop():
     Allows instant emergency stop during active motor movement loops.
     """
     if os.name == 'nt':
-        import msvcrt
-        if msvcrt.kbhit():
-            try:
+        try:
+            import msvcrt
+            if msvcrt.kbhit():
                 msvcrt.getch()
-            except Exception:
-                pass
-            return True
+                return True
+        except Exception:
+            pass
+    else:
+        try:
+            k = check_key()
+            if k is not None:
+                return True
+        except Exception:
+            pass
     return False
 
 # Known models for ST and SC series servos
@@ -981,6 +988,7 @@ def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction=
     rollover_count = 0
     start_t = time.time()
     max_timeout = max(12.0, target_rollovers * 10.0)
+    stuck_count = 0
 
     try:
         while True:
@@ -1018,7 +1026,17 @@ def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction=
                         if abs_target_pos is None or curr_pos <= (int(abs_target_pos) + 60):
                             print(f"\n{C_GREEN}Target absolute position reached on rollover lap {rollover_count}: Pos {curr_pos} <= {abs_target_pos}{C_RST}")
                             break
-                            
+
+                # Stall / mechanical tension resistance check after target rollovers reached
+                if rollover_count >= target_rollovers:
+                    if abs(curr_pos - last_pos) < 3:
+                        stuck_count += 1
+                        if stuck_count >= 15:
+                            print(f"\n{C_YEL}Mechanical resistance/stall detected at Pos {curr_pos}. Proceeding to absolute position snap...{C_RST}")
+                            break
+                    else:
+                        stuck_count = 0
+
                 last_pos = curr_pos
                 sys.stdout.write(f"\rWheel Mode: Rollover {rollover_count}/{target_rollovers} | Live Pos: {curr_pos} | Target: {abs_target_pos} | [PRESS ANY KEY TO EMERGENCY STOP]... ")
                 sys.stdout.flush()

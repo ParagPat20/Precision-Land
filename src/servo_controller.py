@@ -12,13 +12,30 @@ def check_emergency_stop():
     Allows instant emergency stop during active motor movement loops.
     """
     if os.name == 'nt':
-        import msvcrt
-        if msvcrt.kbhit():
-            try:
+        try:
+            import msvcrt
+            if msvcrt.kbhit():
                 msvcrt.getch()
-            except Exception:
-                pass
-            return True
+                return True
+        except Exception:
+            pass
+    else:
+        try:
+            import select
+            import termios
+            import tty
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.0)
+                if rlist:
+                    sys.stdin.read(1)
+                    return True
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
     return False
 
 # Add STServo SDK to the path
@@ -914,6 +931,7 @@ class ServoController:
         rollover_count = 0
         start_t = time.time()
         max_timeout = max(12.0, target_rollovers * 10.0)
+        stuck_count = 0
         
         while True:
             if check_emergency_stop():
@@ -956,7 +974,17 @@ class ServoController:
                         if abs_target is None or curr_pos <= (int(abs_target) + 60):
                             print(f"[SERVO] Rollover {rollover_count} complete & target absolute position reached: Pos {curr_pos} <= {abs_target}")
                             break
-                            
+
+                # Stall / mechanical tension resistance check after target rollovers reached
+                if rollover_count >= target_rollovers:
+                    if abs(curr_pos - last_pos) < 3:
+                        stuck_count += 1
+                        if stuck_count >= 15:
+                            print(f"[SERVO] Mechanical resistance / stall detected at position {curr_pos}. Snapping to position mode...")
+                            break
+                    else:
+                        stuck_count = 0
+
                 last_pos = curr_pos
 
         # Stop wheel rotation
