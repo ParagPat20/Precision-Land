@@ -571,30 +571,49 @@ def execute_mission_logic(mission_items, cmd_ref):
         traceback.print_exc()
         return False
 
+def parse_and_normalize_timestamp(ts):
+    """
+    Parses and normalizes timestamp to milliseconds.
+    Supports int, float, string, seconds, or milliseconds.
+    Returns 0 if invalid or missing.
+    """
+    if not ts:
+        return 0
+    try:
+        ts_val = float(ts)
+        # If timestamp is in seconds (e.g. 10 digits < 1e11), convert to milliseconds
+        if 0 < ts_val < 1e11:
+            ts_val *= 1000.0
+        return int(ts_val)
+    except Exception:
+        return 0
+
 def run_mission_thread(command):
     """
     Runs a mission in a separate thread. Handles mission execution and status updates.
     """
     global active_mission_ref
     cmd_id = command.get('id')
-    timestamp = command.get('timestamp', 0)
+    raw_ts = command.get('timestamp', 0)
+    timestamp = parse_and_normalize_timestamp(raw_ts)
     current_time = int(time.time() * 1000)
+    time_diff = current_time - timestamp if timestamp > 0 else 9999999
     
     print(f"[FIREBASE DEBUG] ========== NEW MISSION RECEIVED ==========")
     print(f"[FIREBASE DEBUG] Mission ID: {cmd_id}")
-    print(f"[FIREBASE DEBUG] Timestamp: {timestamp} ({format_timestamp(timestamp)})")
+    print(f"[FIREBASE DEBUG] Timestamp: {timestamp} ({format_timestamp(timestamp) if timestamp > 0 else 'N/A'})")
     print(f"[FIREBASE DEBUG] Current Time: {current_time} ({format_timestamp(current_time)})")
-    print(f"[FIREBASE DEBUG] Age: {(current_time - timestamp)/1000:.1f} seconds")
+    print(f"[FIREBASE DEBUG] Age / Diff: {time_diff/1000:.1f} seconds")
     
     ref = db.reference(f'missions/{DRONE_ID}/active_command')
     active_mission_ref = ref
     mission_active_event.clear()  # Reset mission active flag
     
-    # 1. Stale Command Check (45 seconds = 45000 ms)
-    if current_time - timestamp > 45000:
-        print(f"[FIREBASE DEBUG] [REJECT] Mission {cmd_id} is STALE ({(current_time - timestamp)/1000:.1f}s old). Ignoring.")
+    # 1. Stale / Time-Skew Command Check (45 seconds = 45000 ms bidirectional)
+    if timestamp <= 0 or abs(time_diff) > 45000:
+        print(f"[FIREBASE DEBUG] [REJECT] Mission {cmd_id} is STALE/INVALID ({time_diff/1000:.1f}s diff). Ignoring.")
         mission_active_event.clear()
-        ref.update({'status': 'EXPIRED_STALE'})
+        ref.update({'status': 'EXPIRED_STALE', 'error': f'Command timestamp stale/invalid ({time_diff/1000:.1f}s)'})
         active_mission_ref = None
         return
 
@@ -941,42 +960,66 @@ def status_publisher_thread():
         time.sleep(TELEMETRY_INTERVAL_SEC)
 
 
-# --- Control Command Handling (Remote ARM / TAKEOFF / MODE_CHANGE) ---
-
-ALLOWED_MODES = {'LAND', 'RTL', 'AUTO', 'GUIDED', 'BRAKE'}
+# Track processed control command IDs to prevent duplicate trigger loops
+processed_control_ids = set()
+processed_control_lock = threading.Lock()
 
 def handle_control_command(command):
     """
     Executes a remote control command received from Firebase.
     Supported types: ARM, TAKEOFF, MODE_CHANGE
+    Includes strict 15-second bidirectional time failsafe & deduplication guard.
     """
     if not command or not isinstance(command, dict):
         return
 
+    ctrl_ref = db.reference(f'missions/{DRONE_ID}/control_command')
     status = command.get('status')
     cmd_type = command.get('type')
-    timestamp = command.get('timestamp', 0)
-    current_time = int(time.time() * 1000)
+    cmd_id = str(command.get('id', command.get('command_id', command.get('timestamp', ''))))
 
     # Only process PENDING commands
     if status != 'PENDING':
         return
 
-    # Stale command check (15 seconds)
-    if current_time - timestamp > 15000:
-        print(f"[CONTROL] Stale control command ({(current_time - timestamp)/1000:.1f}s old). Ignoring.")
+    # Deduplication Guard
+    if cmd_id:
+        with processed_control_lock:
+            if cmd_id in processed_control_ids:
+                return
+            processed_control_ids.add(cmd_id)
+            if len(processed_control_ids) > 50:
+                try:
+                    processed_control_ids.remove(next(iter(processed_control_ids)))
+                except Exception:
+                    pass
+
+    raw_ts = command.get('timestamp', 0)
+    timestamp = parse_and_normalize_timestamp(raw_ts)
+    current_time = int(time.time() * 1000)
+    time_diff = current_time - timestamp if timestamp > 0 else 9999999
+
+    # STRICT 15-SECOND BIDIRECTIONAL TIME FAILSAFE
+    # Checks if command is missing a timestamp, older than 15s, or sent in the future relative to RPi clock (> 15s skew)
+    if timestamp <= 0 or abs(time_diff) > 15000:
+        age_str = f"{time_diff/1000:.1f}s" if timestamp > 0 else "MISSING/INVALID"
+        print(f"\n[CONTROL FAILSAFE] ==========================================")
+        print(f"[CONTROL FAILSAFE] [REJECTED] CONTROL COMMAND '{cmd_type}' IS STALE OR HAS INVALID TIMESTAMP!")
+        print(f"[CONTROL FAILSAFE] App Timestamp: {timestamp} ({format_timestamp(timestamp) if timestamp > 0 else 'N/A'})")
+        print(f"[CONTROL FAILSAFE] RPi Current Time: {current_time} ({format_timestamp(current_time)})")
+        print(f"[CONTROL FAILSAFE] Time Difference: {age_str} (Allowed limit: ±15.0s)")
+        print(f"[CONTROL FAILSAFE] REJECTING & MARKING 'EXPIRED_STALE' IN FIREBASE!")
+        print(f"[CONTROL FAILSAFE] ==========================================\n")
         try:
-            ctrl_ref = db.reference(f'missions/{DRONE_ID}/control_command')
-            ctrl_ref.update({'status': 'FAILED', 'error': 'Command expired'})
-        except Exception:
-            pass
+            ctrl_ref.update({'status': 'EXPIRED_STALE', 'error': f'Command timestamp stale/invalid ({age_str})'})
+        except Exception as e:
+            print(f"[CONTROL FAILSAFE] Error updating Firebase status: {e}")
         return
 
     print(f"[CONTROL] ========== CONTROL COMMAND ==========")
     print(f"[CONTROL] Type: {cmd_type}")
     print(f"[CONTROL] Timestamp: {timestamp} ({format_timestamp(timestamp)})")
-
-    ctrl_ref = db.reference(f'missions/{DRONE_ID}/control_command')
+    print(f"[CONTROL] Time Diff: {time_diff/1000:.1f}s")
 
     try:
         if cmd_type == 'ARM':
@@ -1058,8 +1101,10 @@ def control_command_listener_thread():
     def on_control_event(event):
         try:
             print(f"[CONTROL] Firebase event - path: {event.path}, data: {event.data}")
-            if event.data and isinstance(event.data, dict):
-                handle_control_command(event.data)
+            # Pull full command object from Firebase to ensure completeness
+            cmd_data = ctrl_ref.get()
+            if cmd_data and isinstance(cmd_data, dict):
+                handle_control_command(cmd_data)
         except Exception as e:
             print(f"[CONTROL] Event handler error: {e}")
             traceback.print_exc()
