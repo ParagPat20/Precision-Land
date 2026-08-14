@@ -206,10 +206,46 @@ class ArucoSingleTracker():
             except Exception:
                 pass
 
+            # Environmental & Code-level Exposure/Gain controls to eliminate white floor glare
+            # Defaults matched to tuned Guvcview profile for crisp high-altitude checkerboard contrast
+            bright_val = float(os.environ.get("CAMERA_BRIGHTNESS", -15))
+            contrast_val = float(os.environ.get("CAMERA_CONTRAST", 35))
+            gamma_val = float(os.environ.get("CAMERA_GAMMA", 75))
+            gain_val = float(os.environ.get("CAMERA_GAIN", 33))
+            sharpness_val = float(os.environ.get("CAMERA_SHARPNESS", 20))
+            exposure_val = float(os.environ.get("CAMERA_EXPOSURE", 20))
+
+            try:
+                self._cap.set(cv2.CAP_PROP_BRIGHTNESS, bright_val)
+                self._cap.set(cv2.CAP_PROP_CONTRAST, contrast_val)
+                self._cap.set(cv2.CAP_PROP_GAMMA, gamma_val)
+                self._cap.set(cv2.CAP_PROP_GAIN, gain_val)
+                self._cap.set(cv2.CAP_PROP_SHARPNESS, sharpness_val)
+                self._cap.set(cv2.CAP_PROP_EXPOSURE, exposure_val)
+            except Exception as e:
+                print(f"[CAMERA] OpenCV exposure property configuration note: {e}")
+
+            # Apply v4l2-ctl hardware controls on Linux/RPi for guaranteed driver-level persistence
+            if os.name == 'posix':
+                try:
+                    import subprocess
+                    v4l2_cmd = [
+                        "v4l2-ctl", "-d", "/dev/video0",
+                        "-c", f"brightness={int(bright_val)}",
+                        "-c", f"contrast={int(contrast_val)}",
+                        "-c", f"gamma={int(gamma_val)}",
+                        "-c", f"gain={int(gain_val)}",
+                        "-c", f"sharpness={int(sharpness_val)}",
+                        "-c", f"exposure_absolute={int(exposure_val)}"
+                    ]
+                    subprocess.run(v4l2_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                except Exception:
+                    pass
+
             actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             actual_fps = float(self._cap.get(cv2.CAP_PROP_FPS))
-            print(f"[CAMERA] USB Camera (OV9281 Mono B&W) initialized: {actual_w}x{actual_h} @ {actual_fps:.0f} FPS (Full Res/FPS, Fixed Focus)")
+            print(f"[CAMERA] USB Camera (OV9281 Mono B&W) initialized: {actual_w}x{actual_h} @ {actual_fps:.0f} FPS (Tuned: Brightness={int(bright_val)}, Contrast={int(contrast_val)}, Gain={int(gain_val)}, Exposure={int(exposure_val)})")
 
         #-- Font for the text in the image
         self.font = cv2.FONT_HERSHEY_PLAIN

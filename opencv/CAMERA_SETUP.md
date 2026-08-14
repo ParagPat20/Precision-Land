@@ -1,19 +1,19 @@
 # Precision Landing Camera Configuration (OV9281 Mono & 64MP Pi Camera)
 
-## Supported Camera Configurations
+## Tuned Hardware Camera Profile (OV9281 Monochrome 120° Wide FOV)
 
-### 1. OV9281 USB Monochrome Camera (12MP / 120° Wide FOV) - Recommended Default
-- **Type**: USB Global Shutter Monochrome (Black & White) Camera
-- **Resolution**: 1280x720 (Full HD / 720p 16:9 120° Wide FOV)
-- **FPS**: 60 - 120 FPS (High Performance MJPG throughput)
-- **Focus**: Fixed Focus (No Autofocus needed/supported)
-- **Processing Advantage**: Ultra-fast grayscale capture with minimal CPU load
+All vision scripts (`lib_aruco_pose.py`, `aruco_pose_estimation.py`, `save_snapshots.py`, `main.py`) are pre-configured with the tuned Guvcview profile for crisp, high-altitude checkerboard and ArUco marker tracking without floor glare:
 
-### 2. Arducam 64MP / Pi Camera Module 3 (Picamera2)
-- **Type**: CSI Pi Camera Module
-- **Resolution**: 640x360 (Default for reduced CPU load on high-MP sensor)
-- **FPS**: 30 FPS
-- **Focus**: Continuous Autofocus (`AfMode: 2`) enabled via Picamera2
+- **Resolution**: `1280x720` (720p 16:9 Full Resolution)
+- **FPS**: `120 FPS` (High throughput Motion-JPEG)
+- **Camera Output**: `MJPG - Motion-JPEG`
+- **Brightness**: `-15` (Reduces blown-out tile highlights)
+- **Contrast**: `35` (Sharpened black & white square contrast)
+- **Gamma**: `75`
+- **Gain**: `33`
+- **Sharpness**: `20`
+- **Exposure Time Absolute**: `20`
+- **Backlight Compensation**: `1`
 
 ## Camera Calibration
 
@@ -22,11 +22,8 @@
 ```bash
 cd opencv
 
-# Capture calibration images at 640x360 (recommended)
-python save_snapshots.py --folder snaps --name snapshot --dwidth 640 --dheight 360
-
-# OR capture at native resolution (slower but more accurate)
-python save_snapshots.py --folder snaps --name snapshot --dwidth 2304 --dheight 1296
+# Capture 1280x720 calibration snapshots with tuned high-contrast profile
+python save_snapshots.py --folder snaps --name snapshot --dwidth 1280 --dheight 720
 ```
 
 **Instructions**:
@@ -40,7 +37,7 @@ python save_snapshots.py --folder snaps --name snapshot --dwidth 2304 --dheight 
 ### Step 2: Run Camera Calibration
 
 ```bash
-# For 640x360 calibration images
+# For 1280x720 calibration images
 python cameracalib.py snaps jpg 9 6 25
 
 # The script will generate:
@@ -62,15 +59,14 @@ mv snaps/cameraDistortion.txt cameraDistortion_webcam.txt
 ### Test Camera and ArUco Detection
 
 ```bash
-# Test ArUco detection at 640x360
+# Test ArUco detection at 1280x720 @ 120 FPS
 python aruco_pose_estimation.py
 ```
 
 This will:
-- Open camera at 640x360 resolution
+- Open camera at 1280x720 resolution @ 120 FPS
 - Detect ArUco markers (ID: 72 by default)
-- Show position and orientation
-- Display 120° wide field of view
+- Show position and orientation with high-contrast anti-glare tuned profile
 
 ### Test with Main Script
 
@@ -78,18 +74,18 @@ This will:
 cd ../src
 
 # Test precision landing (requires drone connection)
-python main.py --connect <connection_string>
+python main.py --connect /dev/ttyACM0
 ```
 
 ## Configuration Files Updated
 
-All files have been updated to support the new camera:
+All files have been updated to support the tuned high-resolution hardware profile:
 
-1. ✅ **lib_aruco_pose.py** - Default: 640x360
-2. ✅ **aruco_pose_estimation.py** - Default: 640x360
-3. ✅ **save_snapshots.py** - Default: 640x360
-4. ✅ **main.py** - Uses 640x360 for processing
-5. ✅ **cameracalib.py** - Uses whatever images you provide
+1. ✅ **lib_aruco_pose.py** - Default: `1280x720 @ 120 FPS` (Brightness -15, Contrast 35, Gain 33, Exposure 20)
+2. ✅ **aruco_pose_estimation.py** - Default: `1280x720 @ 120 FPS` (Tuned Guvcview profile)
+3. ✅ **save_snapshots.py** - Default: `1280x720 @ 120 FPS` (Tuned Guvcview profile)
+4. ✅ **main.py** - Default: `1280x720 @ 120 FPS`
+5. ✅ **cameracalib.py** - Processes 1280x720 high-contrast snapshots
 
 ## Performance Comparison
 

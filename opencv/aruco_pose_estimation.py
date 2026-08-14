@@ -195,13 +195,47 @@ if not use_picamera:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, REQ_W)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, REQ_H)
     try:
-        cap.set(cv2.CAP_PROP_FPS, 60)
+        cap.set(cv2.CAP_PROP_FPS, 120)
     except Exception:
         pass
     try:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     except Exception:
         pass
+
+    # Tuned Guvcview Profile Settings for high-contrast glare-free checkerboard/aruco tracking
+    bright_val = float(os.environ.get("CAMERA_BRIGHTNESS", -15))
+    contrast_val = float(os.environ.get("CAMERA_CONTRAST", 35))
+    gamma_val = float(os.environ.get("CAMERA_GAMMA", 75))
+    gain_val = float(os.environ.get("CAMERA_GAIN", 33))
+    sharpness_val = float(os.environ.get("CAMERA_SHARPNESS", 20))
+    exposure_val = float(os.environ.get("CAMERA_EXPOSURE", 20))
+
+    try:
+        cap.set(cv2.CAP_PROP_BRIGHTNESS, bright_val)
+        cap.set(cv2.CAP_PROP_CONTRAST, contrast_val)
+        cap.set(cv2.CAP_PROP_GAMMA, gamma_val)
+        cap.set(cv2.CAP_PROP_GAIN, gain_val)
+        cap.set(cv2.CAP_PROP_SHARPNESS, sharpness_val)
+        cap.set(cv2.CAP_PROP_EXPOSURE, exposure_val)
+    except Exception:
+        pass
+
+    if os.name == 'posix':
+        try:
+            import subprocess
+            v4l2_cmd = [
+                "v4l2-ctl", "-d", "/dev/video0",
+                "-c", f"brightness={int(bright_val)}",
+                "-c", f"contrast={int(contrast_val)}",
+                "-c", f"gamma={int(gamma_val)}",
+                "-c", f"gain={int(gain_val)}",
+                "-c", f"sharpness={int(sharpness_val)}",
+                "-c", f"exposure_absolute={int(exposure_val)}"
+            ]
+            subprocess.run(v4l2_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except Exception:
+            pass
 
 #-- Read back actual frame size and scale intrinsics if different from calibration
 if use_picamera:

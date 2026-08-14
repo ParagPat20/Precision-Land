@@ -1172,8 +1172,8 @@ parser.add_argument('--no-video', action='store_true', help="Disable the camera 
 parser.add_argument('--no-record', action='store_true', help="Disable automatic video recording during armed state.")
 parser.add_argument('--no-servo', action='store_true', help="Disable servo controller initialization and monitoring.")
 parser.add_argument('--no-camera', action='store_true', help="Disable camera and vision tracking system entirely.")
-parser.add_argument('--resolution', default='1280x720', help="Camera resolution WxH (default: 1280x720 for OV9281 mono full resolution; 640x360 for 64MP).")
-parser.add_argument('--fps', type=int, default=60, help="Camera target FPS for high performance (default: 60).")
+parser.add_argument('--resolution', default='1280x720', help="Camera resolution WxH (default: 1280x720 for OV9281 mono full resolution).")
+parser.add_argument('--fps', type=int, default=120, help="Camera target FPS for high performance (default: 120).")
 args = parser.parse_args()
 
 if args.no_camera:

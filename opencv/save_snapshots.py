@@ -100,10 +100,58 @@ def save_snaps_opencv(width=0, height=0, name="snapshot", folder=".", raspi=Fals
         os.system('sudo modprobe bcm2835-v4l2')
 
     cap = cv2.VideoCapture(0)
-    if width > 0 and height > 0:
-        print("Setting the custom Width and Height")
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    
+    # Configure high-speed MJPEG 1280x720 @ 120 FPS default
+    req_w = width if width > 0 else 1280
+    req_h = height if height > 0 else 720
+    try:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    except Exception:
+        pass
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, req_w)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, req_h)
+    try:
+        cap.set(cv2.CAP_PROP_FPS, 120)
+    except Exception:
+        pass
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
+
+    # Tuned Guvcview Profile Settings for high-contrast glare-free checkerboard snapshots
+    bright_val = float(os.environ.get("CAMERA_BRIGHTNESS", -15))
+    contrast_val = float(os.environ.get("CAMERA_CONTRAST", 35))
+    gamma_val = float(os.environ.get("CAMERA_GAMMA", 75))
+    gain_val = float(os.environ.get("CAMERA_GAIN", 33))
+    sharpness_val = float(os.environ.get("CAMERA_SHARPNESS", 20))
+    exposure_val = float(os.environ.get("CAMERA_EXPOSURE", 20))
+
+    try:
+        cap.set(cv2.CAP_PROP_BRIGHTNESS, bright_val)
+        cap.set(cv2.CAP_PROP_CONTRAST, contrast_val)
+        cap.set(cv2.CAP_PROP_GAMMA, gamma_val)
+        cap.set(cv2.CAP_PROP_GAIN, gain_val)
+        cap.set(cv2.CAP_PROP_SHARPNESS, sharpness_val)
+        cap.set(cv2.CAP_PROP_EXPOSURE, exposure_val)
+    except Exception:
+        pass
+
+    if os.name == 'posix':
+        try:
+            import subprocess
+            v4l2_cmd = [
+                "v4l2-ctl", "-d", "/dev/video0",
+                "-c", f"brightness={int(bright_val)}",
+                "-c", f"contrast={int(contrast_val)}",
+                "-c", f"gamma={int(gamma_val)}",
+                "-c", f"gain={int(gain_val)}",
+                "-c", f"sharpness={int(sharpness_val)}",
+                "-c", f"exposure_absolute={int(exposure_val)}"
+            ]
+            subprocess.run(v4l2_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except Exception:
+            pass
     
     try:
         if not os.path.exists(folder):
