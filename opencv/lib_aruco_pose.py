@@ -214,7 +214,7 @@ class ArucoSingleTracker():
             gamma_val = float(os.environ.get("CAMERA_GAMMA", 75))
             gain_val = float(os.environ.get("CAMERA_GAIN", 33))
             sharpness_val = float(os.environ.get("CAMERA_SHARPNESS", 20))
-            exposure_val = float(os.environ.get("CAMERA_EXPOSURE", 20))
+            exposure_val = float(os.environ.get("CAMERA_EXPOSURE", 1))
 
             try:
                 self._cap.set(cv2.CAP_PROP_BRIGHTNESS, bright_val)
