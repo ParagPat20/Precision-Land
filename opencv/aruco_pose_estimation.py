@@ -35,6 +35,7 @@ We are going to obtain the following quantities:
 """
 
 import os
+os.environ["QT_QPA_PLATFORM"] = "xcb"
 import sys
 import shutil
 import glob

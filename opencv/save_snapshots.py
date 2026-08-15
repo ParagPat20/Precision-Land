@@ -15,11 +15,12 @@ Buttons:
   
 """
 
+import os
+os.environ["QT_QPA_PLATFORM"] = "xcb"
 import cv2
 import time
 import sys
 import argparse
-import os
 
 # Try to import Picamera2 for Raspberry Pi camera support
 try:
