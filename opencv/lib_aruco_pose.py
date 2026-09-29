@@ -156,14 +156,12 @@ class ArucoSingleTracker():
         # Decide capture backend (Picamera2 vs OpenCV USB Camera) with graceful fallback
         # use_picamera: True forces Picamera2 (64MP), False forces OpenCV (OV9281 USB), None auto-detect
         self._use_picamera = False
-        if use_picamera is True and _PICAMERA2_AVAILABLE:
-            self._use_picamera = True
-        elif use_picamera is None and _PICAMERA2_AVAILABLE:
-            # Auto-enable Picamera2 if library is available and initialization succeeds (64MP Camera with AF)
+        if (use_picamera is True or use_picamera is None) and _PICAMERA2_AVAILABLE:
+            # Enable Picamera2 if requested or available (64MP Camera with AF)
             try:
                 self._picam2 = Picamera2()
-                # Configure camera with specified resolution
-                cfg = self._picam2.create_preview_configuration(main={"size": (int(camera_size[0]), int(camera_size[1]))})
+                # Configure camera with specified resolution in native BGR format for OpenCV
+                cfg = self._picam2.create_preview_configuration(main={"size": (int(camera_size[0]), int(camera_size[1])), "format": "BGR888"})
                 self._picam2.configure(cfg)
                 self._picam2.start()
                 
@@ -178,7 +176,9 @@ class ArucoSingleTracker():
                 time.sleep(0.5)  # warmup for camera and autofocus to stabilize
                 self._use_picamera = True
                 print(f"[CAMERA] Picamera2 (64MP AF) initialized successfully at {camera_size[0]}x{camera_size[1]}")
-            except Exception:
+            except Exception as e:
+                if use_picamera is True:
+                    print(f"[CAMERA] Warning: Forced Picamera2 initialization failed: {e}")
                 self._use_picamera = False
 
         if self._use_picamera:
@@ -321,8 +321,8 @@ class ArucoSingleTracker():
             #-- Read the camera frame (Picamera2 or OpenCV)
             if self._use_picamera:
                 try:
-                    rgb = self._picam2.capture_array()
-                    frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                    raw_frame = self._picam2.capture_array()
+                    frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB)
                     ret = True
                 except Exception as e:
                     ret = False
@@ -476,6 +476,10 @@ class ArucoSingleTracker():
                     cv2.destroyAllWindows()
                     break
             
+            with self._frame_lock:
+                self.last_frame = frame.copy()
+                self.last_frame_ts = time.time()
+
             if not loop: return(marker_found, x, y, z)
             
 

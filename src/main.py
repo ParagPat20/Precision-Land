@@ -97,6 +97,7 @@ from led_controller import DroneLEDController, DroneAlarmController
 from fc_log_service import start_log_services
 from core.mission_generator import DeliveryTemplate, LatLng
 from servo_controller import ServoController
+from rtsp_streamer import RTSPStreamer
 
 # Backoff configuration for Firebase reconnections
 FIREBASE_INITIAL_BACKOFF = 5  # seconds
@@ -1165,7 +1166,7 @@ def resolve_vehicle_connection_path(manual_path=None):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--connect', default = 'udpout:192.168.144.14:14551', help="Vehicle connection path. Defaults to Prolific *USB-Serial* under /dev/serial/by-id when present, else Pixhawk-style by-id, else ttyUSB0/ttyACM0. Overridden to UDP by default.")
+parser.add_argument('--connect', default = os.environ.get('JECH_MAVLINK_CONNECT', 'udpin:127.0.0.1:14555'), help="Vehicle connection path. Defaults to udpin:127.0.0.1:14555 from MAVLink router, or direct udpout:192.168.144.14:14551.")
 parser.add_argument('--baud', type=int, default=int(os.environ.get("JECH_MAVLINK_BAUD", "921600")), help="Vehicle serial baud rate. Default: %(default)s")
 parser.add_argument('--servo-port', default=None, help="Serial port for ST3215 and SC09 servos. Defaults to JECH_SERVO_PORT, then auto-detects common RPi serial devices.")
 parser.add_argument('--no-video', action='store_true', help="Disable the camera window (OpenCV window) for headless running.")
@@ -1605,7 +1606,16 @@ else:
         aruco_tracker = None
         camera_active = False
         print(f"[CAMERA] Disabled/unavailable, skipping ArUco tracking: {e}", flush=True)
-                
+
+# Initialize zero-latency RTSP Streamer for FPV HUD feed over MediaMTX / 5G link
+try:
+    stream_w = camera_resolution[0] if 'camera_resolution' in locals() else 1280
+    stream_h = camera_resolution[1] if 'camera_resolution' in locals() else 720
+    rtsp_streamer = RTSPStreamer(rtsp_url="rtsp://127.0.0.1:8554/cam", width=stream_w, height=stream_h, fps=30)
+    rtsp_streamer.start()
+except Exception as stream_err:
+    rtsp_streamer = None
+    print(f"[STREAMER] Could not start RTSP streamer: {stream_err}", flush=True)
                 
 time_0 = time.time()
 
@@ -1636,9 +1646,26 @@ while True:
 
     # If armed, record the latest camera frame without blocking the tracking loop.
     # The tracker exposes the last frame so we don't open the camera twice.
+    frame = getattr(aruco_tracker, "last_frame", None)
+    if frame is not None:
+        try:
+            mode_str = getattr(getattr(vehicle, "mode", None), "name", "UNKNOWN")
+            armed_str = "ARMED" if getattr(vehicle, "armed", False) else "DISARMED"
+            alt_obj = getattr(getattr(vehicle, "location", None), "global_relative_frame", None)
+            alt_m = getattr(alt_obj, "alt", 0.0) if alt_obj else 0.0
+            batt_obj = getattr(vehicle, "battery", None)
+            batt_v = getattr(batt_obj, "voltage", 0.0) if batt_obj else 0.0
+            tag_str = f"LOCKED #72 (Z: {z_cm:.0f}cm)" if marker_found else "SEARCHING"
+            hud_text = f"{mode_str} | {armed_str} | ALT:{alt_m:.1f}m | BATT:{batt_v:.1f}V | {tag_str}"
+            color = (0, 255, 0) if marker_found else (0, 165, 255)
+            cv2.putText(frame, hud_text, (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+            if 'rtsp_streamer' in locals() and rtsp_streamer is not None:
+                rtsp_streamer.send_frame(frame)
+        except Exception:
+            pass
+
     if getattr(vehicle, "armed", False) and video_recorder is not None:
         try:
-            frame = getattr(aruco_tracker, "last_frame", None)
             frame_ts = getattr(aruco_tracker, "last_frame_ts", 0.0)
             if frame is not None and frame_ts > last_recorded_ts:
                 # Limit submissions to target FPS to avoid queue buildup and save CPU/memory

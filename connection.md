@@ -1,20 +1,16 @@
-# SIM7670G + Raspberry Pi 5 Recovery & Connection Guide
+# 4G LTE Modem (Quectel EC200U / SIM7670G) + Raspberry Pi 5 Connection Guide
 
-## Updated Notes
+## Verified Working Setup (Active & Operational)
+* **Connected Hardware**: Quectel EC200U LTE Cat 1 module (USB ID `2c7c:0901`, firmware `EC200UCNAAR03A13M08`).
+* **Active SIM**: Airtel 4G (APN: `airtelgprs.com`).
+* **Interface**: `usb0` via high-speed ECM driver (`cdc_ether`).
+* **Routing Architecture & Priority Rules**:
+  1. **Primary Internet (Priority #1)**: `wlan0` (`MIBEE`) with **Metric 100**. Whenever MIBEE is connected, all internet traffic and DNS strictly go through Wi-Fi.
+  2. **Secondary / Failover Internet (Priority #2)**: `usb0` (Airtel 4G LTE) with **Metric 600**. LTE only handles default internet traffic when MIBEE goes out of range or disconnects.
+  3. **FPV Video Hotspot (Always On & Sharing)**: `wlan1` (`JECH_5G_VIDEO`, `192.168.50.1/24`). Has IP forwarding and NFT/NAT masquerade enabled, so any laptop/phone connected to JECH 5G automatically gets internet through whichever link is currently active (MIBEE or LTE).
+  4. **Autopilot Telemetry (Never Internet)**: `eth0-v6x` (`192.168.144.15/24`) with **Metric 900** and **`ipv4.never-default: yes`**. It will never claim default route or attempt to route internet.
+* **Automated Daemon**: Systemd service `ec200u-lte.service` (`/usr/local/bin/ec200u_lte_daemon.py`) runs at boot, activates the data call (`AT+QNETDEVCTL=1,1,1`), and monitors link connectivity with auto-reconnect.
 
-* Preferred final setup: `wlan0` primary, `ppp0` LTE backup, `usb0` ignored.
-* `usb0` RNDIS mode was tested and detected, but no working routed internet on this firmware/config.
-* Remove any manually-added `usb0` default route after testing.
-
-## Purpose
-
-Commands that were successful/helpful after reset to restore:
-
-* WiFi primary internet
-* SIM7670G LTE backup internet via PPP (`ppp0`)
-* Modem detection/debugging
-
----
 
 # 1. Basic Detection / Debugging
 
