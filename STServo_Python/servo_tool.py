@@ -1195,8 +1195,8 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         
         print_header("Lock & Unlock Sequence Manager (4-Servo System)")
         print(f"Current Config Summary:")
-        print(f"  {C_CYA}LOCK Sequence:{C_RST}   Dual Lid DOWN -> ID 1: {lk.get('st1_pos', 1300)} & ID 2: {lk.get('st2_pos', 3500)} | Latches -> SC3: {lk.get('sc3_pos', 715)} & SC4: {lk.get('sc4_pos', 550)}")
-        print(f"  {C_CYA}UNLOCK Sequence:{C_RST} Latches -> SC3: {un.get('sc3_pos', 540)} & SC4: {un.get('sc4_pos', 750)} | Dual Lid UP -> ID 1: {un.get('st1_pos', 4000)} & ID 2: {un.get('st2_pos', 500)}")
+        print(f"  {C_CYA}LOCK Sequence:{C_RST}   Dual Lid DOWN -> ID 1: {lk.get('st1_pos', 1300)} & ID 2: {lk.get('st2_pos', 3500)} | Latches -> SC3: {lk.get('sc3_pos', 520)} & SC4: {lk.get('sc4_pos', 550)}")
+        print(f"  {C_CYA}UNLOCK Sequence:{C_RST} Latches -> SC3: {un.get('sc3_pos', 670)} & SC4: {un.get('sc4_pos', 750)} | Dual Lid UP -> ID 1: {un.get('st1_pos', 4000)} & ID 2: {un.get('st2_pos', 500)}")
         print("\nOptions:")
         print("  1. Test/Execute LOCK Sequence   (Dual Lid DOWN -> Latches Latch)")
         print("  2. Test/Execute UNLOCK Sequence (Latches Retract -> Dual Lid UP)")
@@ -1218,9 +1218,9 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             time.sleep(0.5)
             
             # Step 2: Engage Latches (SC servos 3 & 4)
-            print(f"\n{C_CYA}Step 2: Engaging Latches (Servo 3 -> {lk.get('sc3_pos', 715)} & Servo 4 -> {lk.get('sc4_pos', 550)})...{C_RST}")
+            print(f"\n{C_CYA}Step 2: Engaging Latches (Servo 3 -> {lk.get('sc3_pos', 520)} & Servo 4 -> {lk.get('sc4_pos', 550)})...{C_RST}")
             sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, lk.get('sc3_pos', 715), 0, lk.get('sc_speed', 1500))
+            sc_handler.WritePos(3, lk.get('sc3_pos', 520), 0, lk.get('sc_speed', 1500))
             sc_handler.write1ByteTxRx(4, 40, 1)
             sc_handler.WritePos(4, lk.get('sc4_pos', 550), 0, lk.get('sc_speed', 1500))
             time.sleep(1.0)
@@ -1235,9 +1235,9 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         elif sub == '2':
             print(f"\n{C_YEL}=== EXECUTING UNLOCK SEQUENCE ==={C_RST}")
             # Step 1: Retract Latches (SC servos 3 & 4)
-            print(f"\n{C_CYA}Step 1: Retracting Latches (Servo 3 -> {un.get('sc3_pos', 540)} & Servo 4 -> {un.get('sc4_pos', 750)})...{C_RST}")
+            print(f"\n{C_CYA}Step 1: Retracting Latches (Servo 3 -> {un.get('sc3_pos', 670)} & Servo 4 -> {un.get('sc4_pos', 750)})...{C_RST}")
             sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, un.get('sc3_pos', 540), 0, un.get('sc_speed', 1500))
+            sc_handler.WritePos(3, un.get('sc3_pos', 670), 0, un.get('sc_speed', 1500))
             sc_handler.write1ByteTxRx(4, 40, 1)
             sc_handler.WritePos(4, un.get('sc4_pos', 750), 0, un.get('sc_speed', 1500))
             time.sleep(1.0)
@@ -1273,10 +1273,10 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
                                          default=cfg_sub.get('st2_pos', 3500), min_val=0, max_val=4095)
             cfg_sub['st_speed'] = get_int(f"Lid Servos Speed [Current: {cfg_sub.get('st_speed', 2400)}]: ", 
                                           default=cfg_sub.get('st_speed', 2400), min_val=100, max_val=3000)
-            cfg_sub['sc3_pos'] = get_int(f"Servo 3 Latch Target (0-1023) [Current: {cfg_sub.get('sc3_pos', 715)}]: ", 
-                                         default=cfg_sub.get('sc3_pos', 715), min_val=0, max_val=1023)
-            cfg_sub['sc4_pos'] = get_int(f"Servo 4 Latch Target (0-1023) [Current: {cfg_sub.get('sc4_pos', 550)}]: ", 
-                                         default=cfg_sub.get('sc4_pos', 550), min_val=0, max_val=1023)
+            cfg_sub['sc3_pos'] = get_int(f"Servo 3 Latch Target (0-1023) [Current: {cfg_sub.get('sc3_pos', 520 if target_key == 'lock' else 670)}]: ", 
+                                         default=cfg_sub.get('sc3_pos', 520 if target_key == 'lock' else 670), min_val=0, max_val=1023)
+            cfg_sub['sc4_pos'] = get_int(f"Servo 4 Latch Target (0-1023) [Current: {cfg_sub.get('sc4_pos', 550 if target_key == 'lock' else 750)}]: ", 
+                                         default=cfg_sub.get('sc4_pos', 550 if target_key == 'lock' else 750), min_val=0, max_val=1023)
             cfg_sub['sc_speed'] = get_int(f"Latch Servos Speed [Current: {cfg_sub.get('sc_speed', 1500)}]: ", 
                                           default=cfg_sub.get('sc_speed', 1500), min_val=100, max_val=1500)
             
@@ -1936,7 +1936,7 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
             time.sleep(0.5)
             # Step 2: Engage Latches (SC servos 3 & 4)
             sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, lk.get('sc3_pos', 715), 0, lk.get('sc_speed', 1500))
+            sc_handler.WritePos(3, lk.get('sc3_pos', 520), 0, lk.get('sc_speed', 1500))
             sc_handler.write1ByteTxRx(4, 40, 1)
             sc_handler.WritePos(4, lk.get('sc4_pos', 550), 0, lk.get('sc_speed', 1500))
         elif cmd == 'unlock':
@@ -1945,7 +1945,7 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
             un = config['unlock']
             # Step 1: Retract Latches (SC servos 3 & 4)
             sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, un.get('sc3_pos', 540), 0, un.get('sc_speed', 1500))
+            sc_handler.WritePos(3, un.get('sc3_pos', 670), 0, un.get('sc_speed', 1500))
             sc_handler.write1ByteTxRx(4, 40, 1)
             sc_handler.WritePos(4, un.get('sc4_pos', 750), 0, un.get('sc_speed', 1500))
             time.sleep(0.8)

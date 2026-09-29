@@ -4,7 +4,7 @@
     "st2_pos": 3500,
     "st_speed": 2400,
     "st_acc": 50,
-    "sc3_pos": 715,
+    "sc3_pos": 520,
     "sc4_pos": 550,
     "sc_speed": 1500
   },
@@ -13,7 +13,7 @@
     "st2_pos": 500,
     "st_speed": 2400,
     "st_acc": 50,
-    "sc3_pos": 540,
+    "sc3_pos": 670,
     "sc4_pos": 750,
     "sc_speed": 1500
   }
