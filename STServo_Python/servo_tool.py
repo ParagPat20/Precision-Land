@@ -983,6 +983,24 @@ def save_sequence_config(config_data):
         print(f"{C_RED}Failed to save sequence configuration: {e}{C_RST}")
         return False
 
+def read_servo_pos_str(sts_handler, sc_handler, sid, prefer_type='ST'):
+    """
+    Reads position of a servo robustly, trying both handlers if needed,
+    and returning 'Offline' if communication fails instead of misleading '0'.
+    """
+    primary = sts_handler if prefer_type == 'ST' else sc_handler
+    secondary = sc_handler if prefer_type == 'ST' else sts_handler
+    
+    pos, res, _ = primary.ReadPos(sid)
+    if res == COMM_SUCCESS and 0 <= pos <= 4095:
+        return str(pos)
+        
+    pos_alt, res_alt, _ = secondary.ReadPos(sid)
+    if res_alt == COMM_SUCCESS and 0 <= pos_alt <= 4095:
+        return str(pos_alt)
+        
+    return f"Offline({primary.getTxRxResult(res)})"
+
 def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=3000, rotations=2.0, abs_target_pos=3000):
     """
     Executes continuous wheel rotation on ST3215 by counting 0-4096 rollover laps.
@@ -1286,10 +1304,10 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             sc_handler.WritePos(4, lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
             time.sleep(1.0)
             
-            p1, _, _ = sts_handler.ReadPos(1)
-            p2, _, _ = sts_handler.ReadPos(2)
-            p3, _, _ = sc_handler.ReadPos(3)
-            p4, _, _ = sc_handler.ReadPos(4)
+            p1 = read_servo_pos_str(sts_handler, sc_handler, 1, 'ST')
+            p2 = read_servo_pos_str(sts_handler, sc_handler, 2, 'ST')
+            p3 = read_servo_pos_str(sts_handler, sc_handler, 3, 'SC')
+            p4 = read_servo_pos_str(sts_handler, sc_handler, 4, 'SC')
             print(f"{C_GREEN}[LOCK COMPLETE] Positions: ID 1: {p1} | ID 2: {p2} | SC 3: {p3} | SC 4: {p4}{C_RST}")
             input("\nPress Enter to continue...")
 
@@ -1309,10 +1327,10 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
                                tolerance=un.get('st_tol', DEFAULT_LID_TOLERANCE), label="UNLOCK: DUAL LID UP")
             time.sleep(0.5)
             
-            p1, _, _ = sts_handler.ReadPos(1)
-            p2, _, _ = sts_handler.ReadPos(2)
-            p3, _, _ = sc_handler.ReadPos(3)
-            p4, _, _ = sc_handler.ReadPos(4)
+            p1 = read_servo_pos_str(sts_handler, sc_handler, 1, 'ST')
+            p2 = read_servo_pos_str(sts_handler, sc_handler, 2, 'ST')
+            p3 = read_servo_pos_str(sts_handler, sc_handler, 3, 'SC')
+            p4 = read_servo_pos_str(sts_handler, sc_handler, 4, 'SC')
             print(f"{C_GREEN}[UNLOCK COMPLETE] Positions: ID 1: {p1} | ID 2: {p2} | SC 3: {p3} | SC 4: {p4}{C_RST}")
             input("\nPress Enter to continue...")
 
