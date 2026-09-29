@@ -908,37 +908,66 @@ def continuous_rotation(sts_handler, sc_handler, active_id):
 # --- LOCK / UNLOCK SEQUENCE & ABSOLUTE POSITION SNAP TOOL ---
 SEQUENCE_CONFIG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "servo_sequences.json"))
 
+# =========================================================================
+# CENTRALIZED SERVO SEQUENCE CONFIGURATION
+# Modify these variables or servo_sequences.json. All menus, commands, and
+# sequences automatically use these values without needing hardcoded edits!
+# =========================================================================
+# Servo ID 1 & 2 (ST3215 Dual Lid Lifters)
+DEFAULT_LID1_LOCK_POS   = 1300
+DEFAULT_LID1_UNLOCK_POS = 4000
+DEFAULT_LID2_LOCK_POS   = 3500
+DEFAULT_LID2_UNLOCK_POS = 500
+DEFAULT_LID_SPEED       = 2400
+DEFAULT_LID_ACC         = 50
+
+# Servo ID 3 & 4 (SC09 Locking Latches / Kadi)
+DEFAULT_LATCH3_LOCK_POS   = 520
+DEFAULT_LATCH3_UNLOCK_POS = 690
+DEFAULT_LATCH4_LOCK_POS   = 550
+DEFAULT_LATCH4_UNLOCK_POS = 750
+DEFAULT_LATCH_SPEED       = 1500
+
 DEFAULT_SEQUENCE_CONFIG = {
     "lock": {
-        "st1_pos": 1300,
-        "st2_pos": 3000,
-        "st_speed": 2400,
-        "st_acc": 50,
-        "sc3_pos": 715,
-        "sc4_pos": 550,
-        "sc_speed": 1500
+        "st1_pos": DEFAULT_LID1_LOCK_POS,
+        "st2_pos": DEFAULT_LID2_LOCK_POS,
+        "st_speed": DEFAULT_LID_SPEED,
+        "st_acc": DEFAULT_LID_ACC,
+        "sc3_pos": DEFAULT_LATCH3_LOCK_POS,
+        "sc4_pos": DEFAULT_LATCH4_LOCK_POS,
+        "sc_speed": DEFAULT_LATCH_SPEED
     },
     "unlock": {
-        "st1_pos": 4000,
-        "st2_pos": 500,
-        "st_speed": 2400,
-        "st_acc": 50,
-        "sc3_pos": 540,
-        "sc4_pos": 750,
-        "sc_speed": 1500
+        "st1_pos": DEFAULT_LID1_UNLOCK_POS,
+        "st2_pos": DEFAULT_LID2_UNLOCK_POS,
+        "st_speed": DEFAULT_LID_SPEED,
+        "st_acc": DEFAULT_LID_ACC,
+        "sc3_pos": DEFAULT_LATCH3_UNLOCK_POS,
+        "sc4_pos": DEFAULT_LATCH4_UNLOCK_POS,
+        "sc_speed": DEFAULT_LATCH_SPEED
     }
 }
 
 def load_sequence_config():
-    """Load sequence configuration from JSON file or return defaults."""
+    """
+    Load sequence configuration from JSON file.
+    Automatically merges with DEFAULT_SEQUENCE_CONFIG so any missing keys
+    always have safe, valid defaults.
+    """
+    cfg = json.loads(json.dumps(DEFAULT_SEQUENCE_CONFIG))
     try:
         if os.path.exists(SEQUENCE_CONFIG_FILE):
             with open(SEQUENCE_CONFIG_FILE, 'r') as f:
-                data = json.load(f)
-                return data
+                user_data = json.load(f)
+                if 'lock' in user_data and isinstance(user_data['lock'], dict):
+                    cfg['lock'].update(user_data['lock'])
+                if 'unlock' in user_data and isinstance(user_data['unlock'], dict):
+                    cfg['unlock'].update(user_data['unlock'])
+                return cfg
     except Exception as e:
         print(f"{C_RED}Warning loading sequence file: {e}{C_RST}")
-    return json.loads(json.dumps(DEFAULT_SEQUENCE_CONFIG))
+    return cfg
 
 def save_sequence_config(config_data):
     """Save sequence configuration data to JSON file."""
@@ -1141,6 +1170,14 @@ def move_dual_lid_sync(sts_handler, target1, target2, speed=2400, acc=50, label=
 
 def dual_lid_menu(sts_handler):
     while True:
+        cfg = load_sequence_config()
+        un = cfg['unlock']
+        lk = cfg['lock']
+        u1, u2 = un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS), un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS)
+        l1, l2 = lk.get('st1_pos', DEFAULT_LID1_LOCK_POS), lk.get('st2_pos', DEFAULT_LID2_LOCK_POS)
+        spd = un.get('st_speed', DEFAULT_LID_SPEED)
+        acc = un.get('st_acc', DEFAULT_LID_ACC)
+
         print_header("Dual Lid Synchronized Control (ID 1 & ID 2)")
         pos1, r1, _ = sts_handler.ReadPos(1)
         pos2, r2, _ = sts_handler.ReadPos(2)
@@ -1148,8 +1185,8 @@ def dual_lid_menu(sts_handler):
         p2_s = f"{pos2}" if r2 == COMM_SUCCESS else "Offline"
         print(f"Current Encoder Positions: Servo 1 = {p1_s} | Servo 2 = {p2_s}")
         print("\nOptions:")
-        print(f"  1. Lid UP / UNLOCK     -> {C_GREEN}Servo 1: 4000 & Servo 2: 500{C_RST}  (Simultaneous)")
-        print(f"  2. Lid DOWN / LOCK     -> {C_GREEN}Servo 1: 1300 & Servo 2: 3500{C_RST} (Simultaneous)")
+        print(f"  1. Lid UP / UNLOCK     -> {C_GREEN}Servo 1: {u1} & Servo 2: {u2}{C_RST}  (Simultaneous)")
+        print(f"  2. Lid DOWN / LOCK     -> {C_GREEN}Servo 1: {l1} & Servo 2: {l2}{C_RST} (Simultaneous)")
         print("  3. Custom Target Move  -> Enter targets for ID 1 and ID 2")
         print("  4. Relative Jog Both   -> Move both up/down together by step")
         print("  0. Back to Main Menu")
@@ -1158,18 +1195,19 @@ def dual_lid_menu(sts_handler):
         if sub == '0':
             break
         elif sub == '1':
-            move_dual_lid_sync(sts_handler, 4000, 500, label="LID UP (OPEN)")
+            move_dual_lid_sync(sts_handler, u1, u2, speed=spd, acc=acc, label="LID UP (OPEN)")
             input("\nPress Enter to continue...")
         elif sub == '2':
-            move_dual_lid_sync(sts_handler, 1300, 3500, label="LID DOWN (CLOSE)")
+            move_dual_lid_sync(sts_handler, l1, l2, speed=spd, acc=acc, label="LID DOWN (CLOSE)")
             input("\nPress Enter to continue...")
         elif sub == '3':
             p1 = get_int("Enter Target for Servo 1 (0-4095) [Default 2048]: ", default=2048, min_val=0, max_val=4095)
             if p1 is None: continue
             p2 = get_int("Enter Target for Servo 2 (0-4095) [Default 2048]: ", default=2048, min_val=0, max_val=4095)
             if p2 is None: continue
-            spd = get_int("Enter Speed (0-3000) [Default 2400]: ", default=2400, min_val=0, max_val=3000)
-            move_dual_lid_sync(sts_handler, p1, p2, speed=spd, label="CUSTOM DUAL LID")
+            s_val = get_int(f"Enter Speed (0-3000) [Default {spd}]: ", default=spd, min_val=0, max_val=3000)
+            if s_val is None: continue
+            move_dual_lid_sync(sts_handler, p1, p2, speed=s_val, acc=acc, label="CUSTOM DUAL LID")
             input("\nPress Enter to continue...")
         elif sub == '4':
             step = get_int("Enter step delta (+/- steps) [Default: 100]: ", default=100)
@@ -1195,8 +1233,8 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         
         print_header("Lock & Unlock Sequence Manager (4-Servo System)")
         print(f"Current Config Summary:")
-        print(f"  {C_CYA}LOCK Sequence:{C_RST}   Dual Lid DOWN -> ID 1: {lk.get('st1_pos', 1300)} & ID 2: {lk.get('st2_pos', 3500)} | Latches -> SC3: {lk.get('sc3_pos', 520)} & SC4: {lk.get('sc4_pos', 550)}")
-        print(f"  {C_CYA}UNLOCK Sequence:{C_RST} Latches -> SC3: {un.get('sc3_pos', 670)} & SC4: {un.get('sc4_pos', 750)} | Dual Lid UP -> ID 1: {un.get('st1_pos', 4000)} & ID 2: {un.get('st2_pos', 500)}")
+        print(f"  {C_CYA}LOCK Sequence:{C_RST}   Dual Lid DOWN -> ID 1: {lk.get('st1_pos', DEFAULT_LID1_LOCK_POS)} & ID 2: {lk.get('st2_pos', DEFAULT_LID2_LOCK_POS)} | Latches -> SC3: {lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS)} & SC4: {lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS)}")
+        print(f"  {C_CYA}UNLOCK Sequence:{C_RST} Latches -> SC3: {un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS)} & SC4: {un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS)} | Dual Lid UP -> ID 1: {un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS)} & ID 2: {un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS)}")
         print("\nOptions:")
         print("  1. Test/Execute LOCK Sequence   (Dual Lid DOWN -> Latches Latch)")
         print("  2. Test/Execute UNLOCK Sequence (Latches Retract -> Dual Lid UP)")
@@ -1213,16 +1251,16 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         elif sub == '1':
             print(f"\n{C_YEL}=== EXECUTING LOCK SEQUENCE ==={C_RST}")
             # Step 1: Move Dual Lid DOWN synchronously
-            move_dual_lid_sync(sts_handler, lk.get('st1_pos', 1300), lk.get('st2_pos', 3500), 
-                               speed=lk.get('st_speed', 2400), acc=lk.get('st_acc', 50), label="LOCK: DUAL LID DOWN")
+            move_dual_lid_sync(sts_handler, lk.get('st1_pos', DEFAULT_LID1_LOCK_POS), lk.get('st2_pos', DEFAULT_LID2_LOCK_POS), 
+                               speed=lk.get('st_speed', DEFAULT_LID_SPEED), acc=lk.get('st_acc', DEFAULT_LID_ACC), label="LOCK: DUAL LID DOWN")
             time.sleep(0.5)
             
             # Step 2: Engage Latches (SC servos 3 & 4)
-            print(f"\n{C_CYA}Step 2: Engaging Latches (Servo 3 -> {lk.get('sc3_pos', 520)} & Servo 4 -> {lk.get('sc4_pos', 550)})...{C_RST}")
+            print(f"\n{C_CYA}Step 2: Engaging Latches (Servo 3 -> {lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS)} & Servo 4 -> {lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS)})...{C_RST}")
             sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, lk.get('sc3_pos', 520), 0, lk.get('sc_speed', 1500))
+            sc_handler.WritePos(3, lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
             sc_handler.write1ByteTxRx(4, 40, 1)
-            sc_handler.WritePos(4, lk.get('sc4_pos', 550), 0, lk.get('sc_speed', 1500))
+            sc_handler.WritePos(4, lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
             time.sleep(1.0)
             
             p1, _, _ = sts_handler.ReadPos(1)
@@ -1235,16 +1273,16 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         elif sub == '2':
             print(f"\n{C_YEL}=== EXECUTING UNLOCK SEQUENCE ==={C_RST}")
             # Step 1: Retract Latches (SC servos 3 & 4)
-            print(f"\n{C_CYA}Step 1: Retracting Latches (Servo 3 -> {un.get('sc3_pos', 670)} & Servo 4 -> {un.get('sc4_pos', 750)})...{C_RST}")
+            print(f"\n{C_CYA}Step 1: Retracting Latches (Servo 3 -> {un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS)} & Servo 4 -> {un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS)})...{C_RST}")
             sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, un.get('sc3_pos', 670), 0, un.get('sc_speed', 1500))
+            sc_handler.WritePos(3, un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS), 0, un.get('sc_speed', DEFAULT_LATCH_SPEED))
             sc_handler.write1ByteTxRx(4, 40, 1)
-            sc_handler.WritePos(4, un.get('sc4_pos', 750), 0, un.get('sc_speed', 1500))
+            sc_handler.WritePos(4, un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS), 0, un.get('sc_speed', DEFAULT_LATCH_SPEED))
             time.sleep(1.0)
             
             # Step 2: Move Dual Lid UP synchronously
-            move_dual_lid_sync(sts_handler, un.get('st1_pos', 4000), un.get('st2_pos', 500), 
-                               speed=un.get('st_speed', 2400), acc=un.get('st_acc', 50), label="UNLOCK: DUAL LID UP")
+            move_dual_lid_sync(sts_handler, un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS), un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS), 
+                               speed=un.get('st_speed', DEFAULT_LID_SPEED), acc=un.get('st_acc', DEFAULT_LID_ACC), label="UNLOCK: DUAL LID UP")
             time.sleep(0.5)
             
             p1, _, _ = sts_handler.ReadPos(1)
@@ -1266,19 +1304,24 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             target_key = 'lock' if ed_choice == '1' else 'unlock'
             cfg_sub = config[target_key]
             
+            def_l1 = DEFAULT_LID1_LOCK_POS if target_key == 'lock' else DEFAULT_LID1_UNLOCK_POS
+            def_l2 = DEFAULT_LID2_LOCK_POS if target_key == 'lock' else DEFAULT_LID2_UNLOCK_POS
+            def_sc3 = DEFAULT_LATCH3_LOCK_POS if target_key == 'lock' else DEFAULT_LATCH3_UNLOCK_POS
+            def_sc4 = DEFAULT_LATCH4_LOCK_POS if target_key == 'lock' else DEFAULT_LATCH4_UNLOCK_POS
+
             print(f"\nEditing {target_key.upper()} Sequence:")
-            cfg_sub['st1_pos'] = get_int(f"Servo 1 (Lid) Target (0-4095) [Current: {cfg_sub.get('st1_pos', 1300)}]: ", 
-                                         default=cfg_sub.get('st1_pos', 1300), min_val=0, max_val=4095)
-            cfg_sub['st2_pos'] = get_int(f"Servo 2 (Lid) Target (0-4095) [Current: {cfg_sub.get('st2_pos', 3500)}]: ", 
-                                         default=cfg_sub.get('st2_pos', 3500), min_val=0, max_val=4095)
-            cfg_sub['st_speed'] = get_int(f"Lid Servos Speed [Current: {cfg_sub.get('st_speed', 2400)}]: ", 
-                                          default=cfg_sub.get('st_speed', 2400), min_val=100, max_val=3000)
-            cfg_sub['sc3_pos'] = get_int(f"Servo 3 Latch Target (0-1023) [Current: {cfg_sub.get('sc3_pos', 520 if target_key == 'lock' else 670)}]: ", 
-                                         default=cfg_sub.get('sc3_pos', 520 if target_key == 'lock' else 670), min_val=0, max_val=1023)
-            cfg_sub['sc4_pos'] = get_int(f"Servo 4 Latch Target (0-1023) [Current: {cfg_sub.get('sc4_pos', 550 if target_key == 'lock' else 750)}]: ", 
-                                         default=cfg_sub.get('sc4_pos', 550 if target_key == 'lock' else 750), min_val=0, max_val=1023)
-            cfg_sub['sc_speed'] = get_int(f"Latch Servos Speed [Current: {cfg_sub.get('sc_speed', 1500)}]: ", 
-                                          default=cfg_sub.get('sc_speed', 1500), min_val=100, max_val=1500)
+            cfg_sub['st1_pos'] = get_int(f"Servo 1 (Lid) Target (0-4095) [Current: {cfg_sub.get('st1_pos', def_l1)}]: ", 
+                                         default=cfg_sub.get('st1_pos', def_l1), min_val=0, max_val=4095)
+            cfg_sub['st2_pos'] = get_int(f"Servo 2 (Lid) Target (0-4095) [Current: {cfg_sub.get('st2_pos', def_l2)}]: ", 
+                                         default=cfg_sub.get('st2_pos', def_l2), min_val=0, max_val=4095)
+            cfg_sub['st_speed'] = get_int(f"Lid Servos Speed [Current: {cfg_sub.get('st_speed', DEFAULT_LID_SPEED)}]: ", 
+                                          default=cfg_sub.get('st_speed', DEFAULT_LID_SPEED), min_val=100, max_val=3000)
+            cfg_sub['sc3_pos'] = get_int(f"Servo 3 Latch Target (0-1023) [Current: {cfg_sub.get('sc3_pos', def_sc3)}]: ", 
+                                         default=cfg_sub.get('sc3_pos', def_sc3), min_val=0, max_val=1023)
+            cfg_sub['sc4_pos'] = get_int(f"Servo 4 Latch Target (0-1023) [Current: {cfg_sub.get('sc4_pos', def_sc4)}]: ", 
+                                         default=cfg_sub.get('sc4_pos', def_sc4), min_val=0, max_val=1023)
+            cfg_sub['sc_speed'] = get_int(f"Latch Servos Speed [Current: {cfg_sub.get('sc_speed', DEFAULT_LATCH_SPEED)}]: ", 
+                                          default=cfg_sub.get('sc_speed', DEFAULT_LATCH_SPEED), min_val=100, max_val=1500)
             
             print(f"{C_GREEN}Updated in-memory parameters for {target_key.upper()} sequence.{C_RST}")
 
@@ -1909,15 +1952,18 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
 
     # 11. lid up / lid down / dual <p1> <p2> / up / down
     elif cmd in ['lid', 'dual', 'up', 'down', 'open', 'close']:
+        cfg = load_sequence_config()
+        un = cfg['unlock']
+        lk = cfg['lock']
         if cmd in ['up', 'open'] or (cmd == 'lid' and args and args[0].lower() in ['up', 'open', 'unlock']):
-            move_dual_lid_sync(sts_handler, 4000, 500, label="LID UP (OPEN)")
+            move_dual_lid_sync(sts_handler, un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS), un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS), speed=un.get('st_speed', DEFAULT_LID_SPEED), acc=un.get('st_acc', DEFAULT_LID_ACC), label="LID UP (OPEN)")
         elif cmd in ['down', 'close'] or (cmd == 'lid' and args and args[0].lower() in ['down', 'close', 'lock']):
-            move_dual_lid_sync(sts_handler, 1300, 3500, label="LID DOWN (CLOSE)")
+            move_dual_lid_sync(sts_handler, lk.get('st1_pos', DEFAULT_LID1_LOCK_POS), lk.get('st2_pos', DEFAULT_LID2_LOCK_POS), speed=lk.get('st_speed', DEFAULT_LID_SPEED), acc=lk.get('st_acc', DEFAULT_LID_ACC), label="LID DOWN (CLOSE)")
         elif cmd == 'dual' and len(args) >= 2:
             try:
                 p1 = int(args[0])
                 p2 = int(args[1])
-                spd = int(args[2]) if len(args) > 2 else 2400
+                spd = int(args[2]) if len(args) > 2 else un.get('st_speed', DEFAULT_LID_SPEED)
                 move_dual_lid_sync(sts_handler, p1, p2, speed=spd, label=f"DUAL MOVE ({p1}, {p2})")
             except ValueError:
                 print(f"{C_RED}Invalid numeric arguments for dual. Usage: dual <pos1> <pos2> [speed]{C_RST}")
@@ -1927,30 +1973,29 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
 
     # 12. seq / sequence / lock / unlock / absrot
     elif cmd in ['seq', 'sequence', 'lock', 'unlock', 'absrot']:
+        cfg = load_sequence_config()
+        lk = cfg['lock']
+        un = cfg['unlock']
         if cmd == 'lock':
             print(f"\n{C_YEL}Executing LOCK Sequence via shell...{C_RST}")
-            config = load_sequence_config()
-            lk = config['lock']
             # Step 1: Move Dual Lid DOWN synchronously
-            move_dual_lid_sync(sts_handler, lk.get('st1_pos', 1300), lk.get('st2_pos', 3500), speed=lk.get('st_speed', 2400), label="LOCK: DUAL LID DOWN")
+            move_dual_lid_sync(sts_handler, lk.get('st1_pos', DEFAULT_LID1_LOCK_POS), lk.get('st2_pos', DEFAULT_LID2_LOCK_POS), speed=lk.get('st_speed', DEFAULT_LID_SPEED), acc=lk.get('st_acc', DEFAULT_LID_ACC), label="LOCK: DUAL LID DOWN")
             time.sleep(0.5)
             # Step 2: Engage Latches (SC servos 3 & 4)
             sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, lk.get('sc3_pos', 520), 0, lk.get('sc_speed', 1500))
+            sc_handler.WritePos(3, lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
             sc_handler.write1ByteTxRx(4, 40, 1)
-            sc_handler.WritePos(4, lk.get('sc4_pos', 550), 0, lk.get('sc_speed', 1500))
+            sc_handler.WritePos(4, lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
         elif cmd == 'unlock':
             print(f"\n{C_YEL}Executing UNLOCK Sequence via shell...{C_RST}")
-            config = load_sequence_config()
-            un = config['unlock']
             # Step 1: Retract Latches (SC servos 3 & 4)
             sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, un.get('sc3_pos', 670), 0, un.get('sc_speed', 1500))
+            sc_handler.WritePos(3, un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS), 0, un.get('sc_speed', DEFAULT_LATCH_SPEED))
             sc_handler.write1ByteTxRx(4, 40, 1)
-            sc_handler.WritePos(4, un.get('sc4_pos', 750), 0, un.get('sc_speed', 1500))
+            sc_handler.WritePos(4, un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS), 0, un.get('sc_speed', DEFAULT_LATCH_SPEED))
             time.sleep(0.8)
             # Step 2: Move Dual Lid UP synchronously
-            move_dual_lid_sync(sts_handler, un.get('st1_pos', 4000), un.get('st2_pos', 500), speed=un.get('st_speed', 2400), label="UNLOCK: DUAL LID UP")
+            move_dual_lid_sync(sts_handler, un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS), un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS), speed=un.get('st_speed', DEFAULT_LID_SPEED), acc=un.get('st_acc', DEFAULT_LID_ACC), label="UNLOCK: DUAL LID UP")
         else:
             manage_lock_unlock_sequences(sts_handler, sc_handler, active_id)
         return active_id, True
