@@ -1,9 +1,10 @@
 {
   "lock": {
-    "st1_pos": 1300,
-    "st2_pos": 3500,
+    "st1_pos": 1450,
+    "st2_pos": 3450,
     "st_speed": 2400,
     "st_acc": 50,
+    "st_tol": 70,
     "sc3_pos": 520,
     "sc4_pos": 550,
     "sc_speed": 1500
@@ -13,6 +14,7 @@
     "st2_pos": 500,
     "st_speed": 2400,
     "st_acc": 50,
+    "st_tol": 70,
     "sc3_pos": 690,
     "sc4_pos": 750,
     "sc_speed": 1500
