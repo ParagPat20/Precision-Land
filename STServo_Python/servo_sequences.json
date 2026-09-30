@@ -6,7 +6,7 @@
     "st_acc": 50,
     "st_tol": 70,
     "sc3_pos": 520,
-    "sc4_pos": 550,
+    "sc4_pos": 700,
     "sc_speed": 1500
   },
   "unlock": {
@@ -16,7 +16,7 @@
     "st_acc": 50,
     "st_tol": 70,
     "sc3_pos": 675,
-    "sc4_pos": 750,
+    "sc4_pos": 550,
     "sc_speed": 1500
   }
 }
