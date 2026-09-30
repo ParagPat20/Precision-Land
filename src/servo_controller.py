@@ -1167,15 +1167,6 @@ class ServoController:
                             print(f"[SERVO] Triggering LOCK sequence (Ch6/Servo6 Raw: {ch6} - LOW)")
                             threading.Thread(target=self.perform_locking, daemon=True, name="LockSequenceThread").start()
                 
-                # Active Background Holding: Re-enforce holding torque when idle
-                if not self.sequence_active and self.last_state in ['lock', 'unlock']:
-                    with self._io_lock:
-                        # IDs 1 & 2 (ST3215)
-                        self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                        self._write1(2, STS_TORQUE_ENABLE, 1, "enable torque")
-                        # IDs 3 & 4 (SC09)
-                        self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                        self._write1(4, SCSCL_TORQUE_ENABLE, 1, "enable torque")
 
             except Exception as e:
                 print(f"[SERVO] Monitor loop error: {e}")
