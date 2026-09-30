@@ -521,10 +521,10 @@ def diagnose_torque_issue(sts_handler, sc_handler, sid):
 
 def scan_servos(sts_handler, scan_all=False):
     """
-    Scans servo IDs. Default is checking IDs [1, 2, 3] to be extremely fast.
+    Scans servo IDs. Default is checking IDs [1, 2, 3, 4] to be extremely fast.
     """
-    target_ids = range(254) if scan_all else [1, 2, 3]
-    msg = "Scanning all IDs 0-253..." if scan_all else "Performing fast scan on default IDs [1, 2, 3]..."
+    target_ids = range(254) if scan_all else [1, 2, 3, 4]
+    msg = "Scanning all IDs 0-253..." if scan_all else "Performing fast scan on default IDs [1, 2, 3, 4]..."
     print_header("Scan All Servos")
     print(msg + " Please wait.")
     
@@ -2045,6 +2045,18 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
             manage_lock_unlock_sequences(sts_handler, sc_handler, active_id)
         return active_id, True
 
+    # 13. scan / scan all
+    elif cmd in ['scan', 'search']:
+        scan_all = len(args) > 0 and args[0].lower() in ['all', 'full', '254', 'y', 'yes']
+        found = scan_servos(sts_handler, scan_all=scan_all)
+        if found:
+            print(f"\n{C_GREEN}Found {len(found)} servo(s): {found}{C_RST}")
+            if active_id is None and found:
+                active_id = found[0]
+        else:
+            print(f"{C_RED}No servos found. Check connections/power.{C_RST}")
+        return active_id, True
+
     return active_id, False
 
 def main():
@@ -2139,7 +2151,7 @@ def main():
                 active_id = new_id
                 
         elif choice == '3':
-            confirm_all = input("Scan all 254 IDs? (y/n) [Default: n, scans 1,2,3]: ").strip().lower()
+            confirm_all = input("Scan all 254 IDs? (y/n) [Default: n, scans 1,2,3,4]: ").strip().lower()
             scan_all = (confirm_all == 'y')
             found = scan_servos(sts_handler, scan_all=scan_all)
             if found:
