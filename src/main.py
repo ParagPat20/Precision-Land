@@ -1230,21 +1230,22 @@ signal.signal(signal.SIGTERM, handle_signal)
 def send_land_message_v2(x_rad=0.0, y_rad=0.0, dist_m=0.0, x_m=0.0,y_m=0.0,z_m=0.0, time_usec=0, target_num=0):
     try:
         # Try sending with newer MAVLink fields (14 arguments)
+        pos_valid = 1 if (abs(x_m) > 0.001 or abs(y_m) > 0.001 or abs(z_m) > 0.001) else 0
         msg = vehicle.message_factory.landing_target_encode(
             int(time_usec),          # time target data was processed, as close to sensor capture as possible
             int(target_num),         # target num, not used
-            int(mavutil.mavlink.MAV_FRAME_BODY_FRD), # frame, not used
-            float(x_rad),            # X-axis angular offset, in radians
-            float(y_rad),            # Y-axis angular offset, in radians
+            int(mavutil.mavlink.MAV_FRAME_BODY_FRD), # frame: Forward-Right-Down
+            float(x_rad),            # X-axis angular offset, in radians (roll angle)
+            float(y_rad),            # Y-axis angular offset, in radians (pitch angle)
             float(dist_m),           # distance, in meters
             0.0,                     # Target x-axis size, in radians
             0.0,                     # Target y-axis size, in radians
-            float(x_m),              # x position in frame
-            float(y_m),              # y position in frame
-            float(z_m),              # z position in frame
+            float(x_m),              # x position in body frame (forward, m)
+            float(y_m),              # y position in body frame (right, m)
+            float(z_m),              # z position in body frame (down, m)
             (1.0,0.0,0.0,0.0),       # orientation quaternion
             int(2),                  # type of landing target: 2 = Fiducial marker
-            int(0),                  # position_valid boolean
+            int(pos_valid),          # position_valid boolean (1 when 3D body coordinates provided)
         )
     except TypeError:
         # Fallback for older pymavlink dialects (8 arguments)
@@ -1277,17 +1278,57 @@ def send_distance_message( dist):
     )
     vehicle.send_mavlink(msg)     
 
-def marker_position_to_angle(x, y, z):
-    
-    angle_x = math.atan2(x,z)
-    angle_y = math.atan2(y,z)
-    
+# ----------------------------------------------------------------------
+# CAMERA MOUNT GEOMETRY & LEVER ARM OFFSETS
+# ----------------------------------------------------------------------
+# Camera is mounted 22 cm forward of drone Center of Gravity (CoG)
+# and tilted 20 degrees forward (pitched up from nadir towards the nose)
+CAM_TILT_PITCH_DEG = float(os.environ.get("JECH_CAM_TILT_PITCH_DEG", "20.0"))
+CAM_OFFSET_FORWARD_CM = float(os.environ.get("JECH_CAM_OFFSET_FORWARD_CM", "22.0"))
+CAM_OFFSET_RIGHT_CM = float(os.environ.get("JECH_CAM_OFFSET_RIGHT_CM", "0.0"))
+CAM_OFFSET_DOWN_CM = float(os.environ.get("JECH_CAM_OFFSET_DOWN_CM", "0.0"))
+
+_TILT_RAD = math.radians(CAM_TILT_PITCH_DEG)
+_COS_TILT = math.cos(_TILT_RAD)
+_SIN_TILT = math.sin(_TILT_RAD)
+
+print(f"[CAM_GEOMETRY] Mounting config: Pitch tilt={CAM_TILT_PITCH_DEG}° forward | Offset: Fwd={CAM_OFFSET_FORWARD_CM}cm, Right={CAM_OFFSET_RIGHT_CM}cm, Down={CAM_OFFSET_DOWN_CM}cm", flush=True)
+
+def camera_to_uav(x_cam, y_cam, z_cam):
+    """
+    Transforms marker 3D position from camera coordinates to Drone Body Frame (FRD) relative to CoG.
+
+    OpenCV Camera Frame:
+      x_cam: Right in image
+      y_cam: Down in image
+      z_cam: Optical axis (distance straight out of lens)
+
+    Drone Body Frame (FRD - Forward, Right, Down):
+      x_uav: Forward towards nose (cm)
+      y_uav: Right towards starboard (cm)
+      z_uav: Down towards ground (cm)
+    """
+    # 1. Pitch rotation around lateral axis (20 deg forward from nadir)
+    x_forward = -y_cam * _COS_TILT + z_cam * _SIN_TILT
+    y_right   = x_cam
+    z_down    = y_cam * _SIN_TILT + z_cam * _COS_TILT
+
+    # 2. Add physical lever-arm offset from drone center of gravity (CoG)
+    x_uav = x_forward + CAM_OFFSET_FORWARD_CM
+    y_uav = y_right   + CAM_OFFSET_RIGHT_CM
+    z_uav = max(1.0, z_down + CAM_OFFSET_DOWN_CM)
+
+    return x_uav, y_uav, z_uav
+
+def marker_position_to_angle(x_uav, y_uav, z_uav):
+    """
+    Converts 3D body position (cm) to MAVLink LANDING_TARGET angles (radians).
+    angle_x: lateral roll angle (positive right)
+    angle_y: longitudinal pitch angle (negative forward, matching ArduPilot MAVLink convention)
+    """
+    angle_x = math.atan2(y_uav, z_uav)
+    angle_y = math.atan2(-x_uav, z_uav)
     return (angle_x, angle_y)
-    
-def camera_to_uav(x_cam, y_cam):
-    x_uav = x_cam
-    y_uav = y_cam
-    return(x_uav, y_uav)
         
 #--------------------------------------------------
 #-------------- CONNECTION  
@@ -1679,9 +1720,8 @@ while True:
     if marker_found:
         # Marker detected - append 1 and update last known position
         detection_buffer.append(1)
-        x_cm, y_cm = camera_to_uav(x_cm, y_cm)
-        z_cm = max(1.0, float(z_cm))
-        last_known_position = (x_cm, y_cm, z_cm)
+        x_uav_cm, y_uav_cm, z_uav_cm = camera_to_uav(x_cm, y_cm, z_cm)
+        last_known_position = (x_uav_cm, y_uav_cm, z_uav_cm)
     else:
         # Marker not detected - append 0, keep last known position
         detection_buffer.append(0)
@@ -1694,15 +1734,23 @@ while True:
     
     # Send position data only if confidence exceeds threshold and we have a valid position
     if confidence_score >= confidence_threshold and last_known_position is not None:
-        x_cm, y_cm, z_cm = last_known_position
-        angle_x, angle_y = marker_position_to_angle(x_cm, y_cm, z_cm)
+        x_uav_cm, y_uav_cm, z_uav_cm = last_known_position
+        angle_x, angle_y = marker_position_to_angle(x_uav_cm, y_uav_cm, z_uav_cm)
+        dist_m = math.sqrt(x_uav_cm**2 + y_uav_cm**2 + z_uav_cm**2) * 0.01
         
         if time.time() >= time_0 + 1.0/freq_send:
             time_0 = time.time()
             status = "DETECTED" if marker_found else "TRACKING"
-            print(f"[{status}] Confidence: {confidence_score:.1f}% | x={x_cm:5.0f}cm y={y_cm:5.0f}cm z={z_cm:5.0f}cm | angles=({angle_x:.3f}, {angle_y:.3f})", flush=True)
-            # send_land_message(x_m=x_cm*0.01, y_m=y_cm*0.01, z_m=z_cm*0.01)
-            send_land_message_v2(x_rad=angle_x, y_rad=angle_y, dist_m=z_cm*0.01, time_usec=time.time()*1e6)
+            print(f"[{status}] Conf: {confidence_score:.0f}% | Body FRD: x={x_uav_cm:4.0f}cm y={y_uav_cm:4.0f}cm z={z_uav_cm:4.0f}cm | angles=({angle_x:.3f}, {angle_y:.3f}) rad", flush=True)
+            send_land_message_v2(
+                x_rad=angle_x,
+                y_rad=angle_y,
+                dist_m=dist_m,
+                x_m=x_uav_cm * 0.01,
+                y_m=y_uav_cm * 0.01,
+                z_m=z_uav_cm * 0.01,
+                time_usec=time.time() * 1e6
+            )
     else:
         # Low confidence or no position data - do not send
         # No print statements to avoid log spam

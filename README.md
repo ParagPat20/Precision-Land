@@ -150,13 +150,18 @@ Take **at least 20-25 images** with:
 - Utilize the full 120° wide field of view
 
 ### 3. Run Calibration
+> [!NOTE]
+> `<num_rows>` and `<num_cols>` must be the number of **internal corners** (grid intersections), **NOT** the number of squares!  
+> Formula: `internal corners = (squares - 1)`.  
+> For a chart with **9 × 6 squares**, use **`5 8`** (or `8 5`).
+
 ```bash
-python opencv/cameracalib.py <folder> <image_type> <num_rows> <num_cols> <cell_dimension>
+python opencv/cameracalib.py <folder> <image_type> <num_rows> <num_cols> <cell_dimension_mm>
 ```
 
-Example:
+Example (for a 9×6 square board with 25mm cells):
 ```bash
-python opencv/cameracalib.py calibration_images jpg 9 6 25
+python opencv/cameracalib.py opencv/snaps jpg 5 8 25
 ```
 
 ### 4. Update Calibration Files

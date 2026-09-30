@@ -14,7 +14,8 @@ __author__ = "Tiziano Fiorenzani"
 __date__ = "01/06/2018"
 
 import os
-os.environ["QT_QPA_PLATFORM"] = "xcb"
+if not os.environ.get("DISPLAY"):
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 import numpy as np
 import cv2
@@ -91,31 +92,38 @@ else:
 
         # If found, add object points, image points (after refining them)
         if ret == True:
-            print("Pattern found! Press ESC to skip or ENTER to accept")
-            #--- Sometimes, Harris cornes fails with crappy pictures, so
+            #--- Sometimes, Harris corners fails with crappy pictures, so
             corners2 = cv2.cornerSubPix(gray,corners,(11,11),(-1,-1),criteria)
 
-            # Draw and display the corners
-            cv2.drawChessboardCorners(img, (nCols,nRows), corners2,ret)
-            cv2.imshow('img',img)
-            # cv2.waitKey(0)
-            k = cv2.waitKey(0) & 0xFF
-            if k == 27: #-- ESC Button
-                print("Image Skipped")
-                imgNotGood = fname
-                continue
+            # Check if display is available
+            has_display = bool(os.environ.get("DISPLAY"))
+            if has_display:
+                try:
+                    cv2.drawChessboardCorners(img, (nCols,nRows), corners2,ret)
+                    cv2.imshow('img',img)
+                    print("Pattern found! Press ESC to skip or ENTER to accept")
+                    k = cv2.waitKey(0) & 0xFF
+                    if k == 27: #-- ESC Button
+                        print("Image Skipped")
+                        imgNotGood = fname
+                        continue
+                except Exception:
+                    print("Pattern found! (Display unavailable, auto-accepted)")
+            else:
+                print("Pattern found! (Headless mode: auto-accepted)")
 
             print("Image accepted")
             nPatternFound += 1
             objpoints.append(objp)
             imgpoints.append(corners2)
-
-            # cv2.waitKey(0)
         else:
             imgNotGood = fname
 
 
-cv2.destroyAllWindows()
+try:
+    cv2.destroyAllWindows()
+except Exception:
+    pass
 
 if (nPatternFound > 1):
     print("Found %d good images" % (nPatternFound))
