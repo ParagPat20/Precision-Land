@@ -1364,7 +1364,7 @@ else:
         import json
         servo_config_path = os.path.join(os.path.dirname(__file__), "..", "servo-config.json")
         st_config = {"min": 0, "max": 4095, "home": 0}
-        sc09_configs = {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
+        sc09_configs = {3: {"min": 0, "max": 1023}, 4: {"min": 0, "max": 1023}}
         
         try:
             if os.path.exists(servo_config_path):
@@ -1372,8 +1372,8 @@ else:
                     cfg = json.load(f)
                     st_config = cfg.get("st3215", st_config)
                     sc09_configs = {
-                        2: cfg.get("sc09_2", sc09_configs[2]),
-                        3: cfg.get("sc09_3", sc09_configs[3])
+                        3: cfg.get("sc09_3", sc09_configs.get(3, {"min": 0, "max": 1023})),
+                        4: cfg.get("sc09_4", sc09_configs.get(4, {"min": 0, "max": 1023}))
                     }
         except Exception as ce:
             print(f"[SERVO] Failed to load config, using defaults: {ce}")

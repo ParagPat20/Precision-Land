@@ -54,36 +54,55 @@ except ImportError:
     except ImportError as e:
         _SDK_IMPORT_ERROR = e
 
-# --- CONFIGURATION CONSTANTS FOR LOCK SEQUENCE ONLY ---
-# Speeds & Accel
-ST_SPEED = 2400
-ST_ACC = 200
-SC_SPEED = 1500
+# =========================================================================
+# CENTRALIZED SERVO SEQUENCE CONFIGURATION
+# Matches STServo_Python/servo_sequences.json
+# =========================================================================
+# Servo ID 1 & 2 (ST3215 Dual Lid Lifters)
+DEFAULT_LID1_LOCK_POS   = 1450
+DEFAULT_LID1_UNLOCK_POS = 4000
+DEFAULT_LID2_LOCK_POS   = 3450
+DEFAULT_LID2_UNLOCK_POS = 500
+DEFAULT_LID_SPEED       = 2400
+DEFAULT_LID_ACC         = 50
+DEFAULT_LID_TOLERANCE   = 70
 
-# Locking Targets
-LOCK_POS_1 = "Continuous Rotation (Forward Speed 3000, 3 Rollover Laps -> Absolute Snap to 1200)"
-LOCK_POS_2 = 550
-LOCK_POS_3 = 715
+# Servo ID 3 & 4 (SC09 Locking Latches / Kadi)
+DEFAULT_LATCH3_LOCK_POS   = 520
+DEFAULT_LATCH3_UNLOCK_POS = 675
+DEFAULT_LATCH4_LOCK_POS   = 700
+DEFAULT_LATCH4_UNLOCK_POS = 550
+DEFAULT_LATCH_SPEED       = 1500
 
-# Unlocking Targets
-UNLOCK_POS_1 = "Continuous Rotation (Backward Speed 3000, 3 Rollover Laps -> Absolute Snap to 3000)"
-UNLOCK_POS_2 = 750
-UNLOCK_POS_3 = 540
-UNLOCK_CHECK_3 = 540  # Threshold check for ID 3
+DEFAULT_SEQUENCE_CONFIG = {
+    "lock": {
+        "st1_pos": DEFAULT_LID1_LOCK_POS,
+        "st2_pos": DEFAULT_LID2_LOCK_POS,
+        "st_speed": DEFAULT_LID_SPEED,
+        "st_acc": DEFAULT_LID_ACC,
+        "st_tol": DEFAULT_LID_TOLERANCE,
+        "sc3_pos": DEFAULT_LATCH3_LOCK_POS,
+        "sc4_pos": DEFAULT_LATCH4_LOCK_POS,
+        "sc_speed": DEFAULT_LATCH_SPEED
+    },
+    "unlock": {
+        "st1_pos": DEFAULT_LID1_UNLOCK_POS,
+        "st2_pos": DEFAULT_LID2_UNLOCK_POS,
+        "st_speed": DEFAULT_LID_SPEED,
+        "st_acc": DEFAULT_LID_ACC,
+        "st_tol": DEFAULT_LID_TOLERANCE,
+        "sc3_pos": DEFAULT_LATCH3_UNLOCK_POS,
+        "sc4_pos": DEFAULT_LATCH4_UNLOCK_POS,
+        "sc_speed": DEFAULT_LATCH_SPEED
+    }
+}
 
-# Servo 1 (ST3215) Continuous Rotation & Absolute Target Parameters
-ST_LOCK_SPEED_1 = 3000
-ST_LOCK_ROTATIONS_1 = 3.0  # 3 rollover laps (crossing 4096 -> 0)
-ST_LOCK_ABS_TARGET_1 = 1200
-ST_UNLOCK_SPEED_1 = 3000
-ST_UNLOCK_ROTATIONS_1 = 3.0  # 3 rollover laps (crossing 0 -> 4096)
-ST_UNLOCK_ABS_TARGET_1 = 3000
-
-# Absolute Physical Mechanical Limits to prevent over-travel or losing linkage handlers
+# Absolute Physical Mechanical Limits to prevent over-travel
 SERVO_LIMITS = {
-    1: (150, 2100),  # Servo 1 (ST)
-    2: (450, 960),   # Servo 2 (SC)
-    3: (530, 750)    # Servo 3 (SC)
+    1: (0, 4095),   # Servo 1 (ST3215 Dual Lid 1)
+    2: (0, 4095),   # Servo 2 (ST3215 Dual Lid 2)
+    3: (0, 1023),   # Servo 3 (SC09 Latch 3)
+    4: (0, 1023)    # Servo 4 (SC09 Latch 4)
 }
 # --------------------------------------------------------
 
@@ -162,11 +181,13 @@ class ServoController:
         self.packetHandler = None
         self.connected = False
         
+        self.st_ids = [1, 2]
+        self.sc_ids = [3, 4]
         self.st3215_id = 1
-        self.sc09_ids = [2, 3]
+        self.sc09_ids = [3, 4]
         self.st_config = {"min": 0, "max": 4095, "home": 0}
-        self.sc09_configs = {2: {"min": 0, "max": 1023}, 3: {"min": 0, "max": 1023}}
-        self.servo_protocols = {1: "sts", 2: "scscl", 3: "scscl"}
+        self.sc09_configs = {3: {"min": 0, "max": 1023}, 4: {"min": 0, "max": 1023}}
+        self.servo_protocols = {1: "sts", 2: "sts", 3: "scscl", 4: "scscl"}
         
         self._running = False
         self._thread = None
@@ -226,33 +247,18 @@ class ServoController:
         Loads sequence settings from servo_sequences.json if present,
         otherwise uses configured default constants.
         """
-        config = {
-            "lock": {
-                "st_speed": ST_LOCK_SPEED_1,
-                "st_rotations": ST_LOCK_ROTATIONS_1,
-                "st_abs_target": ST_LOCK_ABS_TARGET_1,
-                "sc2_pos": LOCK_POS_2,
-                "sc3_pos": LOCK_POS_3,
-                "sc_speed": SC_SPEED
-            },
-            "unlock": {
-                "st_speed": ST_UNLOCK_SPEED_1,
-                "st_rotations": ST_UNLOCK_ROTATIONS_1,
-                "st_abs_target": ST_UNLOCK_ABS_TARGET_1,
-                "sc2_pos": UNLOCK_POS_2,
-                "sc3_pos": UNLOCK_POS_3,
-                "sc_speed": SC_SPEED
-            }
-        }
+        import json
+        config = json.loads(json.dumps(DEFAULT_SEQUENCE_CONFIG))
         possible_paths = [
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "STServo_Python", "servo_sequences.json")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "servo_sequences.json")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "servo_sequences.json")),
+            os.path.abspath("servo_sequences.json"),
+            os.path.abspath("STServo_Python/servo_sequences.json"),
         ]
         for path in possible_paths:
             if os.path.exists(path):
                 try:
-                    import json
                     with open(path, 'r') as f:
                         data = json.load(f)
                         if "lock" in data and isinstance(data["lock"], dict):
@@ -266,7 +272,7 @@ class ServoController:
 
     def detect_physical_state(self):
         """
-        Detects physical lock state on reboot by reading magnetic encoder feedback of SC servos (IDs 2 & 3).
+        Detects physical lock state on reboot by reading magnetic encoder feedback of all 4 servos.
         Falls back to saved state file if serial communication fails.
         """
         if not self.connected:
@@ -276,22 +282,50 @@ class ServoController:
             seq_cfg = self.load_sequence_config()
             lock_c = seq_cfg["lock"]
             unlock_c = seq_cfg["unlock"]
-            lock_sc2 = lock_c.get("sc2_pos", LOCK_POS_2)
-            lock_sc3 = lock_c.get("sc3_pos", LOCK_POS_3)
-            unlock_sc2 = unlock_c.get("sc2_pos", UNLOCK_POS_2)
-            unlock_sc3 = unlock_c.get("sc3_pos", UNLOCK_POS_3)
+            
+            l_st1 = lock_c.get("st1_pos", DEFAULT_LID1_LOCK_POS)
+            l_st2 = lock_c.get("st2_pos", DEFAULT_LID2_LOCK_POS)
+            l_sc3 = lock_c.get("sc3_pos", DEFAULT_LATCH3_LOCK_POS)
+            l_sc4 = lock_c.get("sc4_pos", DEFAULT_LATCH4_LOCK_POS)
+
+            u_st1 = unlock_c.get("st1_pos", DEFAULT_LID1_UNLOCK_POS)
+            u_st2 = unlock_c.get("st2_pos", DEFAULT_LID2_UNLOCK_POS)
+            u_sc3 = unlock_c.get("sc3_pos", DEFAULT_LATCH3_UNLOCK_POS)
+            u_sc4 = unlock_c.get("sc4_pos", DEFAULT_LATCH4_UNLOCK_POS)
 
             with self._io_lock:
-                pos2, res2, _ = self.scsHandler.ReadPos(2)
-                pos3, res3, _ = self.scsHandler.ReadPos(3)
+                pos1, r1, _ = self.stsHandler.ReadPos(1)
+                pos2, r2, _ = self.stsHandler.ReadPos(2)
+                pos3, r3, _ = self.scsHandler.ReadPos(3)
+                pos4, r4, _ = self.scsHandler.ReadPos(4)
 
-            if res2 == COMM_SUCCESS and res3 == COMM_SUCCESS:
-                # Calculate proximity to LOCK positions vs UNLOCK positions
-                dist_lock = abs(pos2 - lock_sc2) + abs(pos3 - lock_sc3)
-                dist_unlock = abs(pos2 - unlock_sc2) + abs(pos3 - unlock_sc3)
-                
-                detected = 'lock' if dist_lock <= dist_unlock else 'unlock'
-                print(f"[SERVO] Hardware encoder check on boot: Pos2={pos2}, Pos3={pos3} -> Detected state: '{detected}'")
+            score_lock = 0
+            score_unlock = 0
+            valid_reads = 0
+
+            if r1 == COMM_SUCCESS and 0 <= pos1 <= 4095:
+                if abs(pos1 - l_st1) < abs(pos1 - u_st1): score_lock += 1
+                else: score_unlock += 1
+                valid_reads += 1
+
+            if r2 == COMM_SUCCESS and 0 <= pos2 <= 4095:
+                if abs(pos2 - l_st2) < abs(pos2 - u_st2): score_lock += 1
+                else: score_unlock += 1
+                valid_reads += 1
+
+            if r3 == COMM_SUCCESS and 0 <= pos3 <= 1023:
+                if abs(pos3 - l_sc3) < abs(pos3 - u_sc3): score_lock += 1
+                else: score_unlock += 1
+                valid_reads += 1
+
+            if r4 == COMM_SUCCESS and 0 <= pos4 <= 1023:
+                if abs(pos4 - l_sc4) < abs(pos4 - u_sc4): score_lock += 1
+                else: score_unlock += 1
+                valid_reads += 1
+
+            if valid_reads >= 2:
+                detected = 'lock' if score_lock >= score_unlock else 'unlock'
+                print(f"[SERVO] Hardware encoder check on boot: P1={pos1}, P2={pos2}, P3={pos3}, P4={pos4} -> Detected: '{detected}'")
                 self._save_state(detected)
                 return detected
         except Exception as e:
@@ -327,10 +361,10 @@ class ServoController:
         return self.servo_protocols.get(int(sid), "sts") == "sts"
 
     def _is_st3215(self, sid):
-        return int(sid) == self.st3215_id
+        return int(sid) in self.st_ids
 
     def _servo_ids(self):
-        return [self.st3215_id] + list(self.sc09_ids)
+        return [1, 2, 3, 4]
 
     def _config_for(self, sid):
         sid = int(sid)
@@ -340,13 +374,13 @@ class ServoController:
 
     def _home_position_for(self, sid):
         cfg = self._config_for(sid)
-        if self._is_st3215(sid):
+        if self._is_sts(sid):
             return 2048
         return (int(cfg.get("min", 0)) + int(cfg.get("max", 1023))) // 2
 
     def _clamp_position(self, sid, position):
         cfg = self._config_for(sid)
-        default_max = 4095 if self._is_st3215(sid) else 1023
+        default_max = 4095 if self._is_sts(sid) else 1023
         low = int(cfg.get("min", 0))
         high = int(cfg.get("max", default_max))
         if low > high:
@@ -361,7 +395,7 @@ class ServoController:
             "max": int(st_src.get("max", self.st_config.get("max", 4095))),
             "home": int(st_src.get("home", self.st_config.get("home", 0))),
         }
-        for sid in self.sc09_ids:
+        for sid in self.sc_ids:
             src = sc_src.get(sid, sc_src.get(str(sid), self.sc09_configs.get(sid, {})))
             self.sc09_configs[sid] = {
                 "min": int(src.get("min", self.sc09_configs.get(sid, {}).get("min", 0))),
@@ -370,9 +404,11 @@ class ServoController:
 
     def get_config(self):
         return {
-            "st3215": dict(self.st_config),
-            "sc09_2": dict(self.sc09_configs.get(2, {"min": 0, "max": 1023})),
+            "st3215_1": dict(self.st_config),
+            "st3215_2": dict(self.st_config),
             "sc09_3": dict(self.sc09_configs.get(3, {"min": 0, "max": 1023})),
+            "sc09_4": dict(self.sc09_configs.get(4, {"min": 0, "max": 1023})),
+            "st3215": dict(self.st_config),
             "protocols": dict(self.servo_protocols),
         }
 
@@ -432,8 +468,8 @@ class ServoController:
 
         self._normalize_config(st_config, sc09_configs)
 
-        print(f"[SERVO] Initializing Servos...")
-        for sid in [self.st3215_id] + self.sc09_ids:
+        print(f"[SERVO] Initializing Servos (IDs: {self._servo_ids()})...")
+        for sid in self._servo_ids():
             try:
                 with self._io_lock:
                     handler = self._handler_for(sid)
@@ -442,7 +478,7 @@ class ServoController:
                     min_addr = STS_MIN_ANGLE_LIMIT_L if is_sts else SCSCL_MIN_ANGLE_LIMIT_L
                     max_addr = STS_MAX_ANGLE_LIMIT_L if is_sts else SCSCL_MAX_ANGLE_LIMIT_L
                     
-                    if self._is_st3215(sid):
+                    if is_sts:
                         sid_min = self.st_config.get("min", 0)
                         sid_max = self.st_config.get("max", 4095)
                         home_offset = self.st_config.get("home", 0)
@@ -463,28 +499,27 @@ class ServoController:
                         self._lock_eprom(sid)
                         continue
 
-                    if self._is_st3215(sid):
+                    if is_sts:
                         val = handler.sts_toscs(home_offset, 11)
                         if not self._write2(sid, STS_OFS_L, val, "write home offset"):
                             self._lock_eprom(sid)
                             continue
 
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                     if not self._lock_eprom(sid):
                         continue
 
-                    # Enable holding torque & mode on startup without moving Servos 2 & 3 prematurely
-                    if sid == 1:
-                        if not self._write1(sid, STS_MODE, 1, "set wheel mode"):
-                            continue
-                        result, error = handler.WriteSpec(sid, 0, 50)
+                    # Put ST servos into Position Control Mode (Mode 0) and enable holding torque
+                    if is_sts:
+                        self._write1(sid, STS_MODE, 0, "set position mode")
+                        result, error = handler.write1ByteTxRx(sid, STS_TORQUE_ENABLE, 1)
                     else:
                         result, error = handler.write1ByteTxRx(sid, SCSCL_TORQUE_ENABLE, 1)
 
                     if not self._result_ok(sid, "initialize torque state", result, error, handler):
                         continue
 
-                print(f"[SERVO] Servo ID {sid} initialized.")
+                print(f"[SERVO] Servo ID {sid} initialized in Position Mode.")
             except Exception as e:
                 print(f"[SERVO] Error initializing servo ID {sid}: {e}")
                 if hasattr(self, "portHandler") and self.portHandler:
@@ -894,179 +929,154 @@ class ServoController:
         print(f"  -> Timeout reached for SC servos! Did not fully complete.")
         return False
 
-    def rotate_st_continuous(self, sid=1, direction='f', speed=3000, rotations=1.0, abs_target=3000):
+    def move_dual_lid_sync(self, target1, target2, speed=DEFAULT_LID_SPEED, acc=DEFAULT_LID_ACC, tolerance=DEFAULT_LID_TOLERANCE, label="DUAL LID MOTION"):
         """
-        Rotates ST3215 servo (ID 1) in continuous Wheel Mode by counting 0-4096 rollover laps.
-        When target rollover count is reached, it monitors the encoder until arriving at abs_target (e.g. 3000),
-        then switches to Position Control Mode (33 -> 0) and locks absolute position with zero drift!
-        - direction: 'f' (Forward/CW) or 'b' (Backward/CCW)
-        - speed: speed magnitude (e.g. 3000)
-        - rotations: target rollover count (1.0 = 1 full lap crossing 4096/0)
-        - abs_target: absolute encoder position (0-4095)
+        Synchronously moves Servo 1 and Servo 2 simultaneously using SyncWrite (or RegWrite+Action fallback).
+        Monitors both encoders in real time until both servos reach their targets within tolerance threshold.
         """
-        sid = int(sid)
-        is_forward = str(direction).lower() in ['f', 'for', 'forward', 'cw', '1']
-        sign = 1 if is_forward else -1
-        speed_val = abs(int(speed)) * sign
-        dir_label = "Forward (CW)" if is_forward else "Backward (CCW)"
-        
-        target_rollovers = max(1, int(round(float(rotations))))
-        
-        print(f"[SERVO] Rotating Servo {sid} ({dir_label}): speed {abs(speed)}, target rollovers {target_rollovers}, final absolute target position {abs_target}...")
-        
-        with self._io_lock:
-            self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
-            pos_start, spd_start, res, error = self.stsHandler.ReadPosSpeed(sid)
-            if res != COMM_SUCCESS:
-                print(f"[SERVO] Error reading initial position for Servo {sid}: {self.stsHandler.getTxRxResult(res)}")
-                return False
-                
-            self.stsHandler.WheelMode(sid)
-            res_spec, err_spec = self.stsHandler.WriteSpec(sid, speed_val, 50)
-            if res_spec != COMM_SUCCESS:
-                print(f"[SERVO] Error starting rotation on Servo {sid}: {self.stsHandler.getTxRxResult(res_spec)}")
-                return False
+        target1 = int(target1)
+        target2 = int(target2)
+        speed = int(speed)
+        acc = int(acc)
+        tolerance = int(tolerance)
 
-        last_pos = pos_start
-        rollover_count = 0
+        print(f"\n[SERVO] === {label}: SERVO 1 -> {target1} | SERVO 2 -> {target2} (SPEED: {speed}, TOL: ±{tolerance}) ===")
+
+        with self._io_lock:
+            self._write1(1, STS_MODE, 0, "set position mode")
+            self._write1(2, STS_MODE, 0, "set position mode")
+            self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
+            self._write1(2, STS_TORQUE_ENABLE, 1, "enable torque")
+
+            pos1_start, r1, _ = self.stsHandler.ReadPos(1)
+            pos2_start, r2, _ = self.stsHandler.ReadPos(2)
+            p1_str = f"{pos1_start}" if r1 == COMM_SUCCESS else "ERR"
+            p2_str = f"{pos2_start}" if r2 == COMM_SUCCESS else "ERR"
+            print(f"[SERVO] Starting Positions -> Servo 1: {p1_str} | Servo 2: {p2_str}")
+
+            self.stsHandler.SyncWritePosEx(1, target1, speed, acc)
+            self.stsHandler.SyncWritePosEx(2, target2, speed, acc)
+            res_sync = self.stsHandler.groupSyncWrite.txPacket()
+            self.stsHandler.groupSyncWrite.clearParam()
+
+            if res_sync != COMM_SUCCESS:
+                self.stsHandler.RegWritePosEx(1, target1, speed, acc)
+                self.stsHandler.RegWritePosEx(2, target2, speed, acc)
+                self.stsHandler.RegAction()
+
         start_t = time.time()
-        max_timeout = max(12.0, target_rollovers * 10.0)
-        stuck_count = 0
-        
-        while True:
+        max_wait = 12.0
+        last_p1 = pos1_start if r1 == COMM_SUCCESS else 0
+        last_p2 = pos2_start if r2 == COMM_SUCCESS else 0
+        stall_count = 0
+
+        while time.time() - start_t < max_wait:
             if check_emergency_stop():
-                print(f"[SERVO] EMERGENCY STOP TRIGGERED BY USER KEYPRESS! Halting Servo {sid}!")
+                print("\n[SERVO EMERGENCY STOP] Halting both servos immediately!")
                 with self._io_lock:
-                    self.stsHandler.write1ByteTxRx(254, 40, 0)
-                    self.stsHandler.WriteSpec(sid, 0, 50)
+                    self._write1(1, STS_TORQUE_ENABLE, 0, "disable torque")
+                    self._write1(2, STS_TORQUE_ENABLE, 0, "disable torque")
                 return False
 
-            if (time.time() - start_t) > max_timeout:
-                print(f"[SERVO] Safety timeout ({max_timeout:.1f}s) reached during ID {sid} rotation!")
+            time.sleep(0.04)
+            with self._io_lock:
+                pos1_now, r1, _ = self.stsHandler.ReadPos(1)
+                pos2_now, r2, _ = self.stsHandler.ReadPos(2)
+
+            p1_done = (r1 == COMM_SUCCESS and abs(pos1_now - target1) <= tolerance)
+            p2_done = (r2 == COMM_SUCCESS and abs(pos2_now - target2) <= tolerance)
+
+            if p1_done and p2_done:
                 break
-                
-            time.sleep(0.005)
-            
-            with self._io_lock:
-                curr_pos, _, res_read, _ = self.stsHandler.ReadPosSpeed(sid)
-                
-            if res_read == COMM_SUCCESS and 0 <= curr_pos <= 4095:
-                delta = curr_pos - last_pos
-                # Detect boundary rollover (both step delta jump and range boundary)
-                if is_forward:
-                    if delta < -1500 or (last_pos > 2500 and curr_pos < 1500):
-                        rollover_count += 1
-                        print(f"[SERVO] Rollover #{rollover_count} detected (Forward 4096 -> 0)")
-                    
-                    # If target rollovers reached, check arrival at absolute target position
-                    if rollover_count >= target_rollovers:
-                        if abs_target is None or curr_pos >= (int(abs_target) - 60):
-                            print(f"[SERVO] Rollover {rollover_count} complete & target absolute position reached: Pos {curr_pos} >= {abs_target}")
-                            break
-                else:
-                    if delta > 1500 or (last_pos < 1500 and curr_pos > 2500):
-                        rollover_count += 1
-                        print(f"[SERVO] Rollover #{rollover_count} detected (Backward 0 -> 4096)")
-                    
-                    # If target rollovers reached, check arrival at absolute target position
-                    if rollover_count >= target_rollovers:
-                        if abs_target is None or curr_pos <= (int(abs_target) + 60):
-                            print(f"[SERVO] Rollover {rollover_count} complete & target absolute position reached: Pos {curr_pos} <= {abs_target}")
-                            break
 
-                # Stall / mechanical tension resistance check after target rollovers reached
-                if rollover_count >= target_rollovers:
-                    if abs(curr_pos - last_pos) < 3:
-                        stuck_count += 1
-                        if stuck_count >= 15:
-                            print(f"[SERVO] Mechanical resistance / stall detected at position {curr_pos}. Snapping to position mode...")
-                            break
-                    else:
-                        stuck_count = 0
-
-                last_pos = curr_pos
-
-        # Stop wheel rotation
-        with self._io_lock:
-            self.stsHandler.WriteSpec(sid, 0, 50)
-            
-        print(f"[SERVO] Servo {sid} continuous wheel rotation completed {rollover_count} rollover laps.")
-        
-        # Absolute Position Lock (Mode 0)
-        if abs_target is not None:
-            abs_target = int(abs_target)
-            print(f"[SERVO] Snapping Servo {sid} to Absolute Target {abs_target} (switching to Position Mode 33->0)...")
-            with self._io_lock:
-                self.stsHandler.WriteSpec(sid, 0, 50)
-                self._write1(sid, STS_MODE, 0, "set position mode")
-                self._write1(sid, STS_TORQUE_ENABLE, 1, "enable torque")
-                self.stsHandler.WritePosEx(sid, abs_target, 2400, 50)
-            
-            snap_start_t = time.time()
-            final_p = -1
-            while time.time() - snap_start_t < 2.5:
-                time.sleep(0.05)
-                with self._io_lock:
-                    p, res_s, _ = self.stsHandler.ReadPos(sid)
-                if res_s == COMM_SUCCESS:
-                    final_p = p
-                    if abs(p - abs_target) <= 30:
+            # Mechanical seated lid / resistance check near target
+            if r1 == COMM_SUCCESS and r2 == COMM_SUCCESS:
+                if abs(pos1_now - last_p1) < 4 and abs(pos2_now - last_p2) < 4:
+                    stall_count += 1
+                    if stall_count >= 10 and abs(pos1_now - target1) <= (tolerance + 50) and abs(pos2_now - target2) <= (tolerance + 50):
+                        print(f"\n[SERVO] [LID SEATED] Mechanical limit reached (ID 1: {pos1_now}, ID 2: {pos2_now}). Proceeding...")
                         break
-            print(f"[SERVO] Servo {sid} absolute position locked: Final Encoder Pos = {final_p} (Target = {abs_target})")
+                else:
+                    stall_count = 0
+                last_p1 = pos1_now
+                last_p2 = pos2_now
 
+        with self._io_lock:
+            pos1_fin, _, _ = self.stsHandler.ReadPos(1)
+            pos2_fin, _, _ = self.stsHandler.ReadPos(2)
+        print(f"[SERVO] [SYNC REACHED] Final Positions: Servo 1 = {pos1_fin} (Target: {target1}) | Servo 2 = {pos2_fin} (Target: {target2})")
+        return True
+
+    def move_latches(self, target3, target4, speed=DEFAULT_LATCH_SPEED, timeout=5.0):
+        """
+        Moves SC09 latch servos (ID 3 & ID 4) simultaneously.
+        """
+        target3 = int(target3)
+        target4 = int(target4)
+        speed = int(speed)
+
+        print(f"[SERVO] Moving Latches -> Servo 3: {target3} | Servo 4: {target4} (Speed: {speed})")
+
+        with self._io_lock:
+            self.scsHandler.write1ByteTxRx(3, SCSCL_TORQUE_ENABLE, 1)
+            self.scsHandler.WritePos(3, target3, 0, speed)
+            self.scsHandler.write1ByteTxRx(4, SCSCL_TORQUE_ENABLE, 1)
+            self.scsHandler.WritePos(4, target4, 0, speed)
+
+        start_t = time.time()
+        while time.time() - start_t < timeout:
+            time.sleep(0.08)
+            with self._io_lock:
+                pos3, r3, _ = self.scsHandler.ReadPos(3)
+                pos4, r4, _ = self.scsHandler.ReadPos(4)
+            p3_ok = (r3 == COMM_SUCCESS and abs(pos3 - target3) <= 25)
+            p4_ok = (r4 == COMM_SUCCESS and abs(pos4 - target4) <= 25)
+            if p3_ok and p4_ok:
+                break
+
+        with self._io_lock:
+            p3_fin, _, _ = self.scsHandler.ReadPos(3)
+            p4_fin, _, _ = self.scsHandler.ReadPos(4)
+        print(f"[SERVO] Latches Position -> Servo 3: {p3_fin} (Target {target3}) | Servo 4: {p4_fin} (Target {target4})")
         return True
 
     def perform_locking(self, force=False):
         """
-        Execute locking sequence.
-        If force is False and mechanism is already locked, skips Servo 1 continuous rotation
-        to prevent over-rewinding or straining the cable/motor.
+        Execute 4-servo locking sequence:
+        Step 1: Move Dual Lid DOWN synchronously (Servo 1 & Servo 2)
+        Step 2: Engage Latches (Servo 3 & Servo 4)
         """
         self.sequence_active = True
         try:
-            print("\n--- STARTING NATIVE LOCKING SEQUENCE ---")
+            print("\n--- STARTING 4-SERVO LOCKING SEQUENCE ---")
             cfg = self.load_sequence_config()["lock"]
-            st_speed = cfg.get("st_speed", ST_LOCK_SPEED_1)
-            st_rotations = cfg.get("st_rotations", cfg.get("st_rollovers", ST_LOCK_ROTATIONS_1))
-            st_abs_target = cfg.get("st_abs_target", ST_LOCK_ABS_TARGET_1)
-            sc2_pos = cfg.get("sc2_pos", LOCK_POS_2)
-            sc3_pos = cfg.get("sc3_pos", LOCK_POS_3)
-            sc_speed = cfg.get("sc_speed", SC_SPEED)
+            st1_pos = cfg.get("st1_pos", DEFAULT_LID1_LOCK_POS)
+            st2_pos = cfg.get("st2_pos", DEFAULT_LID2_LOCK_POS)
+            st_spd = cfg.get("st_speed", DEFAULT_LID_SPEED)
+            st_acc = cfg.get("st_acc", DEFAULT_LID_ACC)
+            st_tol = cfg.get("st_tol", DEFAULT_LID_TOLERANCE)
+            sc3_pos = cfg.get("sc3_pos", DEFAULT_LATCH3_LOCK_POS)
+            sc4_pos = cfg.get("sc4_pos", DEFAULT_LATCH4_LOCK_POS)
+            sc_spd = cfg.get("sc_speed", DEFAULT_LATCH_SPEED)
 
-            cfg_unlock = self.load_sequence_config()["unlock"]
-            unlock_sc2 = cfg_unlock.get("sc2_pos", UNLOCK_POS_2)
-            unlock_sc3 = cfg_unlock.get("sc3_pos", UNLOCK_POS_3)
-            
-            if not force:
-                if self.last_state == 'lock':
-                    print("[SERVO SAFETY] Mechanism is ALREADY LOCKED (last_state='lock'). Skipping lock sequence to prevent cable strain.")
-                    with self._io_lock:
-                        self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                    self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='>=')
-                    return
-                    
-                with self._io_lock:
-                    pos3, res3, _ = self.scsHandler.ReadPos(3)
-                if res3 == COMM_SUCCESS and pos3 >= (sc3_pos - 50):
-                    print(f"[SERVO SAFETY] Servo 3 live position ({pos3}) indicates lid is ALREADY CLOSED/LOCKED (>= {sc3_pos - 50})!")
-                    print("[SERVO SAFETY] Skipping Servo 1 rotation to prevent over-tightening or cable breakage.")
-                    self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='>=')
-                    self.last_state = 'lock'
-                    return
+            if not force and self.last_state == 'lock':
+                print("[SERVO SAFETY] Mechanism is ALREADY LOCKED (last_state='lock'). Re-verifying latches...")
+                self.move_latches(sc3_pos, sc4_pos, sc_spd, timeout=2.0)
+                return
 
-            print(f"Step 0: Pre-Lock Safety Check -> Ensuring Latches (Servo 2 & 3) are in UNLOCKED position ({unlock_sc2} & {unlock_sc3}) so they do not interfere with Servo 1...")
-            self.robust_move_sc_pair(2, unlock_sc2, 3, unlock_sc3, sc_speed, check_target3=unlock_sc3, check_dir3='<=')
-            
-            print(f"\nStep 1: Servo 1 (ST) -> Continuous Rotation Forward Speed {st_speed}, Rotations {st_rotations}, Snap to {st_abs_target}")
-            self.rotate_st_continuous(1, direction='f', speed=st_speed, rotations=st_rotations, abs_target=st_abs_target)
-            
-            print("\nWaiting 1s for mechanical settlement...")
-            time.sleep(1.0)
-            
-            print(f"\nStep 2: Servo 2 & 3 (SC) -> {sc2_pos} & {sc3_pos}")
-            self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='>=')
+            # Step 1: Move Dual Lid DOWN synchronously
+            print(f"\nStep 1: Dual Lid DOWN -> ID 1: {st1_pos} & ID 2: {st2_pos} (Speed: {st_spd}, Tol: ±{st_tol})")
+            self.move_dual_lid_sync(st1_pos, st2_pos, speed=st_spd, acc=st_acc, tolerance=st_tol, label="LOCK: DUAL LID DOWN")
+            time.sleep(0.5)
+
+            # Step 2: Engage Latches (SC servos 3 & 4)
+            print(f"\nStep 2: Engaging Latches -> ID 3: {sc3_pos} & ID 4: {sc4_pos} (Speed: {sc_spd})")
+            self.move_latches(sc3_pos, sc4_pos, speed=sc_spd, timeout=3.0)
+            time.sleep(0.5)
+
             print("\nLocking sequence complete!")
             self.last_state = 'lock'
+            self._save_state('lock')
         except Exception as e:
             print(f"[SERVO] Locking sequence failed: {e}")
             traceback.print_exc()
@@ -1075,35 +1085,40 @@ class ServoController:
 
     def perform_unlocking(self, force=False):
         """
-        Execute unlocking sequence.
-        If force is False and mechanism is already unlocked, skips redundant moves.
+        Execute 4-servo unlocking sequence:
+        Step 1: Retract Latches (Servo 3 & Servo 4)
+        Step 2: Move Dual Lid UP synchronously (Servo 1 & Servo 2)
         """
         self.sequence_active = True
         try:
-            print("\n--- STARTING NATIVE UNLOCKING SEQUENCE ---")
+            print("\n--- STARTING 4-SERVO UNLOCKING SEQUENCE ---")
             cfg = self.load_sequence_config()["unlock"]
-            st_speed = cfg.get("st_speed", ST_UNLOCK_SPEED_1)
-            st_rotations = cfg.get("st_rotations", cfg.get("st_rollovers", ST_UNLOCK_ROTATIONS_1))
-            st_abs_target = cfg.get("st_abs_target", ST_UNLOCK_ABS_TARGET_1)
-            sc2_pos = cfg.get("sc2_pos", UNLOCK_POS_2)
-            sc3_pos = cfg.get("sc3_pos", UNLOCK_POS_3)
-            sc_speed = cfg.get("sc_speed", SC_SPEED)
-            
-            if self.last_state == 'unlock' and not force:
-                print("[SERVO] Mechanism is ALREADY UNLOCKED. Skipping redundant unlock rotation.")
-                with self._io_lock:
-                    self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-                self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='<=')
+            st1_pos = cfg.get("st1_pos", DEFAULT_LID1_UNLOCK_POS)
+            st2_pos = cfg.get("st2_pos", DEFAULT_LID2_UNLOCK_POS)
+            st_spd = cfg.get("st_speed", DEFAULT_LID_SPEED)
+            st_acc = cfg.get("st_acc", DEFAULT_LID_ACC)
+            st_tol = cfg.get("st_tol", DEFAULT_LID_TOLERANCE)
+            sc3_pos = cfg.get("sc3_pos", DEFAULT_LATCH3_UNLOCK_POS)
+            sc4_pos = cfg.get("sc4_pos", DEFAULT_LATCH4_UNLOCK_POS)
+            sc_spd = cfg.get("sc_speed", DEFAULT_LATCH_SPEED)
+
+            if not force and self.last_state == 'unlock':
+                print("[SERVO SAFETY] Mechanism is ALREADY UNLOCKED (last_state='unlock'). Skipping redundant unlock moves.")
                 return
 
-            print(f"Step 1: Servo 3 & 2 (SC) -> {sc3_pos} & {sc2_pos}")
-            self.robust_move_sc_pair(2, sc2_pos, 3, sc3_pos, sc_speed, check_target3=sc3_pos, check_dir3='<=')
-            
-            print(f"\nStep 2: Servo 1 (ST) -> Continuous Rotation Backward Speed {st_speed}, Rotations {st_rotations}, Snap to {st_abs_target}")
-            self.rotate_st_continuous(1, direction='b', speed=st_speed, rotations=st_rotations, abs_target=st_abs_target)
-            
+            # Step 1: Retract Latches (SC servos 3 & 4)
+            print(f"\nStep 1: Retracting Latches -> ID 3: {sc3_pos} & ID 4: {sc4_pos} (Speed: {sc_spd})")
+            self.move_latches(sc3_pos, sc4_pos, speed=sc_spd, timeout=3.0)
+            time.sleep(0.5)
+
+            # Step 2: Move Dual Lid UP synchronously
+            print(f"\nStep 2: Dual Lid UP -> ID 1: {st1_pos} & ID 2: {st2_pos} (Speed: {st_spd}, Tol: ±{st_tol})")
+            self.move_dual_lid_sync(st1_pos, st2_pos, speed=st_spd, acc=st_acc, tolerance=st_tol, label="UNLOCK: DUAL LID UP")
+            time.sleep(0.5)
+
             print("\nUnlocking sequence complete!")
             self.last_state = 'unlock'
+            self._save_state('unlock')
         except Exception as e:
             print(f"[SERVO] Unlocking sequence failed: {e}")
             traceback.print_exc()
@@ -1152,30 +1167,15 @@ class ServoController:
                             print(f"[SERVO] Triggering LOCK sequence (Ch6/Servo6 Raw: {ch6} - LOW)")
                             threading.Thread(target=self.perform_locking, daemon=True, name="LockSequenceThread").start()
                 
-                # Active Background Holding Loop
-                # If a sequence is NOT active, re-enforce the target state positions at 10Hz
+                # Active Background Holding: Re-enforce holding torque when idle
                 if not self.sequence_active and self.last_state in ['lock', 'unlock']:
-                    seq_cfg = self.load_sequence_config()
                     with self._io_lock:
-                        # Servo 1 (ST) - Maintain holding torque in Position Control Mode
+                        # IDs 1 & 2 (ST3215)
                         self._write1(1, STS_TORQUE_ENABLE, 1, "enable torque")
-
-                        if self.last_state == 'lock':
-                            lock_c = seq_cfg["lock"]
-                            # Servo 2 (SC)
-                            self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                            self.scsHandler.WritePos(2, lock_c.get("sc2_pos", LOCK_POS_2), 0, lock_c.get("sc_speed", SC_SPEED))
-                            # Servo 3 (SC)
-                            self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                            self.scsHandler.WritePos(3, lock_c.get("sc3_pos", LOCK_POS_3), 0, lock_c.get("sc_speed", SC_SPEED))
-                        elif self.last_state == 'unlock':
-                            unlock_c = seq_cfg["unlock"]
-                            # Servo 2 (SC)
-                            self._write1(2, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                            self.scsHandler.WritePos(2, unlock_c.get("sc2_pos", UNLOCK_POS_2), 0, unlock_c.get("sc_speed", SC_SPEED))
-                            # Servo 3 (SC)
-                            self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
-                            self.scsHandler.WritePos(3, unlock_c.get("sc3_pos", UNLOCK_POS_3), 0, unlock_c.get("sc_speed", SC_SPEED))
+                        self._write1(2, STS_TORQUE_ENABLE, 1, "enable torque")
+                        # IDs 3 & 4 (SC09)
+                        self._write1(3, SCSCL_TORQUE_ENABLE, 1, "enable torque")
+                        self._write1(4, SCSCL_TORQUE_ENABLE, 1, "enable torque")
 
             except Exception as e:
                 print(f"[SERVO] Monitor loop error: {e}")
