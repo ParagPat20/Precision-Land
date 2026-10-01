@@ -130,7 +130,7 @@ abort_event = threading.Event()  # Global abort flag to stop mission execution
 active_mission_ref = None  # Reference to current mission command in Firebase
 mission_active_event = threading.Event()  # Track if a mission is currently active (IN_PROGRESS)
 drone_dry_weight = 5.5  # Global drone dry weight configuration (default: 5.5 kg)
-use_dock = True  # Global config to bypass dock interlock when false
+use_dock = False  # Global config to bypass dock interlock when false
 latest_battery_voltage = 0.0
 latest_battery_current = 0.0
 latest_battery_remaining = -1
@@ -634,9 +634,20 @@ def run_mission_thread(command):
     global drone_dry_weight, use_dock
     print(f"[FIREBASE DEBUG] [{threading.current_thread().name}] Processing Mission {cmd_id}")
     payload = command.get('payload', {})
-    drone_dry_weight = float(payload.get('DRONE_DRY_WEIGHT', 5.5))
-    use_dock = bool(payload.get('USE_DOCK', True))
+    raw_dry_weight = payload.get('drone_dry_weight', payload.get('DRONE_DRY_WEIGHT', 5.5))
+    try:
+        drone_dry_weight = float(raw_dry_weight)
+    except (ValueError, TypeError):
+        drone_dry_weight = 5.5
+
+    raw_dock = payload.get('use_dock', payload.get('USE_DOCK', False))
+    if isinstance(raw_dock, str):
+        use_dock = raw_dock.strip().lower() in ['true', '1', 'yes']
+    else:
+        use_dock = bool(raw_dock)
+
     print(f"[FIREBASE DEBUG] Updated drone dry weight config to: {drone_dry_weight} kg")
+    print(f"[FIREBASE DEBUG] Updated use_dock config to: {use_dock}")
     print(f"[FIREBASE DEBUG] Payload: {payload}")
     
     target_lat = payload.get('target_lat')

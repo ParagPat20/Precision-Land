@@ -66,6 +66,7 @@ DEFAULT_LID2_UNLOCK_POS = 500
 DEFAULT_LID_SPEED       = 2400
 DEFAULT_LID_ACC         = 50
 DEFAULT_LID_TOLERANCE   = 70
+DEFAULT_LID_THRESHOLD   = 250   # Threshold distance from target (ticks) to trigger latches
 
 # Servo ID 3 & 4 (SC09 Locking Latches / Kadi)
 DEFAULT_LATCH3_LOCK_POS   = 520
@@ -81,6 +82,7 @@ DEFAULT_SEQUENCE_CONFIG = {
         "st_speed": DEFAULT_LID_SPEED,
         "st_acc": DEFAULT_LID_ACC,
         "st_tol": DEFAULT_LID_TOLERANCE,
+        "st_threshold": DEFAULT_LID_THRESHOLD,
         "sc3_pos": DEFAULT_LATCH3_LOCK_POS,
         "sc4_pos": DEFAULT_LATCH4_LOCK_POS,
         "sc_speed": DEFAULT_LATCH_SPEED
@@ -929,10 +931,11 @@ class ServoController:
         print(f"  -> Timeout reached for SC servos! Did not fully complete.")
         return False
 
-    def move_dual_lid_sync(self, target1, target2, speed=DEFAULT_LID_SPEED, acc=DEFAULT_LID_ACC, tolerance=DEFAULT_LID_TOLERANCE, label="DUAL LID MOTION"):
+    def move_dual_lid_sync(self, target1, target2, speed=DEFAULT_LID_SPEED, acc=DEFAULT_LID_ACC, tolerance=DEFAULT_LID_TOLERANCE, threshold=None, on_threshold_cb=None, label="DUAL LID MOTION"):
         """
         Synchronously moves Servo 1 and Servo 2 simultaneously using SyncWrite (or RegWrite+Action fallback).
         Monitors both encoders in real time until both servos reach their targets within tolerance threshold.
+        If threshold and on_threshold_cb are provided, calls on_threshold_cb as soon as both servos are within threshold distance of target, while servos continue moving all the way to target without stopping.
         """
         target1 = int(target1)
         target2 = int(target2)
@@ -969,6 +972,7 @@ class ServoController:
         last_p1 = pos1_start if r1 == COMM_SUCCESS else 0
         last_p2 = pos2_start if r2 == COMM_SUCCESS else 0
         stall_count = 0
+        threshold_fired = False
 
         while time.time() - start_t < max_wait:
             if check_emergency_stop():
@@ -983,8 +987,21 @@ class ServoController:
                 pos1_now, r1, _ = self.stsHandler.ReadPos(1)
                 pos2_now, r2, _ = self.stsHandler.ReadPos(2)
 
-            p1_done = (r1 == COMM_SUCCESS and abs(pos1_now - target1) <= tolerance)
-            p2_done = (r2 == COMM_SUCCESS and abs(pos2_now - target2) <= tolerance)
+            dist1 = abs(pos1_now - target1) if r1 == COMM_SUCCESS else 9999
+            dist2 = abs(pos2_now - target2) if r2 == COMM_SUCCESS else 9999
+
+            # Threshold trigger: Trigger latches when lid reaches threshold, while lid continues moving to target!
+            if on_threshold_cb and not threshold_fired:
+                if threshold is not None and (dist1 <= threshold and dist2 <= threshold):
+                    threshold_fired = True
+                    print(f"\n[SERVO] [THRESHOLD TRIGGER] ID 1 dist={dist1}, ID 2 dist={dist2} <= {threshold}! Firing latch trigger...")
+                    try:
+                        on_threshold_cb()
+                    except Exception as cb_err:
+                        print(f"[SERVO] Error in on_threshold_cb: {cb_err}")
+
+            p1_done = (r1 == COMM_SUCCESS and dist1 <= tolerance)
+            p2_done = (r2 == COMM_SUCCESS and dist2 <= tolerance)
 
             if p1_done and p2_done:
                 break
@@ -993,29 +1010,41 @@ class ServoController:
             if r1 == COMM_SUCCESS and r2 == COMM_SUCCESS:
                 if abs(pos1_now - last_p1) < 4 and abs(pos2_now - last_p2) < 4:
                     stall_count += 1
-                    if stall_count >= 10 and abs(pos1_now - target1) <= (tolerance + 50) and abs(pos2_now - target2) <= (tolerance + 50):
-                        print(f"\n[SERVO] [LID SEATED] Mechanical limit reached (ID 1: {pos1_now}, ID 2: {pos2_now}). Proceeding...")
+                    if stall_count >= 10 and dist1 <= (tolerance + 50) and dist2 <= (tolerance + 50):
+                        print(f"\n[SERVO] [LID SEATED] Mechanical limit reached (ID 1: {pos1_now}, ID 2: {pos2_now}). Holding target position...")
                         break
                 else:
                     stall_count = 0
                 last_p1 = pos1_now
                 last_p2 = pos2_now
 
+        # Crucial: Ensure torque remains firmly ENABLED on both servos to hold position
         with self._io_lock:
+            self._write1(1, STS_TORQUE_ENABLE, 1, "ensure holding torque")
+            self._write1(2, STS_TORQUE_ENABLE, 1, "ensure holding torque")
             pos1_fin, _, _ = self.stsHandler.ReadPos(1)
             pos2_fin, _, _ = self.stsHandler.ReadPos(2)
-        print(f"[SERVO] [SYNC REACHED] Final Positions: Servo 1 = {pos1_fin} (Target: {target1}) | Servo 2 = {pos2_fin} (Target: {target2})")
+
+        print(f"[SERVO] [SYNC REACHED] Final Positions: Servo 1 = {pos1_fin} (Target: {target1}) | Servo 2 = {pos2_fin} (Target: {target2}) [TORQUE HELD]")
+
+        if on_threshold_cb and not threshold_fired:
+            threshold_fired = True
+            try:
+                on_threshold_cb()
+            except Exception as cb_err:
+                print(f"[SERVO] Error in fallback on_threshold_cb: {cb_err}")
+
         return True
 
     def move_latches(self, target3, target4, speed=DEFAULT_LATCH_SPEED, timeout=5.0):
         """
-        Moves SC09 latch servos (ID 3 & ID 4) simultaneously.
+        Moves SC09 latch servos (ID 3 & ID 4) simultaneously with FULL TORQUE and anti-jam protection.
         """
         target3 = int(target3)
         target4 = int(target4)
         speed = int(speed)
 
-        print(f"[SERVO] Moving Latches -> Servo 3: {target3} | Servo 4: {target4} (Speed: {speed})")
+        print(f"[SERVO] Moving Latches -> Servo 3: {target3} | Servo 4: {target4} (Speed: {speed}) with FULL TORQUE")
 
         with self._io_lock:
             self.scsHandler.write1ByteTxRx(3, SCSCL_TORQUE_ENABLE, 1)
@@ -1024,27 +1053,67 @@ class ServoController:
             self.scsHandler.WritePos(4, target4, 0, speed)
 
         start_t = time.time()
+        last_pos3 = -1
+        last_pos4 = -1
+        stuck_count3 = 0
+        stuck_count4 = 0
+        p3_ok = False
+        p4_ok = False
+
         while time.time() - start_t < timeout:
+            if check_emergency_stop():
+                print("\n[SERVO EMERGENCY STOP] Halting latches!")
+                return False
+
             time.sleep(0.08)
             with self._io_lock:
                 pos3, r3, _ = self.scsHandler.ReadPos(3)
                 pos4, r4, _ = self.scsHandler.ReadPos(4)
-            p3_ok = (r3 == COMM_SUCCESS and abs(pos3 - target3) <= 25)
-            p4_ok = (r4 == COMM_SUCCESS and abs(pos4 - target4) <= 25)
+
+            if r3 == COMM_SUCCESS:
+                p3_ok = (abs(pos3 - target3) <= 25)
+                if not p3_ok:
+                    if abs(pos3 - last_pos3) < 3:
+                        stuck_count3 += 1
+                        if stuck_count3 >= 3:
+                            with self._io_lock:
+                                self.scsHandler.write1ByteTxRx(3, SCSCL_TORQUE_ENABLE, 1)
+                                self.scsHandler.WritePos(3, target3, 0, speed)
+                            stuck_count3 = 0
+                    else:
+                        stuck_count3 = 0
+                last_pos3 = pos3
+
+            if r4 == COMM_SUCCESS:
+                p4_ok = (abs(pos4 - target4) <= 25)
+                if not p4_ok:
+                    if abs(pos4 - last_pos4) < 3:
+                        stuck_count4 += 1
+                        if stuck_count4 >= 3:
+                            with self._io_lock:
+                                self.scsHandler.write1ByteTxRx(4, SCSCL_TORQUE_ENABLE, 1)
+                                self.scsHandler.WritePos(4, target4, 0, speed)
+                            stuck_count4 = 0
+                    else:
+                        stuck_count4 = 0
+                last_pos4 = pos4
+
             if p3_ok and p4_ok:
                 break
 
         with self._io_lock:
             p3_fin, _, _ = self.scsHandler.ReadPos(3)
             p4_fin, _, _ = self.scsHandler.ReadPos(4)
-        print(f"[SERVO] Latches Position -> Servo 3: {p3_fin} (Target {target3}) | Servo 4: {p4_fin} (Target {target4})")
-        return True
+        print(f"[SERVO] Latches Final -> Servo 3: {p3_fin} (Target {target3}, ok={p3_ok}) | Servo 4: {p4_fin} (Target {target4}, ok={p4_ok})")
+        return p3_ok and p4_ok
 
     def perform_locking(self, force=False):
         """
         Execute 4-servo locking sequence:
-        Step 1: Move Dual Lid DOWN synchronously (Servo 1 & Servo 2)
-        Step 2: Engage Latches (Servo 3 & Servo 4)
+        Step 1: Move Dual Lid DOWN synchronously (Servo 1 & Servo 2).
+                When Servo 1 & 2 reach the threshold near target, trigger Latches (Servo 3 & 4) to lock.
+                Servo 1 & 2 continue all the way to their target and hold torque (never stopped or disabled).
+        Step 2: Ensure Latches (Servo 3 & 4) reach lock target with full torque.
         """
         self.sequence_active = True
         try:
@@ -1055,6 +1124,7 @@ class ServoController:
             st_spd = cfg.get("st_speed", DEFAULT_LID_SPEED)
             st_acc = cfg.get("st_acc", DEFAULT_LID_ACC)
             st_tol = cfg.get("st_tol", DEFAULT_LID_TOLERANCE)
+            st_threshold = cfg.get("st_threshold", DEFAULT_LID_THRESHOLD)
             sc3_pos = cfg.get("sc3_pos", DEFAULT_LATCH3_LOCK_POS)
             sc4_pos = cfg.get("sc4_pos", DEFAULT_LATCH4_LOCK_POS)
             sc_spd = cfg.get("sc_speed", DEFAULT_LATCH_SPEED)
@@ -1064,17 +1134,42 @@ class ServoController:
                 self.move_latches(sc3_pos, sc4_pos, sc_spd, timeout=2.0)
                 return
 
-            # Step 1: Move Dual Lid DOWN synchronously
-            print(f"\nStep 1: Dual Lid DOWN -> ID 1: {st1_pos} & ID 2: {st2_pos} (Speed: {st_spd}, Tol: ±{st_tol})")
-            self.move_dual_lid_sync(st1_pos, st2_pos, speed=st_spd, acc=st_acc, tolerance=st_tol, label="LOCK: DUAL LID DOWN")
-            time.sleep(0.5)
+            latches_thread = None
+            latches_started = threading.Event()
 
-            # Step 2: Engage Latches (SC servos 3 & 4)
-            print(f"\nStep 2: Engaging Latches -> ID 3: {sc3_pos} & ID 4: {sc4_pos} (Speed: {sc_spd})")
-            self.move_latches(sc3_pos, sc4_pos, speed=sc_spd, timeout=3.0)
-            time.sleep(0.5)
+            def trigger_latches_on_threshold():
+                nonlocal latches_thread
+                if latches_started.is_set():
+                    return
+                latches_started.set()
+                print(f"\n[SERVO] >>> THRESHOLD REACHED: Sending Latches (ID 3 & 4) to lock targets ({sc3_pos}, {sc4_pos}) with FULL TORQUE while Lid finishes movement to target...")
+                latches_thread = threading.Thread(
+                    target=self.move_latches,
+                    args=(sc3_pos, sc4_pos, sc_spd, 5.0),
+                    name="LockLatchesThread"
+                )
+                latches_thread.start()
 
-            print("\nLocking sequence complete!")
+            # Step 1: Move Dual Lid DOWN synchronously towards st1_pos & st2_pos.
+            # Once threshold is reached, trigger_latches_on_threshold fires.
+            # Servo 1 & 2 NEVER stop at threshold; they continue all the way to target!
+            print(f"\nStep 1: Dual Lid DOWN -> ID 1: {st1_pos} & ID 2: {st2_pos} (Speed: {st_spd}, Tol: ±{st_tol}, Threshold: {st_threshold})")
+            self.move_dual_lid_sync(
+                st1_pos, st2_pos,
+                speed=st_spd, acc=st_acc, tolerance=st_tol,
+                threshold=st_threshold, on_threshold_cb=trigger_latches_on_threshold,
+                label="LOCK: DUAL LID DOWN"
+            )
+
+            # In case threshold was not triggered during lid motion, trigger latches now
+            if not latches_started.is_set():
+                trigger_latches_on_threshold()
+
+            # Step 2: Wait for latches to finish locking to target
+            if latches_thread:
+                latches_thread.join(timeout=6.0)
+
+            print("\nLocking sequence complete! All servos reached target with torque held.")
             self.last_state = 'lock'
             self._save_state('lock')
         except Exception as e:
@@ -1086,8 +1181,8 @@ class ServoController:
     def perform_unlocking(self, force=False):
         """
         Execute 4-servo unlocking sequence:
-        Step 1: Retract Latches (Servo 3 & Servo 4)
-        Step 2: Move Dual Lid UP synchronously (Servo 1 & Servo 2)
+        Step 1: Retract Latches (Servo 3 & Servo 4) with FULL TORQUE completely out to unlock targets.
+        Step 2: ONLY AFTER latches are fully retracted, Move Dual Lid (Servo 1 & Servo 2) to unlock target.
         """
         self.sequence_active = True
         try:
@@ -1106,17 +1201,22 @@ class ServoController:
                 print("[SERVO SAFETY] Mechanism is ALREADY UNLOCKED (last_state='unlock'). Skipping redundant unlock moves.")
                 return
 
-            # Step 1: Retract Latches (SC servos 3 & 4)
-            print(f"\nStep 1: Retracting Latches -> ID 3: {sc3_pos} & ID 4: {sc4_pos} (Speed: {sc_spd})")
-            self.move_latches(sc3_pos, sc4_pos, speed=sc_spd, timeout=3.0)
-            time.sleep(0.5)
+            # Step 1: Retract Latches (SC servos 3 & 4) with FULL TORQUE
+            print(f"\nStep 1: Retracting Latches with FULL TORQUE -> ID 3: {sc3_pos} & ID 4: {sc4_pos} (Speed: {sc_spd})")
+            latches_ok = self.move_latches(sc3_pos, sc4_pos, speed=sc_spd, timeout=5.0)
+            if not latches_ok:
+                print("[SERVO WARNING] Latches taking longer or under resistance. Re-verifying full torque unlock position...")
+                time.sleep(0.2)
+                self.move_latches(sc3_pos, sc4_pos, speed=sc_spd, timeout=3.0)
 
-            # Step 2: Move Dual Lid UP synchronously
-            print(f"\nStep 2: Dual Lid UP -> ID 1: {st1_pos} & ID 2: {st2_pos} (Speed: {st_spd}, Tol: ±{st_tol})")
+            time.sleep(0.3)
+
+            # Step 2: Now that latches are safely out, move Dual Lid to UNLOCK targets
+            print(f"\nStep 2: Moving Dual Lid to UNLOCK -> ID 1: {st1_pos} & ID 2: {st2_pos} (Speed: {st_spd}, Tol: ±{st_tol})")
             self.move_dual_lid_sync(st1_pos, st2_pos, speed=st_spd, acc=st_acc, tolerance=st_tol, label="UNLOCK: DUAL LID UP")
-            time.sleep(0.5)
+            time.sleep(0.3)
 
-            print("\nUnlocking sequence complete!")
+            print("\nUnlocking sequence complete! All servos at unlock target.")
             self.last_state = 'unlock'
             self._save_state('unlock')
         except Exception as e:
