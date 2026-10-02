@@ -1,6 +1,8 @@
 mav.parm
 mav.tlog
 mav.tlog.raw
+*.bin
+*.BIN
 *.pyc
 
 # Virtual environments and caches
