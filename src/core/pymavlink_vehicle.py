@@ -94,6 +94,8 @@ class MavlinkVehicle:
         self.servo_7_pwm = 1000
         self.servo_15_pwm = 1000
         self.servo_16_pwm = 1000
+        self.current_waypoint = 0
+        self.last_waypoint_reached = -1
 
         
         # Thread synchronization
@@ -345,16 +347,24 @@ class MavlinkVehicle:
     def start_streams(self, rate=4):
         """Send data stream requests to ArduPilot."""
         print(f"[MAVLINK VEHICLE] Sending stream request MAV_DATA_STREAM_ALL at {rate}Hz...")
-        try:
-            self._master.mav.request_data_stream_send(
-                self.target_system,
-                self.target_component,
-                mavutil.mavlink.MAV_DATA_STREAM_ALL,
-                rate,
-                1  # 1 = start
-            )
-        except Exception as e:
-            print(f"[MAVLINK VEHICLE] Error requesting streams: {e}")
+        streams = [
+            mavutil.mavlink.MAV_DATA_STREAM_ALL,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS,
+            mavutil.mavlink.MAV_DATA_STREAM_POSITION,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
+            mavutil.mavlink.MAV_DATA_STREAM_EXTRA2,
+        ]
+        for s in streams:
+            try:
+                self._master.mav.request_data_stream_send(
+                    self.target_system,
+                    self.target_component,
+                    s,
+                    rate,
+                    1  # 1 = start
+                )
+            except Exception as e:
+                print(f"[MAVLINK VEHICLE] Error requesting stream {s}: {e}")
 
     def upload_mission(self, mission_items, timeout=15.0):
         """
@@ -432,6 +442,14 @@ class MavlinkVehicle:
             raise TimeoutError("Mission item upload transaction timed out!")
 
     def _update_mode_from_heartbeat(self, msg):
+        # Ignore heartbeats from GCS or non-vehicle components
+        if getattr(msg, 'type', None) == mavutil.mavlink.MAV_TYPE_GCS:
+            return
+        if self.target_system and msg.get_srcSystem() != self.target_system:
+            return
+        if self.target_component and self.target_component != 0 and msg.get_srcComponent() != self.target_component:
+            return
+
         custom_mode = msg.custom_mode
         # First, try to look up in the COPTER_MODE_MAP since this is a copter system
         mode_name = COPTER_MODE_MAP.get(custom_mode)
@@ -444,6 +462,14 @@ class MavlinkVehicle:
             self._mode = VehicleMode(mode_name)
 
     def _update_armed_from_heartbeat(self, msg):
+        # Ignore heartbeats from GCS or non-vehicle components
+        if getattr(msg, 'type', None) == mavutil.mavlink.MAV_TYPE_GCS:
+            return
+        if self.target_system and msg.get_srcSystem() != self.target_system:
+            return
+        if self.target_component and self.target_component != 0 and msg.get_srcComponent() != self.target_component:
+            return
+
         new_armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
         old_armed = self._armed
         if new_armed != old_armed:
@@ -509,6 +535,12 @@ class MavlinkVehicle:
                     self.servo_7_pwm = getattr(msg, 'servo7_raw', 1000)
                     self.servo_15_pwm = getattr(msg, 'servo15_raw', 1000)
                     self.servo_16_pwm = getattr(msg, 'servo16_raw', 1000)
+
+                elif msg_type == 'MISSION_CURRENT':
+                    self.current_waypoint = getattr(msg, 'seq', 0)
+
+                elif msg_type == 'MISSION_ITEM_REACHED':
+                    self.last_waypoint_reached = getattr(msg, 'seq', -1)
 
                 
                 # Distribute message to synchronous response queues

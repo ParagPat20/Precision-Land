@@ -72,7 +72,7 @@ class DeliveryTemplate:
                     'speed_type': 2, # 2 = Climb Speed (Vertical m/s)
                     'speed': '{NORMAL_CLIMB_SPEED}'
                 }),
-                TemplateCommand('takeoff', {'alt': '{TAKEOFF_ALT}'}),
+                TemplateCommand('takeoff', {'alt': '{CRUISE_ALT}'}),
                 TemplateCommand('rtl', {}),
             ],
             default_values={
@@ -92,15 +92,72 @@ class DeliveryTemplate:
     def generate_mission(self, home_location, delivery_location, override_values=None):
         values = self.default_values.copy()
         if override_values:
-            normalized_overrides = override_values.copy()
-            if 'SERVO_OPEN_PWM' in normalized_overrides and 'LID_UNLOCK_PWM' not in normalized_overrides:
-                normalized_overrides['LID_UNLOCK_PWM'] = normalized_overrides['SERVO_OPEN_PWM']
-            if 'SERVO_CLOSE_PWM' in normalized_overrides and 'LID_LOCK_PWM' not in normalized_overrides:
-                normalized_overrides['LID_LOCK_PWM'] = normalized_overrides['SERVO_CLOSE_PWM']
-            values.update(normalized_overrides)
+            normalized_overrides = {}
+            for k, v in override_values.items():
+                if v is not None:
+                    normalized_overrides[str(k).upper()] = v
 
-        # Force SERVO_NUM to 6 as we only handle servo 6 on the drone
-        values['SERVO_NUM'] = 6
+            # 1. Cruise Altitude mapping
+            for key in ['CRUISE_ALTITUDE', 'CRUISE_ALT', 'ALTITUDE', 'ALT']:
+                if key in normalized_overrides:
+                    try:
+                        values['CRUISE_ALT'] = float(normalized_overrides[key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            # 2. Takeoff Altitude mapping
+            for key in ['TAKEOFF_ALTITUDE', 'TAKEOFF_ALT']:
+                if key in normalized_overrides:
+                    try:
+                        values['TAKEOFF_ALT'] = float(normalized_overrides[key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            if 'TAKEOFF_ALTITUDE' not in normalized_overrides and 'TAKEOFF_ALT' not in normalized_overrides:
+                if 'CRUISE_ALT' in values:
+                    values['TAKEOFF_ALT'] = values['CRUISE_ALT']
+
+            # 3. Flight Speed mapping
+            for key in ['FLY_SPEED', 'SPEED']:
+                if key in normalized_overrides:
+                    try:
+                        values['FLY_SPEED'] = float(normalized_overrides[key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            # 4. Drop Delay mapping
+            for key in ['DROP_DELAY', 'DELAY']:
+                if key in normalized_overrides:
+                    try:
+                        values['DROP_DELAY'] = float(normalized_overrides[key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            # 5. Servo PWMs mapping
+            if 'SERVO_OPEN_PWM' in normalized_overrides:
+                values['LID_UNLOCK_PWM'] = normalized_overrides['SERVO_OPEN_PWM']
+            elif 'LID_UNLOCK_PWM' in normalized_overrides:
+                values['LID_UNLOCK_PWM'] = normalized_overrides['LID_UNLOCK_PWM']
+
+            if 'SERVO_CLOSE_PWM' in normalized_overrides:
+                values['LID_LOCK_PWM'] = normalized_overrides['SERVO_CLOSE_PWM']
+            elif 'LID_LOCK_PWM' in normalized_overrides:
+                values['LID_LOCK_PWM'] = normalized_overrides['LID_LOCK_PWM']
+
+            if 'SERVO_NUM' in normalized_overrides:
+                values['SERVO_NUM'] = normalized_overrides['SERVO_NUM']
+
+            for k, v in normalized_overrides.items():
+                if k in values and k not in ['CRUISE_ALT', 'TAKEOFF_ALT', 'LID_UNLOCK_PWM', 'LID_LOCK_PWM', 'SERVO_NUM', 'FLY_SPEED', 'DROP_DELAY']:
+                    values[k] = v
+
+        if 'SERVO_NUM' not in values:
+            values['SERVO_NUM'] = 6
+
+        print(f"[MISSION GENERATOR] Configured: Takeoff Alt={values.get('TAKEOFF_ALT')}m, Cruise Alt={values.get('CRUISE_ALT')}m, Speed={values.get('FLY_SPEED')}m/s, Drop Delay={values.get('DROP_DELAY')}s, Servo={values.get('SERVO_NUM')}")
 
         mission_items = []
         seq = 0

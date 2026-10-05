@@ -310,6 +310,8 @@ def build_telemetry_payload():
     payload = {
         'heading': float(vehicle.heading) if vehicle.heading is not None else 0.0,
         'mode': vehicle.mode.name if vehicle.mode is not None else 'UNKNOWN',
+        'armed': bool(vehicle.armed) if vehicle is not None else False,
+        'current_waypoint': int(getattr(vehicle, 'current_waypoint', 0)),
         'batteryVoltage': batt_voltage,
         'current': batt_cur,
         'updated_at': int(time.time() * 1000),
@@ -565,7 +567,62 @@ def execute_mission_logic(mission_items, cmd_ref):
             except Exception as e:
                 print(f"[ABORT] Error setting RTL mode: {e}")
             return False
-            
+
+        # Live mission monitoring: wait for autonomous flight and RTL landing before completing
+        print("[MISSION] Vehicle armed in AUTO mode. Live mission monitoring active...", flush=True)
+        total_items = len(mission_items)
+        has_taken_off = False
+        last_logged_seq = -1
+        mission_start_time = time.time()
+
+        while not abort_event.is_set():
+            if abort_event.is_set():
+                print("[MISSION] Abort detected during flight. Exiting monitor loop.", flush=True)
+                return False
+
+            # Poll flight controller for active waypoint sequence
+            try:
+                vehicle._master.mav.mission_request_current_send(vehicle.target_system, vehicle.target_component)
+            except Exception:
+                pass
+
+            cur_alt = getattr(getattr(vehicle.location, 'global_relative_frame', None), 'alt', 0.0)
+            try:
+                cur_alt = float(cur_alt) if cur_alt is not None else 0.0
+            except Exception:
+                cur_alt = 0.0
+
+            cur_mode = getattr(getattr(vehicle, 'mode', None), 'name', 'UNKNOWN')
+            cur_seq = int(getattr(vehicle, 'current_waypoint', 0))
+            is_armed = bool(getattr(vehicle, 'armed', False))
+
+            if cur_alt > 1.5:
+                has_taken_off = True
+
+            # Periodic progress log on waypoint transition
+            if cur_seq != last_logged_seq:
+                last_logged_seq = cur_seq
+                print(f"[MISSION PROGRESS] Waypoint: {cur_seq}/{total_items - 1} | Mode: {cur_mode} | Alt: {cur_alt:.1f}m | Armed: {is_armed}", flush=True)
+
+            # Completion Check:
+            # Must have actually flown (taken off) first
+            if has_taken_off:
+                # ArduPilot native landing detection disarms motors automatically at base after DISARM_DELAY.
+                # No script force-disarm is performed to prevent any risk of in-flight disarm.
+                if not is_armed:
+                    if cur_seq >= total_items - 2 or cur_mode == 'RTL':
+                        print(f"[MISSION] Touchdown confirmed: vehicle safely disarmed by flight controller at base. Mission completed in {time.time()-mission_start_time:.1f}s!", flush=True)
+                        return True
+                    else:
+                        print(f"[MISSION] Vehicle disarmed unexpectedly at waypoint {cur_seq}/{total_items - 1} before return. Exiting monitor loop.", flush=True)
+                        return False
+
+            time.sleep(1.0)
+
+        if abort_event.is_set():
+            print("[MISSION] Abort flag set. Exiting mission execution.", flush=True)
+            return False
+
         return True
     except Exception as e:
         print(f"[FIREBASE] Mission Execution Error: {e}")
@@ -1290,55 +1347,35 @@ def send_distance_message( dist):
     vehicle.send_mavlink(msg)     
 
 # ----------------------------------------------------------------------
-# CAMERA MOUNT GEOMETRY & LEVER ARM OFFSETS
+# CAMERA MOUNT GEOMETRY: Straight looking down (Nadir, 0° tilt, simple x-y)
 # ----------------------------------------------------------------------
-# Camera is mounted 22 cm forward of drone Center of Gravity (CoG)
-# and tilted 20 degrees forward (pitched up from nadir towards the nose)
-CAM_TILT_PITCH_DEG = float(os.environ.get("JECH_CAM_TILT_PITCH_DEG", "20.0"))
-CAM_OFFSET_FORWARD_CM = float(os.environ.get("JECH_CAM_OFFSET_FORWARD_CM", "22.0"))
+CAM_TILT_PITCH_DEG = float(os.environ.get("JECH_CAM_TILT_PITCH_DEG", "0.0"))
+CAM_OFFSET_FORWARD_CM = float(os.environ.get("JECH_CAM_OFFSET_FORWARD_CM", "0.0"))
 CAM_OFFSET_RIGHT_CM = float(os.environ.get("JECH_CAM_OFFSET_RIGHT_CM", "0.0"))
 CAM_OFFSET_DOWN_CM = float(os.environ.get("JECH_CAM_OFFSET_DOWN_CM", "0.0"))
 
-_TILT_RAD = math.radians(CAM_TILT_PITCH_DEG)
-_COS_TILT = math.cos(_TILT_RAD)
-_SIN_TILT = math.sin(_TILT_RAD)
-
-print(f"[CAM_GEOMETRY] Mounting config: Pitch tilt={CAM_TILT_PITCH_DEG}° forward | Offset: Fwd={CAM_OFFSET_FORWARD_CM}cm, Right={CAM_OFFSET_RIGHT_CM}cm, Down={CAM_OFFSET_DOWN_CM}cm", flush=True)
+print(f"[CAM_GEOMETRY] Mounting config: Straight looking down (Nadir, 0° tilt) | Simple x-y", flush=True)
 
 def camera_to_uav(x_cam, y_cam, z_cam):
     """
-    Transforms marker 3D position from camera coordinates to Drone Body Frame (FRD) relative to CoG.
-
-    OpenCV Camera Frame:
-      x_cam: Right in image
-      y_cam: Down in image
-      z_cam: Optical axis (distance straight out of lens)
-
-    Drone Body Frame (FRD - Forward, Right, Down):
-      x_uav: Forward towards nose (cm)
-      y_uav: Right towards starboard (cm)
-      z_uav: Down towards ground (cm)
+    Straight downward-facing camera: simple direct x, y mapping.
+    x_uav: x in body frame (cm)
+    y_uav: y in body frame (cm)
+    z_uav: z in body frame / altitude (cm)
     """
-    # 1. Pitch rotation around lateral axis (20 deg forward from nadir)
-    x_forward = -y_cam * _COS_TILT + z_cam * _SIN_TILT
-    y_right   = x_cam
-    z_down    = y_cam * _SIN_TILT + z_cam * _COS_TILT
-
-    # 2. Add physical lever-arm offset from drone center of gravity (CoG)
-    x_uav = x_forward + CAM_OFFSET_FORWARD_CM
-    y_uav = y_right   + CAM_OFFSET_RIGHT_CM
-    z_uav = max(1.0, z_down + CAM_OFFSET_DOWN_CM)
-
+    x_uav = float(x_cam)
+    y_uav = float(y_cam)
+    z_uav = max(1.0, float(z_cam))
     return x_uav, y_uav, z_uav
 
 def marker_position_to_angle(x_uav, y_uav, z_uav):
     """
-    Converts 3D body position (cm) to MAVLink LANDING_TARGET angles (radians).
-    angle_x: lateral roll angle (positive right)
-    angle_y: longitudinal pitch angle (negative forward, matching ArduPilot MAVLink convention)
+    Direct optical angles from straight downward-facing camera.
+    angle_x: x-axis angular offset in radians (atan2(x, z))
+    angle_y: y-axis angular offset in radians (atan2(y, z))
     """
-    angle_x = math.atan2(y_uav, z_uav)
-    angle_y = math.atan2(-x_uav, z_uav)
+    angle_x = math.atan2(x_uav, z_uav)
+    angle_y = math.atan2(y_uav, z_uav)
     return (angle_x, angle_y)
         
 #--------------------------------------------------
@@ -1604,6 +1641,12 @@ def set_param_nonblocking(param_name: str, value: float, param_type: int) -> Non
 # PLND params (integers in ArduPilot; send as INT8 to avoid float-only semantics).
 set_param_nonblocking("PLND_ENABLED", 1, mavutil.mavlink.MAV_PARAM_TYPE_INT8)
 set_param_nonblocking("PLND_TYPE", 1, mavutil.mavlink.MAV_PARAM_TYPE_INT8)  # Mavlink landing backend
+# Enable ContinueAfterLand (MIS_OPTIONS=4) and standard landing disarm delay (DISARM_DELAY=10)
+# Delivery waypoint drops package and takes off in 2-3s (well before 10s delay expires).
+# Final landing at base stays on ground, letting ArduPilot's landing detector safely auto-disarm motors.
+set_param_nonblocking("DISARM_DELAY", 10, mavutil.mavlink.MAV_PARAM_TYPE_INT8)
+set_param_nonblocking("MIS_OPTIONS", 4, mavutil.mavlink.MAV_PARAM_TYPE_INT16)  # Bit 2 = ContinueAfterLand
+set_param_nonblocking("AUTO_OPTIONS", 135, mavutil.mavlink.MAV_PARAM_TYPE_INT16)  # Allow arm/takeoff in AUTO
 
 # vehicle.parameters['LAND_REPOSITION']   = 0 # !!!!!! ONLY FOR SITL IF NO RC IS CONNECTED
 
@@ -1694,7 +1737,11 @@ while True:
         marker_found, x_cm, y_cm, z_cm = (False, 0.0, 0.0, 0.0)
         time.sleep(0.05)
     else:
-        marker_found, x_cm, y_cm, z_cm = aruco_tracker.track(loop=False)
+        track_res = aruco_tracker.track(loop=False)
+        if track_res is not None and len(track_res) == 4:
+            marker_found, x_cm, y_cm, z_cm = track_res
+        else:
+            marker_found, x_cm, y_cm, z_cm = (False, 0.0, 0.0, 0.0)
 
     # If armed, record the latest camera frame without blocking the tracking loop.
     # The tracker exposes the last frame so we don't open the camera twice.

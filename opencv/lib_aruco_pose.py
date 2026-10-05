@@ -184,69 +184,32 @@ class ArucoSingleTracker():
         if self._use_picamera:
             self._cap = None
         else:
-            #--- USB Video Capture (OV9281 Mono B&W 12MP 120° Wide camera)
-            # OV9281 is a fixed-focus USB camera (no AF controls needed) with high FPS mono capability.
-            self._cap = cv2.VideoCapture(0)
-            
-            # Configure high-throughput MJPEG format for full resolution & high FPS
-            try:
-                self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-            except Exception:
-                pass
-                
+            #--- USB Video Capture (Fallback / Testing)
+            if os.name == 'nt':
+                self._cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            else:
+                self._cap = cv2.VideoCapture(0)
+                try:
+                    self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                except Exception:
+                    pass
+                try:
+                    self._cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+                except Exception:
+                    pass
+
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_size[0])
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_size[1])
-            
-            try:
-                self._cap.set(cv2.CAP_PROP_FPS, self.target_fps)
-            except Exception:
-                pass
-                
+
             try:
                 self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             except Exception:
                 pass
 
-            # Environmental & Code-level Exposure/Gain controls to eliminate white floor glare
-            # Defaults matched to tuned Guvcview profile for crisp high-altitude checkerboard contrast
-            bright_val = float(os.environ.get("CAMERA_BRIGHTNESS", -15))
-            contrast_val = float(os.environ.get("CAMERA_CONTRAST", 35))
-            gamma_val = float(os.environ.get("CAMERA_GAMMA", 75))
-            gain_val = float(os.environ.get("CAMERA_GAIN", 33))
-            sharpness_val = float(os.environ.get("CAMERA_SHARPNESS", 20))
-            exposure_val = float(os.environ.get("CAMERA_EXPOSURE", 1))
-
-            try:
-                self._cap.set(cv2.CAP_PROP_BRIGHTNESS, bright_val)
-                self._cap.set(cv2.CAP_PROP_CONTRAST, contrast_val)
-                self._cap.set(cv2.CAP_PROP_GAMMA, gamma_val)
-                self._cap.set(cv2.CAP_PROP_GAIN, gain_val)
-                self._cap.set(cv2.CAP_PROP_SHARPNESS, sharpness_val)
-                self._cap.set(cv2.CAP_PROP_EXPOSURE, exposure_val)
-            except Exception as e:
-                print(f"[CAMERA] OpenCV exposure property configuration note: {e}")
-
-            # Apply v4l2-ctl hardware controls on Linux/RPi for guaranteed driver-level persistence
-            if os.name == 'posix':
-                try:
-                    import subprocess
-                    v4l2_cmd = [
-                        "v4l2-ctl", "-d", "/dev/video0",
-                        "-c", f"brightness={int(bright_val)}",
-                        "-c", f"contrast={int(contrast_val)}",
-                        "-c", f"gamma={int(gamma_val)}",
-                        "-c", f"gain={int(gain_val)}",
-                        "-c", f"sharpness={int(sharpness_val)}",
-                        "-c", f"exposure_absolute={int(exposure_val)}"
-                    ]
-                    subprocess.run(v4l2_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                except Exception:
-                    pass
-
             actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             actual_fps = float(self._cap.get(cv2.CAP_PROP_FPS))
-            print(f"[CAMERA] USB Camera (OV9281 Mono B&W) initialized: {actual_w}x{actual_h} @ {actual_fps:.0f} FPS (Tuned: Brightness={int(bright_val)}, Contrast={int(contrast_val)}, Gain={int(gain_val)}, Exposure={int(exposure_val)})")
+            print(f"[CAMERA] Camera initialized: {actual_w}x{actual_h} @ {actual_fps:.0f} FPS")
 
         #-- Font for the text in the image
         self.font = cv2.FONT_HERSHEY_PLAIN
@@ -393,9 +356,11 @@ class ArucoSingleTracker():
                     rvec = rvec.reshape(-1)
                     tvec = tvec.reshape(-1)
                 
-                x = tvec[0]
-                y = tvec[1]
-                z = tvec[2]
+                tvec = np.asarray(tvec).flatten()
+                rvec = np.asarray(rvec).flatten()
+                x = float(tvec[0])
+                y = float(tvec[1])
+                z = float(tvec[2])
 
                 #-- Draw the detected marker and put a reference frame over it
                 aruco.drawDetectedMarkers(frame, corners)
@@ -418,31 +383,34 @@ class ArucoSingleTracker():
                 #-- Get the attitude in terms of euler 321 (Needs to be flipped first)
                 roll_marker, pitch_marker, yaw_marker = self._rotationMatrixToEulerAngles(self._R_flip*R_tc)
 
-                #-- Now get Position and attitude f the camera respect to the marker
-                pos_camera = -R_tc*np.matrix(tvec).T
+                #-- Now get Position and attitude of the camera respect to the marker (flattened for safe scalar formatting)
+                pos_camera = np.asarray(-R_tc * np.matrix(tvec).reshape(3, 1)).flatten()
                 
-                # print "Camera X = %.1f  Y = %.1f  Z = %.1f  - fps = %.0f"%(pos_camera[0], pos_camera[1], pos_camera[2],fps_detect)
                 if verbose:
-                    print("Marker X = %.1f  Y = %.1f  Z = %.1f  - fps = %.0f" % (tvec[0], tvec[1], tvec[2], self.fps_detect))
+                    print("Marker X = %.1f  Y = %.1f  Z = %.1f  - fps = %.0f" % (x, y, z, self.fps_detect))
 
                 if show_video:
 
                     #-- Print the tag position in camera frame
-                    str_position = "MARKER Position x=%4.0f  y=%4.0f  z=%4.0f"%(tvec[0], tvec[1], tvec[2])
+                    str_position = "MARKER Position x=%4.0f  y=%4.0f  z=%4.0f" % (x, y, z)
                     cv2.putText(frame, str_position, (0, 100), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)        
                     
                     #-- Print the marker's attitude respect to camera frame
-                    str_attitude = "MARKER Attitude r=%4.0f  p=%4.0f  y=%4.0f"%(math.degrees(roll_marker),math.degrees(pitch_marker),
-                                        math.degrees(yaw_marker))
+                    str_attitude = "MARKER Attitude r=%4.0f  p=%4.0f  y=%4.0f" % (
+                        math.degrees(roll_marker), math.degrees(pitch_marker), math.degrees(yaw_marker)
+                    )
                     cv2.putText(frame, str_attitude, (0, 150), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)
 
-                    str_position = "CAMERA Position x=%4.0f  y=%4.0f  z=%4.0f"%(pos_camera[0], pos_camera[1], pos_camera[2])
+                    str_position = "CAMERA Position x=%4.0f  y=%4.0f  z=%4.0f" % (
+                        float(pos_camera[0]), float(pos_camera[1]), float(pos_camera[2])
+                    )
                     cv2.putText(frame, str_position, (0, 200), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)
 
                     #-- Get the attitude of the camera respect to the frame
                     roll_camera, pitch_camera, yaw_camera = self._rotationMatrixToEulerAngles(self._R_flip*R_tc)
-                    str_attitude = "CAMERA Attitude r=%4.0f  p=%4.0f  y=%4.0f"%(math.degrees(roll_camera),math.degrees(pitch_camera),
-                                        math.degrees(yaw_camera))
+                    str_attitude = "CAMERA Attitude r=%4.0f  p=%4.0f  y=%4.0f" % (
+                        math.degrees(roll_camera), math.degrees(pitch_camera), math.degrees(yaw_camera)
+                    )
                     cv2.putText(frame, str_attitude, (0, 250), self.font, 1, (0, 255, 0), 2, cv2.LINE_AA)
 
 
@@ -474,13 +442,16 @@ class ArucoSingleTracker():
                     except Exception:
                         pass
                     cv2.destroyAllWindows()
-                    break
+                    return (False, 0.0, 0.0, 0.0)
             
             with self._frame_lock:
                 self.last_frame = frame.copy()
                 self.last_frame_ts = time.time()
 
-            if not loop: return(marker_found, x, y, z)
+            if not loop:
+                return (marker_found, float(x), float(y), float(z))
+
+        return (marker_found, float(x), float(y), float(z))
             
 
 if __name__ == "__main__":
