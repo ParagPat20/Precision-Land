@@ -213,6 +213,18 @@ class ArucoSingleTracker():
                 except Exception as af_error:
                     print(f"[CAMERA] Warning: Could not configure 64MP autofocus: {af_error}")
                 
+                # Hardware VCM focus lock for Arducam 64MP on Raspberry Pi (focus_absolute=160 gives sharp focus from 0.8m to infinity)
+                for subdev in ("/dev/v4l-subdev3", "/dev/v4l-subdev1", "/dev/v4l-subdev2"):
+                    if os.path.exists(subdev):
+                        try:
+                            import subprocess
+                            subprocess.run(["v4l2-ctl", "-d", subdev, "--set-ctrl=focus_absolute=160"],
+                                           check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            print(f"[CAMERA] 64MP VCM hardware focus locked at focus_absolute=160 on {subdev}")
+                            break
+                        except Exception:
+                            pass
+
                 time.sleep(0.5)  # warmup for camera and autofocus to stabilize
                 self._use_picamera = True
                 print(f"[CAMERA] Picamera2 (64MP AF) initialized successfully at {camera_size[0]}x{camera_size[1]}")
@@ -359,7 +371,10 @@ class ArucoSingleTracker():
                 time.sleep(0.01)  # Avoid high-CPU busy loop on capture error
                 continue
 
-            # Expose the most recent frame to callers (copy to avoid accidental mutation).
+            # Vertical flip for rotated / inverted camera mounting
+            if self._vflip:
+                frame = cv2.flip(frame, 0)
+
             # Expose the most recent frame to callers (copy to avoid accidental mutation).
             # Convert single-channel mono images to BGR for display/recording compatibility.
             if len(frame.shape) == 2 or (len(frame.shape) == 3 and frame.shape[2] == 1):

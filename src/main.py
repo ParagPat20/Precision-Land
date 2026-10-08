@@ -1245,6 +1245,8 @@ parser.add_argument('--resolution', default='1280x720', help="Camera resolution 
 parser.add_argument('--fps', type=int, default=120, help="Camera target FPS for high performance (default: 120).")
 parser.add_argument('--focus', default=os.environ.get('JECH_FOCUS_MODE', 'auto'), choices=['auto', 'continuous', 'manual', 'fixed', 'infinity'], help="Focus mode for 64MP camera: 'auto' (continuous with initial sweep), 'manual'/'fixed' (hyperfocal lock), 'infinity'.")
 parser.add_argument('--lens-pos', type=float, default=float(os.environ.get('JECH_LENS_POSITION', '0.5')), help="Manual lens position in dioptres (0.0=infinity, 0.5=2m hyperfocal, 1.0=1m). Default: 0.5.")
+parser.add_argument('--vflip', action='store_true', default=os.environ.get('JECH_VFLIP', '1').lower() in ('1', 'true', 'yes'), help="Vertically flip camera image for upside-down / rotated camera mounting (default: enabled).")
+parser.add_argument('--no-vflip', dest='vflip', action='store_false', help="Disable vertical flip.")
 args = parser.parse_args()
 
 if args.no_camera:
@@ -1722,7 +1724,8 @@ else:
             calib_size=[640, 480],
             target_fps=args.fps,
             focus_mode=args.focus,
-            lens_position=args.lens_pos
+            lens_position=args.lens_pos,
+            vflip=args.vflip
         )
         camera_active = True
     except Exception as e:
