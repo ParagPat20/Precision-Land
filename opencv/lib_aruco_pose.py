@@ -94,7 +94,8 @@ class ArucoSingleTracker():
                 target_fps=60,
                 focus_mode=None,         # "auto", "continuous", "manual", "infinity"
                 lens_position=None,      # Dioptres for manual focus (0.0=infinity, 0.5=2m, 1.0=1m)
-                vflip=None               # Vertical flip for rotated camera mounting (default: True)
+                vflip=None,              # Vertical flip for rotated camera mounting (default: True)
+                hflip=None               # Horizontal flip (default: False, or True for 180° rotation)
                 ):
         
         
@@ -104,11 +105,16 @@ class ArucoSingleTracker():
         self._axis_scale    = axis_scale
         self.target_fps     = target_fps
 
-        # Vertical flip for rotated / inverted camera mounting
+        # Vertical and Horizontal flip for rotated / inverted camera mounting
         if vflip is not None:
             self._vflip = bool(vflip)
         else:
             self._vflip = os.environ.get("JECH_VFLIP", "1").lower() in ("1", "true", "yes")
+
+        if hflip is not None:
+            self._hflip = bool(hflip)
+        else:
+            self._hflip = os.environ.get("JECH_HFLIP", "0").lower() in ("1", "true", "yes")
 
         # Focus configuration for 64MP Arducam (OV64A40)
         self.focus_mode = str(focus_mode or os.environ.get("JECH_FOCUS_MODE", "auto")).lower()
@@ -342,6 +348,20 @@ class ArucoSingleTracker():
             except Exception as e:
                 print(f"[CAMERA] Set lens position error: {e}")
 
+    def set_hardware_focus(self, val=160):
+        """Set VCM hardware focus on Linux subdev (0-1023). 160 is optimal for Arducam 64MP."""
+        for subdev in ("/dev/v4l-subdev3", "/dev/v4l-subdev1", "/dev/v4l-subdev2"):
+            if os.path.exists(subdev):
+                try:
+                    import subprocess
+                    subprocess.run(["v4l2-ctl", "-d", subdev, f"--set-ctrl=focus_absolute={int(val)}"],
+                                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    print(f"[CAMERA] Set VCM focus_absolute={val} on {subdev}")
+                    return True
+                except Exception:
+                    pass
+        return False
+
     def track(self, loop=True, verbose=False, show_video=None):
         
         self._kill = False
@@ -371,9 +391,13 @@ class ArucoSingleTracker():
                 time.sleep(0.01)  # Avoid high-CPU busy loop on capture error
                 continue
 
-            # Vertical flip for rotated / inverted camera mounting
-            if self._vflip:
-                frame = cv2.flip(frame, 0)
+            # Flip image if camera is physically inverted / rotated
+            if self._vflip and self._hflip:
+                frame = cv2.flip(frame, -1)  # 180-degree rotation (both axes)
+            elif self._vflip:
+                frame = cv2.flip(frame, 0)   # Vertical flip
+            elif self._hflip:
+                frame = cv2.flip(frame, 1)   # Horizontal flip
 
             # Expose the most recent frame to callers (copy to avoid accidental mutation).
             # Convert single-channel mono images to BGR for display/recording compatibility.

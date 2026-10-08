@@ -1247,6 +1247,10 @@ parser.add_argument('--focus', default=os.environ.get('JECH_FOCUS_MODE', 'auto')
 parser.add_argument('--lens-pos', type=float, default=float(os.environ.get('JECH_LENS_POSITION', '0.5')), help="Manual lens position in dioptres (0.0=infinity, 0.5=2m hyperfocal, 1.0=1m). Default: 0.5.")
 parser.add_argument('--vflip', action='store_true', default=os.environ.get('JECH_VFLIP', '1').lower() in ('1', 'true', 'yes'), help="Vertically flip camera image for upside-down / rotated camera mounting (default: enabled).")
 parser.add_argument('--no-vflip', dest='vflip', action='store_false', help="Disable vertical flip.")
+parser.add_argument('--hflip', action='store_true', default=os.environ.get('JECH_HFLIP', '0').lower() in ('1', 'true', 'yes'), help="Horizontally flip camera image (default: disabled).")
+parser.add_argument('--no-hflip', dest='hflip', action='store_false', help="Disable horizontal flip.")
+parser.add_argument('--flip-x', action='store_true', default=os.environ.get('JECH_FLIP_X', '0').lower() in ('1', 'true', 'yes'), help="Invert X axis in camera-to-body frame transform.")
+parser.add_argument('--flip-y', action='store_true', default=os.environ.get('JECH_FLIP_Y', '0').lower() in ('1', 'true', 'yes'), help="Invert Y axis in camera-to-body frame transform.")
 args = parser.parse_args()
 
 if args.no_camera:
@@ -1381,6 +1385,12 @@ def camera_to_uav(x_cam, y_cam, z_cam):
       y_uav: Right towards starboard (cm)
       z_uav: Down towards ground (cm)
     """
+    # Flip camera values when camera is mounted inverted / rotated
+    if getattr(args, 'vflip', False) or getattr(args, 'flip_x', False):
+        x_cam = -x_cam
+    if getattr(args, 'flip_y', False):
+        y_cam = -y_cam
+
     # 1. Pitch rotation around lateral axis (tilted forward from nadir by CAM_TILT_PITCH_DEG)
     x_forward = -y_cam * _COS_TILT + z_cam * _SIN_TILT
     y_right   = x_cam
@@ -1725,7 +1735,8 @@ else:
             target_fps=args.fps,
             focus_mode=args.focus,
             lens_position=args.lens_pos,
-            vflip=args.vflip
+            vflip=args.vflip,
+            hflip=args.hflip
         )
         camera_active = True
     except Exception as e:

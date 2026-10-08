@@ -77,9 +77,15 @@ start_precision_land() {
   if ! tmux has-session -t "${SESSION_PL}" 2>/dev/null; then
     echo "[SERVICE] Launching Precision-Land autonomy engine..."
     tmux new-session -d -s "${SESSION_PL}" -c "${PROJECT_DIR}"
-    tmux set-option -t "${SESSION_PL}" mouse on
-    # Runs headless (--no-video suppresses X11 GUI window; video stream goes to MediaMTX)
-    tmux send-keys -t "${SESSION_PL}" "${PYTHON_CMD} ${MAIN_PY} --no-video" C-m
+    # Pre-lock VCM autofocus motor on Arducam 64MP to hyperfocal distance (sharp from 0.8m to infinity)
+    for subdev in /dev/v4l-subdev3 /dev/v4l-subdev1 /dev/v4l-subdev2; do
+      if [[ -e "${subdev}" ]]; then
+        v4l2-ctl -d "${subdev}" --set-ctrl=focus_absolute=160 2>/dev/null || true
+        break
+      fi
+    done
+    # Runs headless with autofocus locked and vertical flip enabled
+    tmux send-keys -t "${SESSION_PL}" "${PYTHON_CMD} ${MAIN_PY} --no-video --no-servo --focus auto --vflip" C-m
   fi
 }
 

@@ -1,0 +1,25 @@
+[Unit]
+Description=Precision-Land Autonomy Engine (Vision, Autofocus, Landing Target MAVLink)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=jech
+WorkingDirectory=/home/jech/Precision-land
+Environment=PYTHONUNBUFFERED=1
+Environment=MAVLINK20=1
+Environment=JECH_MAVLINK_CONNECT=udpin:127.0.0.1:14555
+Environment=JECH_MAVLINK_BAUD=921600
+Environment=JECH_VFLIP=1
+Environment=JECH_FOCUS_MODE=auto
+Environment=JECH_FOCUS_ABSOLUTE=160
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# Hardware VCM focus lock for Arducam 64MP (OV64A40) on Raspberry Pi 5
+ExecStartPre=-/usr/bin/v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=focus_absolute=160
+ExecStart=/usr/bin/python3 /home/jech/Precision-land/src/main.py --no-video --no-servo --focus auto --vflip
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
