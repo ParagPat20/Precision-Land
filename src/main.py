@@ -1294,40 +1294,40 @@ signal.signal(signal.SIGTERM, handle_signal)
 #-------------- FUNCTIONS  
 #--------------------------------------------------     
 # Define function to send landing_target mavlink message for mavlink based precision landing
+# Pure 3D Body Position Mode (MAV_FRAME_BODY_FRD, position_valid = 1, angles = 0.0)
 # http://mavlink.org/messages/common#LANDING_TARGET
-def send_land_message_v2(x_rad=0.0, y_rad=0.0, dist_m=0.0, x_m=0.0,y_m=0.0,z_m=0.0, time_usec=0, target_num=0):
+def send_land_message_v2(x_m=0.0, y_m=0.0, z_m=0.0, dist_m=0.0, x_rad=0.0, y_rad=0.0, time_usec=0, target_num=0):
     try:
-        # Try sending with newer MAVLink fields (14 arguments)
-        pos_valid = 1 if (abs(x_m) > 0.001 or abs(y_m) > 0.001 or abs(z_m) > 0.001) else 0
+        # MAVLink 2 LANDING_TARGET: 14 fields with position_valid=1
+        pos_valid = 1 if (abs(x_m) > 0.0001 or abs(y_m) > 0.0001 or abs(z_m) > 0.0001) else 0
         msg = vehicle.message_factory.landing_target_encode(
-            int(time_usec),          # time target data was processed, as close to sensor capture as possible
-            int(target_num),         # target num, not used
+            int(time_usec),                          # time target data was processed
+            int(target_num),                         # target num, not used
             int(mavutil.mavlink.MAV_FRAME_BODY_FRD), # frame: Forward-Right-Down
-            float(x_rad),            # X-axis angular offset, in radians (roll angle)
-            float(y_rad),            # Y-axis angular offset, in radians (pitch angle)
-            float(dist_m),           # distance, in meters
-            0.0,                     # Target x-axis size, in radians
-            0.0,                     # Target y-axis size, in radians
-            float(x_m),              # x position in body frame (forward, m)
-            float(y_m),              # y position in body frame (right, m)
-            float(z_m),              # z position in body frame (down, m)
-            (1.0,0.0,0.0,0.0),       # orientation quaternion
-            int(2),                  # type of landing target: 2 = Fiducial marker
-            int(pos_valid),          # position_valid boolean (1 when 3D body coordinates provided)
+            float(x_rad),                            # 0.0 in pure 3D mode
+            float(y_rad),                            # 0.0 in pure 3D mode
+            float(dist_m),                           # total distance to target (meters)
+            0.0,                                     # Target x-axis size, in radians
+            0.0,                                     # Target y-axis size, in radians
+            float(x_m),                              # x position in body frame (forward, m)
+            float(y_m),                              # y position in body frame (right, m)
+            float(z_m),                              # z position in body frame (down, m)
+            (1.0, 0.0, 0.0, 0.0),                    # orientation quaternion
+            int(2),                                  # type of landing target: 2 = Fiducial marker
+            int(pos_valid),                          # position_valid: 1 for 3D body coordinates
         )
     except TypeError:
         # Fallback for older pymavlink dialects (8 arguments)
         msg = vehicle.message_factory.landing_target_encode(
-            int(time_usec),          # time target data was processed, as close to sensor capture as possible
-            int(target_num),         # target num, not used
-            int(mavutil.mavlink.MAV_FRAME_BODY_FRD), # frame, not used
-            float(x_rad),            # X-axis angular offset, in radians
-            float(y_rad),            # Y-axis angular offset, in radians
-            float(dist_m),           # distance, in meters
-            0.0,                     # Target x-axis size, in radians
-            0.0,                     # Target y-axis size, in radians
+            int(time_usec),
+            int(target_num),
+            int(mavutil.mavlink.MAV_FRAME_BODY_FRD),
+            float(x_rad),
+            float(y_rad),
+            float(dist_m),
+            0.0,
+            0.0,
         )
-    # print(msg)
     vehicle.send_mavlink(msg)
 
 
@@ -1347,35 +1347,56 @@ def send_distance_message( dist):
     vehicle.send_mavlink(msg)     
 
 # ----------------------------------------------------------------------
-# CAMERA MOUNT GEOMETRY: Straight looking down (Nadir, 0° tilt, simple x-y)
+# CAMERA MOUNT GEOMETRY & PITCH ROTATION (20° FORWARD TILT)
 # ----------------------------------------------------------------------
-CAM_TILT_PITCH_DEG = float(os.environ.get("JECH_CAM_TILT_PITCH_DEG", "0.0"))
+# Camera is pitched forward by CAM_TILT_PITCH_DEG (20.0° forward from nadir towards the nose)
+# Lever-arm offsets (CAM_OFFSET_FORWARD_CM) are kept at 0.0 here because ArduPilot
+# parameter PLND_CAM_POS_X handles vehicle CG lever-arm offset (avoiding double compensation).
+CAM_TILT_PITCH_DEG = float(os.environ.get("JECH_CAM_TILT_PITCH_DEG", "20.0"))
 CAM_OFFSET_FORWARD_CM = float(os.environ.get("JECH_CAM_OFFSET_FORWARD_CM", "0.0"))
 CAM_OFFSET_RIGHT_CM = float(os.environ.get("JECH_CAM_OFFSET_RIGHT_CM", "0.0"))
 CAM_OFFSET_DOWN_CM = float(os.environ.get("JECH_CAM_OFFSET_DOWN_CM", "0.0"))
 
-print(f"[CAM_GEOMETRY] Mounting config: Straight looking down (Nadir, 0° tilt) | Simple x-y", flush=True)
+_TILT_RAD = math.radians(CAM_TILT_PITCH_DEG)
+_COS_TILT = math.cos(_TILT_RAD)
+_SIN_TILT = math.sin(_TILT_RAD)
+
+print(f"[CAM_GEOMETRY] Pitch tilt={CAM_TILT_PITCH_DEG}° forward | Lever-arm offsets: Fwd={CAM_OFFSET_FORWARD_CM}cm, Right={CAM_OFFSET_RIGHT_CM}cm, Down={CAM_OFFSET_DOWN_CM}cm", flush=True)
 
 def camera_to_uav(x_cam, y_cam, z_cam):
     """
-    Straight downward-facing camera: simple direct x, y mapping.
-    x_uav: x in body frame (cm)
-    y_uav: y in body frame (cm)
-    z_uav: z in body frame / altitude (cm)
+    Transforms marker 3D position from camera coordinates to Drone Body Frame (FRD - Forward, Right, Down).
+
+    OpenCV Camera Frame:
+      x_cam: Right in image
+      y_cam: Down in image (towards tail when camera looks down)
+      z_cam: Optical axis (distance straight out of lens, pitched forward by CAM_TILT_PITCH_DEG)
+
+    Drone Body Frame (FRD - Forward, Right, Down):
+      x_uav: Forward towards nose (cm)
+      y_uav: Right towards starboard (cm)
+      z_uav: Down towards ground (cm)
     """
-    x_uav = float(x_cam)
-    y_uav = float(y_cam)
-    z_uav = max(1.0, float(z_cam))
+    # 1. Pitch rotation around lateral axis (tilted forward from nadir by CAM_TILT_PITCH_DEG)
+    x_forward = -y_cam * _COS_TILT + z_cam * _SIN_TILT
+    y_right   = x_cam
+    z_down    = y_cam * _SIN_TILT + z_cam * _COS_TILT
+
+    # 2. Add physical lever-arm offset (kept at 0.0 if handled in ArduPilot via PLND_CAM_POS_X)
+    x_uav = x_forward + CAM_OFFSET_FORWARD_CM
+    y_uav = y_right   + CAM_OFFSET_RIGHT_CM
+    z_uav = max(1.0, z_down + CAM_OFFSET_DOWN_CM)
+
     return x_uav, y_uav, z_uav
 
 def marker_position_to_angle(x_uav, y_uav, z_uav):
     """
-    Direct optical angles from straight downward-facing camera.
-    angle_x: x-axis angular offset in radians (atan2(x, z))
-    angle_y: y-axis angular offset in radians (atan2(y, z))
+    Converts 3D body position (cm) to MAVLink LANDING_TARGET angles (radians).
+    angle_x: lateral roll angle (positive right)
+    angle_y: longitudinal pitch angle (negative forward, matching ArduPilot MAVLink convention)
     """
-    angle_x = math.atan2(x_uav, z_uav)
-    angle_y = math.atan2(y_uav, z_uav)
+    angle_x = math.atan2(y_uav, z_uav)
+    angle_y = math.atan2(-x_uav, z_uav)
     return (angle_x, angle_y)
         
 #--------------------------------------------------
@@ -1592,7 +1613,11 @@ def listener(self, name, message):
             battery_failsafe_active = True
             print("[LED] Battery Failsafe Detected!")
     elif "FAILSAFE" in text:
-        if "CLEARED" in text or "RECOVER" in text or "RESOLVED" in text:
+        # ArduPilot sends "PrecLand: Failsafe Measures" when landing without a target in sight;
+        # this is normal vertical descent behavior and should not trigger vehicle alarms.
+        if "PRECLAND" in text:
+            pass
+        elif "CLEARED" in text or "RECOVER" in text or "RESOLVED" in text:
             other_failsafe_active = False
             print(f"[LED] Failsafe Cleared: {text}")
         else:
@@ -1793,20 +1818,19 @@ while True:
     # Send position data only if confidence exceeds threshold and we have a valid position
     if confidence_score >= confidence_threshold and last_known_position is not None:
         x_uav_cm, y_uav_cm, z_uav_cm = last_known_position
-        angle_x, angle_y = marker_position_to_angle(x_uav_cm, y_uav_cm, z_uav_cm)
         dist_m = math.sqrt(x_uav_cm**2 + y_uav_cm**2 + z_uav_cm**2) * 0.01
         
         if time.time() >= time_0 + 1.0/freq_send:
             time_0 = time.time()
             status = "DETECTED" if marker_found else "TRACKING"
-            print(f"[{status}] Conf: {confidence_score:.0f}% | Body FRD: x={x_uav_cm:4.0f}cm y={y_uav_cm:4.0f}cm z={z_uav_cm:4.0f}cm | angles=({angle_x:.3f}, {angle_y:.3f}) rad", flush=True)
+            print(f"[{status}] Conf: {confidence_score:.0f}% | Body FRD 3D: x={x_uav_cm:4.0f}cm y={y_uav_cm:4.0f}cm z={z_uav_cm:4.0f}cm | dist={dist_m:.2f}m", flush=True)
             send_land_message_v2(
-                x_rad=angle_x,
-                y_rad=angle_y,
-                dist_m=dist_m,
                 x_m=x_uav_cm * 0.01,
                 y_m=y_uav_cm * 0.01,
                 z_m=z_uav_cm * 0.01,
+                dist_m=dist_m,
+                x_rad=0.0,
+                y_rad=0.0,
                 time_usec=time.time() * 1e6
             )
     else:
