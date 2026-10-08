@@ -91,7 +91,10 @@ class ArucoSingleTracker():
                 axis_scale=0.03,
                 use_picamera=None,
                 calib_size=[640, 480],   # Calibration resolution (matches cameraMatrix_webcam.txt)
-                target_fps=60
+                target_fps=60,
+                focus_mode=None,         # "auto", "continuous", "manual", "infinity"
+                lens_position=None,      # Dioptres for manual focus (0.0=infinity, 0.5=2m, 1.0=1m)
+                vflip=None               # Vertical flip for rotated camera mounting (default: True)
                 ):
         
         
@@ -100,6 +103,19 @@ class ArucoSingleTracker():
         self._show_video    = show_video
         self._axis_scale    = axis_scale
         self.target_fps     = target_fps
+
+        # Vertical flip for rotated / inverted camera mounting
+        if vflip is not None:
+            self._vflip = bool(vflip)
+        else:
+            self._vflip = os.environ.get("JECH_VFLIP", "1").lower() in ("1", "true", "yes")
+
+        # Focus configuration for 64MP Arducam (OV64A40)
+        self.focus_mode = str(focus_mode or os.environ.get("JECH_FOCUS_MODE", "auto")).lower()
+        try:
+            self.lens_position = float(lens_position if lens_position is not None else os.environ.get("JECH_LENS_POSITION", "0.5"))
+        except (ValueError, TypeError):
+            self.lens_position = 0.5
         
         # Scale camera matrix if requested camera size differs from calibration resolution
         self._camera_matrix = np.array(camera_matrix, dtype=np.float32)
@@ -165,13 +181,37 @@ class ArucoSingleTracker():
                 self._picam2.configure(cfg)
                 self._picam2.start()
                 
-                # Enable Continuous Autofocus for 64MP Camera (OV64A40)
-                # 64MP has Autofocus; OV9281 USB mono camera does not.
+                # Configure Focus for 64MP Camera (OV64A40)
+                # 64MP has a Voice Coil Motor (VCM) for autofocus.
                 try:
-                    self._picam2.set_controls({"AfMode": 2})  # AfMode: 2 = Continuous Autofocus
-                    print("[CAMERA] 64MP Camera detected via Picamera2: Continuous Autofocus enabled")
+                    if self.focus_mode in ("manual", "fixed"):
+                        # Manual Focus: dioptres = 1 / distance_in_meters
+                        # e.g., 0.5 dioptres = 2.0 meters, giving wide depth of field from 0.8m to infinity
+                        self._picam2.set_controls({"AfMode": 0, "LensPosition": float(self.lens_position)})
+                        dist_m = 1.0 / max(0.01, self.lens_position) if self.lens_position > 0.01 else float('inf')
+                        print(f"[CAMERA] 64MP Manual Focus locked at LensPosition={self.lens_position} dioptres (~{dist_m:.1f}m)")
+                    elif self.focus_mode == "infinity":
+                        self._picam2.set_controls({"AfMode": 0, "LensPosition": 0.0})
+                        print("[CAMERA] 64MP Manual Focus locked at Infinity (LensPosition=0.0)")
+                    else:
+                        # Continuous / Auto Focus:
+                        # AfMode: 2 = Continuous
+                        # AfRange: 0 = Normal range (prevents getting trapped in extreme macro < 15cm)
+                        # AfSpeed: 1 = Fast slew rate
+                        af_controls = {
+                            "AfMode": 2,
+                            "AfRange": 0,
+                            "AfSpeed": 1,
+                        }
+                        self._picam2.set_controls(af_controls)
+                        # Trigger an immediate autofocus sweep so lens does not sit idle at macro
+                        try:
+                            self._picam2.set_controls({"AfTrigger": 0})
+                        except Exception:
+                            pass
+                        print("[CAMERA] 64MP Continuous Autofocus active (Normal Range, Fast Slew, Sweep Triggered)")
                 except Exception as af_error:
-                    print(f"[CAMERA] Warning: Could not enable 64MP autofocus: {af_error}")
+                    print(f"[CAMERA] Warning: Could not configure 64MP autofocus: {af_error}")
                 
                 time.sleep(0.5)  # warmup for camera and autofocus to stabilize
                 self._use_picamera = True
@@ -265,11 +305,30 @@ class ArucoSingleTracker():
         except Exception:
             pass
         try:
-                if self._use_picamera and hasattr(self, '_picam2') and self._picam2 is not None:
-                    self._picam2.stop()
-                    self._picam2.close()
+            if self._use_picamera and hasattr(self, '_picam2') and self._picam2 is not None:
+                self._picam2.stop()
+                self._picam2.close()
         except Exception:
             pass
+
+    def trigger_autofocus(self):
+        """Triggers an active autofocus search cycle on 64MP camera."""
+        if self._use_picamera and hasattr(self, '_picam2') and self._picam2 is not None:
+            try:
+                self._picam2.set_controls({"AfMode": 2, "AfRange": 0, "AfSpeed": 1, "AfTrigger": 0})
+                print("[CAMERA] 64MP Autofocus sweep triggered.")
+            except Exception as e:
+                print(f"[CAMERA] Autofocus trigger error: {e}")
+
+    def set_lens_position(self, dioptres: float):
+        """Sets manual lens position in dioptres (0.0=infinity, 0.5=2m, 1.0=1m)."""
+        if self._use_picamera and hasattr(self, '_picam2') and self._picam2 is not None:
+            try:
+                self._picam2.set_controls({"AfMode": 0, "LensPosition": float(dioptres)})
+                dist_m = 1.0 / max(0.01, float(dioptres)) if float(dioptres) > 0.01 else float('inf')
+                print(f"[CAMERA] 64MP Lens position set to {dioptres} dioptres (~{dist_m:.1f}m).")
+            except Exception as e:
+                print(f"[CAMERA] Set lens position error: {e}")
 
     def track(self, loop=True, verbose=False, show_video=None):
         

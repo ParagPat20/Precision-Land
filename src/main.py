@@ -1243,6 +1243,8 @@ parser.add_argument('--no-servo', action='store_true', help="Disable servo contr
 parser.add_argument('--no-camera', action='store_true', help="Disable camera and vision tracking system entirely.")
 parser.add_argument('--resolution', default='1280x720', help="Camera resolution WxH (default: 1280x720 for OV9281 mono full resolution).")
 parser.add_argument('--fps', type=int, default=120, help="Camera target FPS for high performance (default: 120).")
+parser.add_argument('--focus', default=os.environ.get('JECH_FOCUS_MODE', 'auto'), choices=['auto', 'continuous', 'manual', 'fixed', 'infinity'], help="Focus mode for 64MP camera: 'auto' (continuous with initial sweep), 'manual'/'fixed' (hyperfocal lock), 'infinity'.")
+parser.add_argument('--lens-pos', type=float, default=float(os.environ.get('JECH_LENS_POSITION', '0.5')), help="Manual lens position in dioptres (0.0=infinity, 0.5=2m hyperfocal, 1.0=1m). Default: 0.5.")
 args = parser.parse_args()
 
 if args.no_camera:
@@ -1718,7 +1720,9 @@ else:
             camera_distortion=camera_distortion,
             camera_size=camera_resolution,
             calib_size=[640, 480],
-            target_fps=args.fps
+            target_fps=args.fps,
+            focus_mode=args.focus,
+            lens_position=args.lens_pos
         )
         camera_active = True
     except Exception as e:
