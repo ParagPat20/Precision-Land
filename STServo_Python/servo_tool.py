@@ -155,6 +155,7 @@ def draw_menu():
     
     print(f"\n{C_YEL}┌── Direct Command Shell Reference ──────────────────────────┐{C_RST}")
     print(f"{C_YEL}│{C_RST}  act <id>                     │ move [id] <pos> [spd] [acc] {C_YEL}│{C_RST}")
+    print(f"{C_YEL}│{C_RST}  lock / unlock                │ teach lock / teach unlock   {C_YEL}│{C_RST}")
     print(f"{C_YEL}│{C_RST}  lid up / lid down            │ dual <pos1> <pos2> [spd]    {C_YEL}│{C_RST}")
     print(f"{C_YEL}│{C_RST}  center [id]                  │ torque [id] <on/off/1/0>    {C_YEL}│{C_RST}")
     print(f"{C_YEL}│{C_RST}  relax                        │ diag [id]                   {C_YEL}│{C_RST}")
@@ -936,6 +937,8 @@ DEFAULT_SEQUENCE_CONFIG = {
         "st_speed": DEFAULT_LID_SPEED,
         "st_acc": DEFAULT_LID_ACC,
         "st_tol": DEFAULT_LID_TOLERANCE,
+        "st_threshold": 250,
+        "sc2_pos": 450,
         "sc3_pos": DEFAULT_LATCH3_LOCK_POS,
         "sc4_pos": DEFAULT_LATCH4_LOCK_POS,
         "sc_speed": DEFAULT_LATCH_SPEED
@@ -946,6 +949,7 @@ DEFAULT_SEQUENCE_CONFIG = {
         "st_speed": DEFAULT_LID_SPEED,
         "st_acc": DEFAULT_LID_ACC,
         "st_tol": DEFAULT_LID_TOLERANCE,
+        "sc2_pos": 666,
         "sc3_pos": DEFAULT_LATCH3_UNLOCK_POS,
         "sc4_pos": DEFAULT_LATCH4_UNLOCK_POS,
         "sc_speed": DEFAULT_LATCH_SPEED
@@ -972,10 +976,19 @@ def load_sequence_config():
         print(f"{C_RED}Warning loading sequence file: {e}{C_RST}")
     return cfg
 
-def save_sequence_config(config_data):
-    """Save sequence configuration data to JSON file."""
+def save_sequence_config(config_data, create_backup=False):
+    """Save sequence configuration data to JSON file with optional backup."""
     try:
-        with open(SEQUENCE_CONFIG_FILE, 'w') as f:
+        if create_backup and os.path.exists(SEQUENCE_CONFIG_FILE):
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            backup_file = SEQUENCE_CONFIG_FILE.replace(".json", f"_backup_{timestamp}.json")
+            try:
+                import shutil
+                shutil.copyfile(SEQUENCE_CONFIG_FILE, backup_file)
+                print(f"{C_CYA}Created backup at: {backup_file}{C_RST}")
+            except Exception:
+                pass
+        with open(SEQUENCE_CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, indent=2)
         print(f"{C_GREEN}Saved sequence configuration to: {SEQUENCE_CONFIG_FILE}{C_RST}")
         return True
@@ -1000,6 +1013,24 @@ def read_servo_pos_str(sts_handler, sc_handler, sid, prefer_type='ST'):
         return str(pos_alt)
         
     return f"Offline({primary.getTxRxResult(res)})"
+
+def read_servo_pos_int(sts_handler, sc_handler, sid, prefer_type='ST'):
+    """
+    Reads position of a servo robustly, trying both handlers if needed.
+    Returns (pos, True) if valid position is read, or (None, False) if offline/error.
+    """
+    primary = sts_handler if prefer_type == 'ST' else sc_handler
+    secondary = sc_handler if prefer_type == 'ST' else sts_handler
+    
+    pos, res, _ = primary.ReadPos(sid)
+    if res == COMM_SUCCESS and 0 <= pos <= 4095:
+        return pos, True
+        
+    pos_alt, res_alt, _ = secondary.ReadPos(sid)
+    if res_alt == COMM_SUCCESS and 0 <= pos_alt <= 4095:
+        return pos_alt, True
+        
+    return None, False
 
 def run_continuous_with_absolute_snap(sts_handler, sc_handler, sid=1, direction='f', speed=3000, rotations=2.0, abs_target_pos=3000):
     """
@@ -1260,10 +1291,418 @@ def dual_lid_menu(sts_handler):
                     print(f"{C_RED}Error reading current servo positions.{C_RST}")
                 input("\nPress Enter to continue...")
 
+def get_mechanism_servos_status(sts_handler, sc_handler, sids=[1, 2, 3, 4]):
+    """
+    Polls mechanism servos (1, 2, 3, 4) and returns a status dictionary:
+    {sid: {'online': bool, 'type': 'ST'|'SC', 'model': int, 'pos': int|None, 'torque': int|None, 'role': str}}
+    """
+    status = {}
+    for sid in sids:
+        stype = get_servo_type(sts_handler, sid)
+        model = detected_models.get(sid, 0)
+        pos, ok = read_servo_pos_int(sts_handler, sc_handler, sid, prefer_type=stype)
+        handler = sts_handler if stype == 'ST' else sc_handler
+        torque = None
+        if ok:
+            t_val, res, _ = handler.read1ByteTxRx(sid, 40)
+            if res == COMM_SUCCESS:
+                torque = t_val
+        
+        # Determine descriptive role
+        if sid == 1:
+            role = "Lid 1 (Main Lifter)"
+        elif sid == 2:
+            role = "Lid 2 (Dual Lifter)" if stype == 'ST' else "Latch 1 (Kadi Lock)"
+        elif sid == 3:
+            role = "Latch 1 (Kadi Lock)" if stype == 'ST' else "Latch 2 (Kadi Lock)"
+        else:
+            role = "Latch 2 (Aux Latch)"
+
+        status[sid] = {
+            'online': ok,
+            'type': stype,
+            'model': model,
+            'pos': pos,
+            'torque': torque,
+            'role': role
+        }
+    return status
+
+def relax_mechanism_servos(sts_handler, sc_handler, sids=[1, 2, 3, 4]):
+    """
+    Disables holding torque on mechanism servos so the operator can position them by hand.
+    """
+    print_header("Relax Mechanism Servos (Torque OFF)")
+    print(f"Turning off torque on mechanism servos {sids}...")
+    for sid in sids:
+        sts_handler.write1ByteTxRx(sid, 40, 0)
+        sc_handler.write1ByteTxRx(sid, 40, 0)
+    print(f"\n{C_GREEN}[RELAXED] Holding torque is now OFF.{C_RST}")
+    print(f"You can now physically position the lid and latches by hand.")
+    print(f"Once positioned, choose 'Capture Current Positions' to save the sequence!")
+    input("\nPress Enter to continue...")
+
+def hold_mechanism_servos(sts_handler, sc_handler, sids=[1, 2, 3, 4]):
+    """
+    Re-enables holding torque at the servos' exact current encoder positions
+    to prevent dropping or twitching.
+    """
+    print_header("Hold Mechanism Servos (Torque ON)")
+    held = []
+    for sid in sids:
+        pos, ok = read_servo_pos_int(sts_handler, sc_handler, sid)
+        if ok:
+            stype = get_servo_type(sts_handler, sid)
+            if stype == 'ST':
+                sts_handler.write1ByteTxRx(sid, 33, 0) # Position control mode
+                sts_handler.write1ByteTxRx(sid, 40, 1) # Enable torque
+                sts_handler.WritePosEx(sid, pos, 1500, 50)
+            else:
+                sc_handler.write1ByteTxRx(sid, 40, 1) # Enable torque
+                sc_handler.WritePos(sid, pos, 0, 1000)
+            held.append(f"ID {sid}: {pos}")
+            
+    if held:
+        print(f"\n{C_GREEN}[TORQUE LOCKED] Servos held at current positions:{C_RST} {', '.join(held)}")
+    else:
+        print(f"\n{C_RED}No mechanism servos responded.{C_RST}")
+    input("\nPress Enter to continue...")
+
+def capture_live_sequence(sts_handler, sc_handler, config, seq_key='lock'):
+    """
+    Reads the physical live positions of all connected mechanism servos,
+    displays a before/after comparison table, asks confirmation, and immediately
+    writes the new target sequence to servo_sequences.json with an automatic timestamped backup.
+    """
+    seq_name = seq_key.upper()
+    print_header(f"Teach-In: Capture Live Positions as {seq_name} Sequence")
+    print(f"Reading live encoder positions from mechanism servos (IDs 1, 2, 3, 4)...")
+    
+    status = get_mechanism_servos_status(sts_handler, sc_handler, [1, 2, 3, 4])
+    sub_cfg = config.get(seq_key, {})
+    
+    online_count = sum(1 for s in status.values() if s['online'])
+    if online_count == 0:
+        print(f"\n{C_RED}[ERROR] No mechanism servos responded! Check power supply and USB bus.{C_RST}")
+        input("\nPress Enter to continue...")
+        return False
+        
+    print(f"\n{C_CYA}{'ID':<5} | {'Role':<22} | {'Type':<6} | {'Saved Target':<14} | {'Live Encoder':<14} | {'Action':<15}{C_RST}")
+    print("-" * 85)
+    
+    updates = {}
+    for sid, s in status.items():
+        if sid == 1:
+            cfg_key = 'st1_pos'
+        elif sid == 2:
+            cfg_key = 'st2_pos' if s['type'] == 'ST' else 'sc2_pos'
+        elif sid == 3:
+            cfg_key = 'sc3_pos'
+        else:
+            cfg_key = 'sc4_pos'
+            
+        old_val = sub_cfg.get(cfg_key, "None")
+        if s['online']:
+            live_val = str(s['pos'])
+            action_str = f"{C_GREEN}Update -> {s['pos']}{C_RST}"
+            updates[cfg_key] = s['pos']
+            if sid == 2 and s['type'] == 'SC':
+                updates['st2_pos'] = s['pos']
+        else:
+            live_val = f"{C_YEL}Offline{C_RST}"
+            action_str = f"{C_YEL}Preserve Old{C_RST}"
+            
+        print(f"{sid:<5} | {s['role']:<22} | {s['type']:<6} | {str(old_val):<14} | {live_val:<23} | {action_str}")
+        
+    print("-" * 85)
+    print(f"{C_YEL}Note: Offline servos will preserve their previously saved values.{C_RST}")
+    
+    confirm = input(f"\nSave these live positions into '{seq_name}' sequence in servo_sequences.json? (y/n) [Default: y]: ").strip().lower()
+    if confirm in ['', 'y', 'yes']:
+        for k, v in updates.items():
+            sub_cfg[k] = v
+        config[seq_key] = sub_cfg
+        success = save_sequence_config(config, create_backup=True)
+        if success:
+            print(f"\n{C_GREEN}★★★ Successfully saved live {seq_name} sequence to servo_sequences.json! ★★★{C_RST}")
+        else:
+            print(f"\n{C_RED}Failed to write configuration file.{C_RST}")
+    else:
+        print(f"\n{C_YEL}Capture cancelled. No changes were made.{C_RST}")
+        
+    input("\nPress Enter to continue...")
+    return True
+
+def jog_mechanism_servo_interactive(sts_handler, sc_handler, config):
+    """
+    Interactive fine-tuning step-jogger that lets the operator nudge a servo
+    and directly save its position to LOCK or UNLOCK sequence with one keystroke.
+    """
+    print_header("Interactive Mechanism Servo Jogger")
+    sid = get_int("Select Servo ID to Jog (1, 2, 3, 4) [Default: 1]: ", default=1, min_val=1, max_val=254)
+    if sid is None:
+        return
+        
+    stype = get_servo_type(sts_handler, sid)
+    handler = sts_handler if stype == 'ST' else sc_handler
+    max_limit = 4095 if stype == 'ST' else 1023
+    
+    cur_pos, ok = read_servo_pos_int(sts_handler, sc_handler, sid, prefer_type=stype)
+    if not ok:
+        print(f"{C_RED}Servo {sid} is offline or not responding!{C_RST}")
+        input("\nPress Enter to continue...")
+        return
+        
+    if stype == 'ST':
+        handler.write1ByteTxRx(sid, 33, 0)
+        handler.write1ByteTxRx(sid, 40, 1)
+        handler.WritePosEx(sid, cur_pos, 1500, 50)
+    else:
+        handler.write1ByteTxRx(sid, 40, 1)
+        handler.WritePos(sid, cur_pos, 0, 1000)
+        
+    step_size = 50
+    while True:
+        pos_now, ok = read_servo_pos_int(sts_handler, sc_handler, sid, prefer_type=stype)
+        p_str = f"{pos_now}" if ok else "ERR"
+        
+        print(f"\n{C_CYA}Jogging Servo ID {sid} ({stype}){C_RST} | Live Position: {C_GREEN}{p_str}{C_RST} (0-{max_limit}) | Step: ±{step_size}")
+        print("Commands:")
+        print(f"  {C_YEL}[+]/[-]{C_RST} Step by current delta ({step_size:+d})   | {C_YEL}[++]/[--]{C_RST} Step by 5x ({step_size*5:+d})")
+        print(f"  {C_YEL}[number]{C_RST} Move directly to target position")
+        print(f"  {C_YEL}[step <val>]{C_RST} Change step size (current: {step_size})")
+        print(f"  {C_GREEN}[L]{C_RST} Save current position to LOCK sequence in JSON")
+        print(f"  {C_GREEN}[U]{C_RST} Save current position to UNLOCK sequence in JSON")
+        print(f"  {C_CYA}[R]{C_RST} Relax (Torque OFF)  |  {C_CYA}[H]{C_RST} Hold (Torque ON)")
+        print(f"  {C_RED}[0 or B]{C_RST} Exit jogger")
+        
+        cmd = input(f"Jog cmd (ID {sid} @ {p_str}) > ").strip().lower()
+        if cmd in ['0', 'b', 'back', 'q', 'exit']:
+            break
+            
+        elif cmd in ['l', 'lock']:
+            if not ok or pos_now is None:
+                print(f"{C_RED}Cannot save: Servo is offline.{C_RST}")
+                continue
+            key = 'st1_pos' if sid == 1 else ('st2_pos' if sid == 2 and stype == 'ST' else f'sc{sid}_pos')
+            config['lock'][key] = pos_now
+            if sid == 2 and stype == 'SC':
+                config['lock']['st2_pos'] = pos_now
+            save_sequence_config(config, create_backup=True)
+            print(f"{C_GREEN}Saved ID {sid} = {pos_now} to LOCK sequence!{C_RST}")
+            
+        elif cmd in ['u', 'unlock']:
+            if not ok or pos_now is None:
+                print(f"{C_RED}Cannot save: Servo is offline.{C_RST}")
+                continue
+            key = 'st1_pos' if sid == 1 else ('st2_pos' if sid == 2 and stype == 'ST' else f'sc{sid}_pos')
+            config['unlock'][key] = pos_now
+            if sid == 2 and stype == 'SC':
+                config['unlock']['st2_pos'] = pos_now
+            save_sequence_config(config, create_backup=True)
+            print(f"{C_GREEN}Saved ID {sid} = {pos_now} to UNLOCK sequence!{C_RST}")
+            
+        elif cmd in ['r', 'relax']:
+            handler.write1ByteTxRx(sid, 40, 0)
+            print(f"{C_YEL}Torque disabled on Servo {sid}. You can move it manually.{C_RST}")
+            
+        elif cmd in ['h', 'hold']:
+            p, ok_p = read_servo_pos_int(sts_handler, sc_handler, sid, prefer_type=stype)
+            if ok_p:
+                if stype == 'ST':
+                    handler.write1ByteTxRx(sid, 33, 0)
+                    handler.write1ByteTxRx(sid, 40, 1)
+                    handler.WritePosEx(sid, p, 1500, 50)
+                else:
+                    handler.write1ByteTxRx(sid, 40, 1)
+                    handler.WritePos(sid, p, 0, 1000)
+                print(f"{C_GREEN}Torque enabled. Holding at {p}.{C_RST}")
+                
+        elif cmd.startswith('step'):
+            parts = cmd.split()
+            if len(parts) > 1 and parts[1].isdigit():
+                step_size = max(1, int(parts[1]))
+                print(f"Step size set to {step_size}.")
+                
+        else:
+            delta = 0
+            if cmd == '+': delta = step_size
+            elif cmd == '-': delta = -step_size
+            elif cmd == '++': delta = step_size * 5
+            elif cmd == '--': delta = -step_size * 5
+            elif (cmd.startswith('+') or cmd.startswith('-')) and cmd[1:].isdigit():
+                delta = int(cmd)
+            elif cmd.isdigit():
+                target = int(cmd)
+                target = max(0, min(max_limit, target))
+                if stype == 'ST':
+                    handler.WritePosEx(sid, target, 2000, 50)
+                else:
+                    handler.WritePos(sid, target, 0, 1200)
+                time.sleep(0.3)
+                continue
+            else:
+                print(f"{C_RED}Unrecognized command.{C_RST}")
+                continue
+                
+            if pos_now is not None:
+                new_pos = max(0, min(max_limit, pos_now + delta))
+                if stype == 'ST':
+                    handler.WritePosEx(sid, new_pos, 2000, 50)
+                else:
+                    handler.WritePos(sid, new_pos, 0, 1200)
+                time.sleep(0.2)
+
+def execute_lock_sequence(sts_handler, sc_handler, config):
+    """
+    Executes the complete Lock Sequence:
+    1. Moves Lid DOWN (Single ST1 or Dual Sync ST1 & ST2 depending on rig detection)
+    2. Engages Latches (SC2 & SC3 for 3-servo rig, or SC3 & SC4 for 4-servo rig)
+    3. Reads and verifies final positions.
+    """
+    lk = config['lock']
+    print(f"\n{C_YEL}=== EXECUTING LOCK SEQUENCE ==={C_RST}")
+    
+    t2 = get_servo_type(sts_handler, 2)
+    p2_test, r2_test = read_servo_pos_int(sts_handler, sc_handler, 2, prefer_type='ST')
+    is_dual_st = (t2 == 'ST' and r2_test)
+    
+    # Step 1: Lid DOWN
+    if is_dual_st:
+        print(f"{C_CYA}Step 1: Moving Dual Lids DOWN (ID 1 -> {lk.get('st1_pos', DEFAULT_LID1_LOCK_POS)}, ID 2 -> {lk.get('st2_pos', DEFAULT_LID2_LOCK_POS)})...{C_RST}")
+        ok = move_dual_lid_sync(sts_handler, lk.get('st1_pos', DEFAULT_LID1_LOCK_POS), lk.get('st2_pos', DEFAULT_LID2_LOCK_POS),
+                                speed=lk.get('st_speed', DEFAULT_LID_SPEED), acc=lk.get('st_acc', DEFAULT_LID_ACC),
+                                tolerance=lk.get('st_tol', DEFAULT_LID_TOLERANCE), label="LOCK: DUAL LID DOWN")
+        if not ok:
+            print(f"{C_RED}Lock sequence aborted.{C_RST}")
+            return False
+    else:
+        target1 = lk.get('st1_pos', DEFAULT_LID1_LOCK_POS)
+        spd1 = lk.get('st_speed', DEFAULT_LID_SPEED)
+        acc1 = lk.get('st_acc', DEFAULT_LID_ACC)
+        tol1 = lk.get('st_tol', DEFAULT_LID_TOLERANCE)
+        print(f"{C_CYA}Step 1: Moving Main Lid DOWN (ID 1 -> {target1}, Speed: {spd1})...{C_RST}")
+        sts_handler.write1ByteTxRx(1, 33, 0)
+        sts_handler.write1ByteTxRx(1, 40, 1)
+        sts_handler.WritePosEx(1, target1, spd1, acc1)
+        
+        t_start = time.time()
+        while time.time() - t_start < 6.0:
+            if check_emergency_stop():
+                print(f"\n{C_RED}[EMERGENCY STOP TRIGGERED] Halting immediately!{C_RST}")
+                sts_handler.write1ByteTxRx(1, 40, 0)
+                return False
+            time.sleep(0.05)
+            p1_now, ok_1 = read_servo_pos_int(sts_handler, sc_handler, 1, prefer_type='ST')
+            if ok_1 and abs(p1_now - target1) <= tol1:
+                break
+    time.sleep(0.4)
+    
+    # Step 2: Latches Engage
+    latch_speed = lk.get('sc_speed', DEFAULT_LATCH_SPEED)
+    if not is_dual_st and t2 == 'SC' and r2_test:
+        sc2_tgt = lk.get('sc2_pos', lk.get('st2_pos', 450))
+        sc3_tgt = lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS)
+        print(f"\n{C_CYA}Step 2: Engaging 3-Servo Latches (SC 2 -> {sc2_tgt} & SC 3 -> {sc3_tgt})...{C_RST}")
+        sc_handler.write1ByteTxRx(2, 40, 1)
+        sc_handler.WritePos(2, sc2_tgt, 0, latch_speed)
+        sc_handler.write1ByteTxRx(3, 40, 1)
+        sc_handler.WritePos(3, sc3_tgt, 0, latch_speed)
+    else:
+        sc3_tgt = lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS)
+        sc4_tgt = lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS)
+        print(f"\n{C_CYA}Step 2: Engaging Latches (SC 3 -> {sc3_tgt} & SC 4 -> {sc4_tgt})...{C_RST}")
+        sc_handler.write1ByteTxRx(3, 40, 1)
+        sc_handler.WritePos(3, sc3_tgt, 0, latch_speed)
+        sc_handler.write1ByteTxRx(4, 40, 1)
+        sc_handler.WritePos(4, sc4_tgt, 0, latch_speed)
+    time.sleep(1.0)
+    
+    # Step 3: Verification
+    p1 = read_servo_pos_str(sts_handler, sc_handler, 1, 'ST')
+    p2 = read_servo_pos_str(sts_handler, sc_handler, 2, 'ST' if is_dual_st else 'SC')
+    p3 = read_servo_pos_str(sts_handler, sc_handler, 3, 'SC')
+    p4 = read_servo_pos_str(sts_handler, sc_handler, 4, 'SC')
+    print(f"\n{C_GREEN}[LOCK COMPLETE] Positions: ID 1: {p1} | ID 2: {p2} | ID 3: {p3} | ID 4: {p4}{C_RST}")
+    return True
+
+def execute_unlock_sequence(sts_handler, sc_handler, config):
+    """
+    Executes the complete Unlock Sequence:
+    1. Retracts Latches first to clear mechanical clamps
+    2. Moves Lid UP (Single ST1 or Dual Sync ST1 & ST2 depending on rig detection)
+    3. Reads and verifies final positions.
+    """
+    un = config['unlock']
+    print(f"\n{C_YEL}=== EXECUTING UNLOCK SEQUENCE ==={C_RST}")
+    
+    t2 = get_servo_type(sts_handler, 2)
+    p2_test, r2_test = read_servo_pos_int(sts_handler, sc_handler, 2, prefer_type='ST')
+    is_dual_st = (t2 == 'ST' and r2_test)
+    
+    # Step 1: Retract Latches
+    latch_speed = un.get('sc_speed', DEFAULT_LATCH_SPEED)
+    if not is_dual_st and t2 == 'SC' and r2_test:
+        sc2_tgt = un.get('sc2_pos', un.get('st2_pos', 666))
+        sc3_tgt = un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS)
+        print(f"\n{C_CYA}Step 1: Retracting 3-Servo Latches (SC 2 -> {sc2_tgt} & SC 3 -> {sc3_tgt})...{C_RST}")
+        sc_handler.write1ByteTxRx(2, 40, 1)
+        sc_handler.WritePos(2, sc2_tgt, 0, latch_speed)
+        sc_handler.write1ByteTxRx(3, 40, 1)
+        sc_handler.WritePos(3, sc3_tgt, 0, latch_speed)
+    else:
+        sc3_tgt = un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS)
+        sc4_tgt = un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS)
+        print(f"\n{C_CYA}Step 1: Retracting Latches (SC 3 -> {sc3_tgt} & SC 4 -> {sc4_tgt})...{C_RST}")
+        sc_handler.write1ByteTxRx(3, 40, 1)
+        sc_handler.WritePos(3, sc3_tgt, 0, latch_speed)
+        sc_handler.write1ByteTxRx(4, 40, 1)
+        sc_handler.WritePos(4, sc4_tgt, 0, latch_speed)
+    time.sleep(1.0)
+    
+    # Step 2: Lid UP
+    if is_dual_st:
+        print(f"{C_CYA}Step 2: Moving Dual Lids UP (ID 1 -> {un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS)}, ID 2 -> {un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS)})...{C_RST}")
+        ok = move_dual_lid_sync(sts_handler, un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS), un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS),
+                                speed=un.get('st_speed', DEFAULT_LID_SPEED), acc=un.get('st_acc', DEFAULT_LID_ACC),
+                                tolerance=un.get('st_tol', DEFAULT_LID_TOLERANCE), label="UNLOCK: DUAL LID UP")
+        if not ok:
+            print(f"{C_RED}Unlock sequence aborted.{C_RST}")
+            return False
+    else:
+        target1 = un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS)
+        spd1 = un.get('st_speed', DEFAULT_LID_SPEED)
+        acc1 = un.get('st_acc', DEFAULT_LID_ACC)
+        tol1 = un.get('st_tol', DEFAULT_LID_TOLERANCE)
+        print(f"{C_CYA}Step 2: Moving Main Lid UP (ID 1 -> {target1}, Speed: {spd1})...{C_RST}")
+        sts_handler.write1ByteTxRx(1, 33, 0)
+        sts_handler.write1ByteTxRx(1, 40, 1)
+        sts_handler.WritePosEx(1, target1, spd1, acc1)
+        
+        t_start = time.time()
+        while time.time() - t_start < 6.0:
+            if check_emergency_stop():
+                print(f"\n{C_RED}[EMERGENCY STOP TRIGGERED] Halting immediately!{C_RST}")
+                sts_handler.write1ByteTxRx(1, 40, 0)
+                return False
+            time.sleep(0.05)
+            p1_now, ok_1 = read_servo_pos_int(sts_handler, sc_handler, 1, prefer_type='ST')
+            if ok_1 and abs(p1_now - target1) <= tol1:
+                break
+    time.sleep(0.4)
+    
+    # Step 3: Verification
+    p1 = read_servo_pos_str(sts_handler, sc_handler, 1, 'ST')
+    p2 = read_servo_pos_str(sts_handler, sc_handler, 2, 'ST' if is_dual_st else 'SC')
+    p3 = read_servo_pos_str(sts_handler, sc_handler, 3, 'SC')
+    p4 = read_servo_pos_str(sts_handler, sc_handler, 4, 'SC')
+    print(f"\n{C_GREEN}[UNLOCK COMPLETE] Positions: ID 1: {p1} | ID 2: {p2} | ID 3: {p3} | ID 4: {p4}{C_RST}")
+    return True
+
 def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
     """
-    Interactive Lock and Unlock sequence tester, parameter editor, and JSON config saver/loader.
-    Supports Dual ST3215 Lid Lifters (ID 1 & ID 2) and Dual SC09 Latches (ID 3 & ID 4).
+    Comprehensive Lock and Unlock sequence manager, teach-in calibrator,
+    interactive jogger, and JSON config saver/loader.
     """
     config = load_sequence_config()
 
@@ -1271,78 +1710,83 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
         lk = config['lock']
         un = config['unlock']
         
-        print_header("Lock & Unlock Sequence Manager (4-Servo System)")
-        print(f"Current Config Summary:")
-        print(f"  {C_CYA}LOCK Sequence:{C_RST}   Dual Lid DOWN -> ID 1: {lk.get('st1_pos', DEFAULT_LID1_LOCK_POS)} & ID 2: {lk.get('st2_pos', DEFAULT_LID2_LOCK_POS)} (Tol: ±{lk.get('st_tol', DEFAULT_LID_TOLERANCE)}) | Latches -> SC3: {lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS)} & SC4: {lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS)}")
-        print(f"  {C_CYA}UNLOCK Sequence:{C_RST} Latches -> SC3: {un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS)} & SC4: {un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS)} | Dual Lid UP -> ID 1: {un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS)} & ID 2: {un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS)} (Tol: ±{un.get('st_tol', DEFAULT_LID_TOLERANCE)})")
-        print("\nOptions:")
-        print("  1. Test/Execute LOCK Sequence   (Dual Lid DOWN -> Latches Latch)")
-        print("  2. Test/Execute UNLOCK Sequence (Latches Retract -> Dual Lid UP)")
-        print("  3. Dual Lid Quick Sync Move     (ID 1 & ID 2 Simultaneous)")
-        print("  4. Edit Sequence Parameters     (ID 1, ID 2, ID 3, ID 4 Positions & Speeds)")
-        print("  5. Save Configuration to JSON File (servo_sequences.json)")
-        print("  6. Load Configuration from JSON File")
-        print("  0. Return to Main Menu")
+        # Read live status of mechanism servos for dashboard display
+        mech_status = get_mechanism_servos_status(sts_handler, sc_handler, [1, 2, 3, 4])
+        
+        print_header("Lock & Unlock Sequence Manager (Teach-In & Calibration)")
+        
+        # Live Mechanism Table
+        print(f"{C_CYA}Live Mechanism Servos Status:{C_RST}")
+        status_strs = []
+        for sid in [1, 2, 3, 4]:
+            s = mech_status[sid]
+            if s['online']:
+                t_str = "ON" if s['torque'] else "OFF"
+                status_strs.append(f"ID {sid} ({s['type']}): {C_GREEN}{s['pos']}{C_RST} [Tq:{t_str}]")
+            else:
+                status_strs.append(f"ID {sid}: {C_YEL}Offline{C_RST}")
+        print("  " + " | ".join(status_strs[:2]))
+        print("  " + " | ".join(status_strs[2:]))
+        
+        # Saved Config Summary
+        print(f"\n{C_CYA}Saved Configuration (servo_sequences.json):{C_RST}")
+        print(f"  {C_GREEN}LOCK Targets:{C_RST}   ID 1: {lk.get('st1_pos', DEFAULT_LID1_LOCK_POS)} | ID 2: {lk.get('st2_pos', DEFAULT_LID2_LOCK_POS)} (Tol: ±{lk.get('st_tol', DEFAULT_LID_TOLERANCE)}) | SC 3: {lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS)} | SC 4: {lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS)}")
+        print(f"  {C_GREEN}UNLOCK Targets:{C_RST} SC 3: {un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS)} | SC 4: {un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS)} | ID 1: {un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS)} | ID 2: {un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS)} (Tol: ±{un.get('st_tol', DEFAULT_LID_TOLERANCE)})")
+        
+        print(f"\n{C_BLUE}── Teach-In & Calibration (Quick Setup) ─────────────────────{C_RST}")
+        print(f"  1. {C_GREEN}Capture Current Positions as LOCK Sequence   [Teach LOCK & Auto-Save]{C_RST}")
+        print(f"  2. {C_GREEN}Capture Current Positions as UNLOCK Sequence [Teach UNLOCK & Auto-Save]{C_RST}")
+        print(f"  3. Relax Mechanism Servos (Torque OFF for manual positioning by hand)")
+        print(f"  4. Hold Mechanism Servos (Torque ON at current positions)")
+        print(f"  5. Jog & Fine-Tune Servo Positions Interactively")
+        print(f"{C_BLUE}── Testing & Execution ──────────────────────────────────────{C_RST}")
+        print(f"  6. Test/Execute LOCK Sequence   (Lid DOWN -> Latches Engage)")
+        print(f"  7. Test/Execute UNLOCK Sequence (Latches Retract -> Lid UP)")
+        print(f"  8. Dual Lid Quick Sync Move     (ID 1 & ID 2 Simultaneous)")
+        print(f"{C_BLUE}── Configuration & Backup ───────────────────────────────────{C_RST}")
+        print(f"  9. Edit Parameters Manually (With Immediate Auto-Save)")
+        print(f" 10. Save Configuration with Timestamped Backup")
+        print(f" 11. Reload Configuration from JSON File")
+        print(f"  0. Return to Main Menu")
 
-        sub = input("\nSelect option (0-6): ").strip()
+        sub = input(f"\nSelect option (0-11): ").strip()
         if sub == '0':
             break
 
         elif sub == '1':
-            print(f"\n{C_YEL}=== EXECUTING LOCK SEQUENCE ==={C_RST}")
-            # Step 1: Move Dual Lid DOWN synchronously
-            move_dual_lid_sync(sts_handler, lk.get('st1_pos', DEFAULT_LID1_LOCK_POS), lk.get('st2_pos', DEFAULT_LID2_LOCK_POS), 
-                               speed=lk.get('st_speed', DEFAULT_LID_SPEED), acc=lk.get('st_acc', DEFAULT_LID_ACC), 
-                               tolerance=lk.get('st_tol', DEFAULT_LID_TOLERANCE), label="LOCK: DUAL LID DOWN")
-            time.sleep(0.5)
-            
-            # Step 2: Engage Latches (SC servos 3 & 4)
-            print(f"\n{C_CYA}Step 2: Engaging Latches (Servo 3 -> {lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS)} & Servo 4 -> {lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS)})...{C_RST}")
-            sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
-            sc_handler.write1ByteTxRx(4, 40, 1)
-            sc_handler.WritePos(4, lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
-            time.sleep(1.0)
-            
-            p1 = read_servo_pos_str(sts_handler, sc_handler, 1, 'ST')
-            p2 = read_servo_pos_str(sts_handler, sc_handler, 2, 'ST')
-            p3 = read_servo_pos_str(sts_handler, sc_handler, 3, 'SC')
-            p4 = read_servo_pos_str(sts_handler, sc_handler, 4, 'SC')
-            print(f"{C_GREEN}[LOCK COMPLETE] Positions: ID 1: {p1} | ID 2: {p2} | SC 3: {p3} | SC 4: {p4}{C_RST}")
-            input("\nPress Enter to continue...")
+            capture_live_sequence(sts_handler, sc_handler, config, seq_key='lock')
 
         elif sub == '2':
-            print(f"\n{C_YEL}=== EXECUTING UNLOCK SEQUENCE ==={C_RST}")
-            # Step 1: Retract Latches (SC servos 3 & 4)
-            print(f"\n{C_CYA}Step 1: Retracting Latches (Servo 3 -> {un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS)} & Servo 4 -> {un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS)})...{C_RST}")
-            sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS), 0, un.get('sc_speed', DEFAULT_LATCH_SPEED))
-            sc_handler.write1ByteTxRx(4, 40, 1)
-            sc_handler.WritePos(4, un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS), 0, un.get('sc_speed', DEFAULT_LATCH_SPEED))
-            time.sleep(1.0)
-            
-            # Step 2: Move Dual Lid UP synchronously
-            move_dual_lid_sync(sts_handler, un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS), un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS), 
-                               speed=un.get('st_speed', DEFAULT_LID_SPEED), acc=un.get('st_acc', DEFAULT_LID_ACC), 
-                               tolerance=un.get('st_tol', DEFAULT_LID_TOLERANCE), label="UNLOCK: DUAL LID UP")
-            time.sleep(0.5)
-            
-            p1 = read_servo_pos_str(sts_handler, sc_handler, 1, 'ST')
-            p2 = read_servo_pos_str(sts_handler, sc_handler, 2, 'ST')
-            p3 = read_servo_pos_str(sts_handler, sc_handler, 3, 'SC')
-            p4 = read_servo_pos_str(sts_handler, sc_handler, 4, 'SC')
-            print(f"{C_GREEN}[UNLOCK COMPLETE] Positions: ID 1: {p1} | ID 2: {p2} | SC 3: {p3} | SC 4: {p4}{C_RST}")
-            input("\nPress Enter to continue...")
+            capture_live_sequence(sts_handler, sc_handler, config, seq_key='unlock')
 
         elif sub == '3':
-            dual_lid_menu(sts_handler)
+            relax_mechanism_servos(sts_handler, sc_handler)
 
         elif sub == '4':
+            hold_mechanism_servos(sts_handler, sc_handler)
+
+        elif sub == '5':
+            jog_mechanism_servo_interactive(sts_handler, sc_handler, config)
+
+        elif sub == '6':
+            execute_lock_sequence(sts_handler, sc_handler, config)
+            input("\nPress Enter to continue...")
+
+        elif sub == '7':
+            execute_unlock_sequence(sts_handler, sc_handler, config)
+            input("\nPress Enter to continue...")
+
+        elif sub == '8':
+            dual_lid_menu(sts_handler)
+
+        elif sub == '9':
             print(f"\n{C_CYA}--- Edit Sequence Parameters ---{C_RST}")
             print("1. Edit Lock Sequence Parameters")
             print("2. Edit Unlock Sequence Parameters")
             ed_choice = input("Choice (1 or 2): ").strip()
-            
+            if ed_choice not in ['1', '2']:
+                continue
+                
             target_key = 'lock' if ed_choice == '1' else 'unlock'
             cfg_sub = config[target_key]
             
@@ -1352,10 +1796,10 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             def_sc3 = DEFAULT_LATCH3_LOCK_POS if target_key == 'lock' else DEFAULT_LATCH3_UNLOCK_POS
             def_sc4 = DEFAULT_LATCH4_LOCK_POS if target_key == 'lock' else DEFAULT_LATCH4_UNLOCK_POS
 
-            print(f"\nEditing {target_key.upper()} Sequence:")
-            cfg_sub['st1_pos'] = get_int(f"Servo 1 (Lid) Target (0-4095) [Current: {cfg_sub.get('st1_pos', def_l1)}]: ", 
+            print(f"\nEditing {target_key.upper()} Sequence (Press Enter to keep current value):")
+            cfg_sub['st1_pos'] = get_int(f"Servo 1 Target (0-4095) [Current: {cfg_sub.get('st1_pos', def_l1)}]: ", 
                                          default=cfg_sub.get('st1_pos', def_l1), min_val=0, max_val=4095)
-            cfg_sub['st2_pos'] = get_int(f"Servo 2 (Lid) Target (0-4095) [Current: {cfg_sub.get('st2_pos', def_l2)}]: ", 
+            cfg_sub['st2_pos'] = get_int(f"Servo 2 Target (0-4095) [Current: {cfg_sub.get('st2_pos', def_l2)}]: ", 
                                          default=cfg_sub.get('st2_pos', def_l2), min_val=0, max_val=4095)
             cfg_sub['st_speed'] = get_int(f"Lid Servos Speed [Current: {cfg_sub.get('st_speed', DEFAULT_LID_SPEED)}]: ", 
                                           default=cfg_sub.get('st_speed', DEFAULT_LID_SPEED), min_val=100, max_val=3000)
@@ -1368,13 +1812,18 @@ def manage_lock_unlock_sequences(sts_handler, sc_handler, active_id):
             cfg_sub['sc_speed'] = get_int(f"Latch Servos Speed [Current: {cfg_sub.get('sc_speed', DEFAULT_LATCH_SPEED)}]: ", 
                                           default=cfg_sub.get('sc_speed', DEFAULT_LATCH_SPEED), min_val=100, max_val=1500)
             
-            print(f"{C_GREEN}Updated in-memory parameters for {target_key.upper()} sequence.{C_RST}")
-
-        elif sub == '5':
-            save_sequence_config(config)
+            save_now = input("\nSave changes directly to servo_sequences.json? (y/n) [Default: y]: ").strip().lower()
+            if save_now in ['', 'y', 'yes']:
+                save_sequence_config(config, create_backup=True)
+            else:
+                print(f"{C_YEL}Changes held in memory for current session only.{C_RST}")
             time.sleep(1.5)
 
-        elif sub == '6':
+        elif sub == '10':
+            save_sequence_config(config, create_backup=True)
+            input("\nPress Enter to continue...")
+
+        elif sub == '11':
             config = load_sequence_config()
             print(f"{C_GREEN}Reloaded configuration file.{C_RST}")
             time.sleep(1.5)
@@ -1654,6 +2103,9 @@ def fuzzy_match_command(word):
     if word in ['play', 'ply', 'pl']: return 'play'
     if word in ['monitor', 'mon', 'mn']: return 'monitor'
     if word in ['diag', 'diagnostic', 'diagnose', 'dg']: return 'diag'
+    if word in ['teach', 'tch', 'capture', 'saveseq', 'savelock', 'saveunlock']: return 'teach'
+    if word in ['lock', 'lck']: return 'lock'
+    if word in ['unlock', 'unlck', 'unlk']: return 'unlock'
     return word
 
 def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
@@ -2016,31 +2468,16 @@ def parse_and_run_command(cmd_str, sts_handler, sc_handler, active_id):
             dual_lid_menu(sts_handler)
         return active_id, True
 
-    # 12. seq / sequence / lock / unlock / absrot
-    elif cmd in ['seq', 'sequence', 'lock', 'unlock', 'absrot']:
+    # 12. seq / sequence / lock / unlock / teach / saveseq / capture
+    elif cmd in ['seq', 'sequence', 'lock', 'unlock', 'absrot', 'teach', 'saveseq', 'capture']:
         cfg = load_sequence_config()
-        lk = cfg['lock']
-        un = cfg['unlock']
         if cmd == 'lock':
-            print(f"\n{C_YEL}Executing LOCK Sequence via shell...{C_RST}")
-            # Step 1: Move Dual Lid DOWN synchronously
-            move_dual_lid_sync(sts_handler, lk.get('st1_pos', DEFAULT_LID1_LOCK_POS), lk.get('st2_pos', DEFAULT_LID2_LOCK_POS), speed=lk.get('st_speed', DEFAULT_LID_SPEED), acc=lk.get('st_acc', DEFAULT_LID_ACC), tolerance=lk.get('st_tol', DEFAULT_LID_TOLERANCE), label="LOCK: DUAL LID DOWN")
-            time.sleep(0.5)
-            # Step 2: Engage Latches (SC servos 3 & 4)
-            sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, lk.get('sc3_pos', DEFAULT_LATCH3_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
-            sc_handler.write1ByteTxRx(4, 40, 1)
-            sc_handler.WritePos(4, lk.get('sc4_pos', DEFAULT_LATCH4_LOCK_POS), 0, lk.get('sc_speed', DEFAULT_LATCH_SPEED))
+            execute_lock_sequence(sts_handler, sc_handler, cfg)
         elif cmd == 'unlock':
-            print(f"\n{C_YEL}Executing UNLOCK Sequence via shell...{C_RST}")
-            # Step 1: Retract Latches (SC servos 3 & 4)
-            sc_handler.write1ByteTxRx(3, 40, 1)
-            sc_handler.WritePos(3, un.get('sc3_pos', DEFAULT_LATCH3_UNLOCK_POS), 0, un.get('sc_speed', DEFAULT_LATCH_SPEED))
-            sc_handler.write1ByteTxRx(4, 40, 1)
-            sc_handler.WritePos(4, un.get('sc4_pos', DEFAULT_LATCH4_UNLOCK_POS), 0, un.get('sc_speed', DEFAULT_LATCH_SPEED))
-            time.sleep(0.8)
-            # Step 2: Move Dual Lid UP synchronously
-            move_dual_lid_sync(sts_handler, un.get('st1_pos', DEFAULT_LID1_UNLOCK_POS), un.get('st2_pos', DEFAULT_LID2_UNLOCK_POS), speed=un.get('st_speed', DEFAULT_LID_SPEED), acc=un.get('st_acc', DEFAULT_LID_ACC), tolerance=un.get('st_tol', DEFAULT_LID_TOLERANCE), label="UNLOCK: DUAL LID UP")
+            execute_unlock_sequence(sts_handler, sc_handler, cfg)
+        elif cmd in ['teach', 'saveseq', 'capture']:
+            target_seq = 'unlock' if (args and args[0].lower() in ['unlock', 'open', 'u']) else 'lock'
+            capture_live_sequence(sts_handler, sc_handler, cfg, seq_key=target_seq)
         else:
             manage_lock_unlock_sequences(sts_handler, sc_handler, active_id)
         return active_id, True
