@@ -47,6 +47,13 @@ A structured reference document detailing the hardware, avionics, power distribu
 
 The hexacopter's avionics, compute, power, and actuation are structured into **5 distinct subsystems** connected via standardized industrial protocols:
 
+![Hexacopter Modular Subsystem Architecture & Signal Flow](hexacopter_subsystem_architecture.svg)
+
+> 💡 **Interactive 3D Digital Twin & Inspector:** Open [system_wiring_diagram.html](file:///w:/JECH_UI/system_wiring_diagram.html) for the live interactive 3D digital twin and pin-level circuit inspector.
+
+<details open>
+<summary><b>📐 Text Flowchart (Mermaid Source)</b></summary>
+
 ```mermaid
 flowchart TD
     subgraph S4["⚡ 1. Power Storage & Distribution (PDS)"]
@@ -83,7 +90,7 @@ flowchart TD
         BUZZ["Acoustic Buzzer / Speaker"]
         PBUFF["500mAh Buffer Battery"]
 
-        PBUFF -.->|"UPS Backup"| RPI
+        PBUFF -. "UPS Backup" .-> RPI
         RPI -->|"USB 3.0"| EC
         RPI -->|"USB 2.0 (High-Power)"| WIFI
         RPI -->|"USB 3.0"| OV
@@ -116,11 +123,12 @@ flowchart TD
     PMU ==>|"22.2V DC Main Bus"| ESC2
     UBEC ==>|"5.0V @ 7.0A Logic DC"| RPI
     XL ==>|"7.0V @ 5.0A Servo Rail"| SDRV
-    FC <-->|"MAVLink2 (921.6k baud)"| RPI
+    FC ---|"MAVLink2 (921.6k baud)"| RPI
     FC -->|"DShot600 (M1-M3)"| ESC1
     FC -->|"DShot600 (M4-M6)"| ESC2
     RPI -->|"USB / UART Control"| SDRV
 ```
+</details>
 
 ### 2.1 Subsystem 1: Companion Compute, Vision & Edge AI
 * **Mission Role:** High-level autonomy, obstacle avoidance, computer vision, object tracking, BVLOS cloud telemetry, and edge processing.
