@@ -24,3 +24,17 @@ To ensure ultra-fast file analysis, prevent token-streaming latency, and avoid s
    - Native binary: `C:\Users\jecha\.local\bin\ast-grep.exe`
    - Batch wrapper: `C:\Users\jecha\.local\bin\ast.cmd`
    - Global MCP Server: Registered in `C:\Users\jecha\.gemini\config\mcp_config.json`.
+
+5. **Single-Shot Directory Analysis (No Iterative File-by-File Loops):**
+   - When asked to analyze, explore, or inspect an entire directory:
+     **DO NOT** traverse subfolders one-by-one with sequential `list_dir` and `view_file` calls. That produces 15+ slow network round-trips.
+   - **Instead, run a single Repomix command:**
+     - For full compressed AST code structure:
+       ```cmd
+       cmd.exe /c "npx.cmd -y repomix <path> --compress --no-security-check --output-show-line-numbers --stdout"
+       ```
+     - For quick directory tree and metadata:
+       ```cmd
+       cmd.exe /c "npx.cmd -y repomix <path> --no-files --stdout"
+       ```
+   - This parses the entire folder locally on the CPU with Tree-sitter in ~1–2 seconds and returns the whole structural summary in a single tool call.
