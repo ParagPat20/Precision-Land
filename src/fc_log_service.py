@@ -817,12 +817,12 @@ class FlightControllerLogService:
             expected = int(st["expected_size"])
             if ofs % self.LOG_DATA_LEN != 0 or ofs > expected:
                 return
-
-            chunk = ofs // self.QGC_CHUNK_SIZE
+            cs = st.get("chunk_size", self.QGC_CHUNK_SIZE)
+            chunk = ofs // cs
             if chunk != st["current_chunk"]:
                 return
 
-            bin_index = (ofs - chunk * self.QGC_CHUNK_SIZE) // self.LOG_DATA_LEN
+            bin_index = (ofs - chunk * cs) // self.LOG_DATA_LEN
             if bin_index >= len(st["chunk_table"]):
                 return
 
@@ -1077,25 +1077,31 @@ class FlightControllerLogService:
                 1 if rate_hz > 0 else 0,
             )
 
-    def _qgc_num_chunks(self, expected_size):
-        return max(1, (int(expected_size) + self.QGC_CHUNK_SIZE - 1) // self.QGC_CHUNK_SIZE)
+    def _qgc_num_chunks(self, expected_size, chunk_size=None):
+        cs = chunk_size or self.QGC_CHUNK_SIZE
+        return max(1, (int(expected_size) + cs - 1) // cs)
 
-    def _qgc_chunk_bins(self, expected_size, chunk):
-        remaining = max(0, int(expected_size) - int(chunk) * self.QGC_CHUNK_SIZE)
+    def _qgc_chunk_bins(self, expected_size, chunk, chunk_bins=None, chunk_size=None):
+        cb = chunk_bins or self.QGC_CHUNK_BINS
+        cs = chunk_size or (self.LOG_DATA_LEN * cb)
+        remaining = max(0, int(expected_size) - int(chunk) * cs)
         bins = (remaining + self.LOG_DATA_LEN - 1) // self.LOG_DATA_LEN
-        return max(1, min(self.QGC_CHUNK_BINS, bins))
+        return max(1, min(cb, bins))
 
     def _qgc_chunk_complete_locked(self, st):
         return bool(st["chunk_table"]) and st.get("missing_bins", len(st["chunk_table"])) == 0
 
     def _qgc_log_complete_locked(self, st):
+        cs = st.get("chunk_size", self.QGC_CHUNK_SIZE)
         return self._qgc_chunk_complete_locked(st) and (
-            st["current_chunk"] + 1 == self._qgc_num_chunks(st["expected_size"])
+            st["current_chunk"] + 1 == self._qgc_num_chunks(st["expected_size"], chunk_size=cs)
         )
 
     def _qgc_advance_chunk_locked(self, st):
         st["current_chunk"] += 1
-        num_bins = self._qgc_chunk_bins(st["expected_size"], st["current_chunk"])
+        cb = st.get("chunk_bins", self.QGC_CHUNK_BINS)
+        cs = st.get("chunk_size", self.QGC_CHUNK_SIZE)
+        num_bins = self._qgc_chunk_bins(st["expected_size"], st["current_chunk"], chunk_bins=cb, chunk_size=cs)
         st["chunk_table"] = [False] * num_bins
         st["missing_bins"] = num_bins
         st["chunk_requested"] = False
@@ -1122,7 +1128,8 @@ class FlightControllerLogService:
         if start >= len(st["chunk_table"]):
             return
         end = len(st["chunk_table"])
-        offset = st["current_chunk"] * self.QGC_CHUNK_SIZE + start * self.LOG_DATA_LEN
+        cs = st.get("chunk_size", self.QGC_CHUNK_SIZE)
+        offset = st["current_chunk"] * cs + start * self.LOG_DATA_LEN
         count = (end - start) * self.LOG_DATA_LEN
         if count <= 0:
             return
@@ -1225,7 +1232,25 @@ class FlightControllerLogService:
         with self._stream_cv:
             self._stream_state = st
             
-        if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+        try:
+            from core.config_manager import config_manager
+            max_backlog = int(config_manager.get("FC_LOG_FTP_MAX_BACKLOG", 160))
+            burst_size = int(config_manager.get("FC_LOG_FTP_BURST_SIZE", 239))
+            idle_detection = float(config_manager.get("FC_LOG_FTP_IDLE_DETECTION", 3.5))
+            read_retry = float(config_manager.get("FC_LOG_FTP_READ_RETRY", 1.0))
+            retry_time = float(config_manager.get("FC_LOG_FTP_RETRY", 0.5))
+            pause_telem = bool(config_manager.get("FC_LOG_PAUSE_TELEMETRY", self.PAUSE_TELEMETRY_DURING_DOWNLOAD))
+            wall_timeout = float(config_manager.get("FC_LOG_DOWNLOAD_TIMEOUT", self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC))
+        except Exception:
+            max_backlog = 160
+            burst_size = 239
+            idle_detection = 3.5
+            read_retry = 1.0
+            retry_time = 0.5
+            pause_telem = self.PAUSE_TELEMETRY_DURING_DOWNLOAD
+            wall_timeout = self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC
+
+        if pause_telem:
             try:
                 print("[LOG SERVICE] Pausing telemetry streams to maximize Ethernet MAVFTP bandwidth...")
                 self._set_telemetry_streams(0)
@@ -1236,13 +1261,13 @@ class FlightControllerLogService:
             ("debug", int, 0),
             ("pkt_loss_tx", int, 0),
             ("pkt_loss_rx", int, 0),
-            ("max_backlog", int, 160),        # High window for Ethernet throughput
-            ("burst_read_size", int, 239),
-            ("write_size", int, 239),
+            ("max_backlog", int, max_backlog),        # Configured window for Ethernet throughput
+            ("burst_read_size", int, burst_size),
+            ("write_size", int, burst_size),
             ("write_qsize", int, 5),
-            ("idle_detection_time", float, 3.5),
-            ("read_retry_time", float, 1.0),
-            ("retry_time", float, 0.5),
+            ("idle_detection_time", float, idle_detection),
+            ("read_retry_time", float, read_retry),
+            ("retry_time", float, retry_time),
         ])
         
         try:
@@ -1272,7 +1297,7 @@ class FlightControllerLogService:
             
             # Ensure timeout is generous enough for large logs even if env var was set low
             timeout_sec = max(
-                float(self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC),
+                float(wall_timeout),
                 float(expected) / 10000.0 + 300.0,
                 3600.0
             )
@@ -1284,7 +1309,7 @@ class FlightControllerLogService:
                 st["complete"] = True
                 
         finally:
-            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+            if pause_telem:
                 try:
                     print("[LOG SERVICE] Restoring telemetry streams after log download...")
                     self._set_telemetry_streams(4)
@@ -1299,12 +1324,26 @@ class FlightControllerLogService:
 
     def _download_entry_via_log_request(self, entry, file_path):
         """
-        High-speed QGC-style LOG_REQUEST_DATA download: 4096 bins (368KB) per chunk,
-        streaming over Ethernet UDP at 400-600+ KB/s with missing bin recovery.
+        High-speed QGC-style LOG_REQUEST_DATA download with configurable chunk size
+        and silence retry timeout, streaming over Ethernet UDP at 400-600+ KB/s.
         """
         log_id = entry["id"]
         expected = int(entry["size"])
-        print(f"[LOG SERVICE] Downloading FC log {log_id} via QGC Fast (LOG_REQUEST_DATA) -> {file_path}")
+        try:
+            from core.config_manager import config_manager
+            chunk_bins = int(config_manager.get("FC_LOG_QGC_CHUNK_BINS", self.QGC_CHUNK_BINS))
+            retry_sec = float(config_manager.get("FC_LOG_QGC_RETRY_SEC", self.QGC_DATA_TIMEOUT_SEC))
+            pause_telem = bool(config_manager.get("FC_LOG_PAUSE_TELEMETRY", self.PAUSE_TELEMETRY_DURING_DOWNLOAD))
+            wall_timeout = float(config_manager.get("FC_LOG_DOWNLOAD_TIMEOUT", self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC))
+        except Exception:
+            chunk_bins = self.QGC_CHUNK_BINS
+            retry_sec = self.QGC_DATA_TIMEOUT_SEC
+            pause_telem = self.PAUSE_TELEMETRY_DURING_DOWNLOAD
+            wall_timeout = self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC
+
+        chunk_size = self.LOG_DATA_LEN * chunk_bins
+        initial_bins = self._qgc_chunk_bins(expected, 0, chunk_bins=chunk_bins, chunk_size=chunk_size)
+        print(f"[LOG SERVICE] Downloading FC log {log_id} via QGC Fast ({chunk_bins} bins/chunk, retry {retry_sec}s) -> {file_path}")
         fh = file_path.open("wb")
         fh.truncate(expected)
         now = time.time()
@@ -1315,8 +1354,13 @@ class FlightControllerLogService:
             "fh": fh,
             "path": file_path,
             "current_chunk": 0,
-            "chunk_table": [False] * self._qgc_chunk_bins(expected, 0),
-            "missing_bins": self._qgc_chunk_bins(expected, 0),
+            "chunk_bins": chunk_bins,
+            "chunk_size": chunk_size,
+            "retry_sec": retry_sec,
+            "pause_telemetry": pause_telem,
+            "wall_timeout": wall_timeout,
+            "chunk_table": [False] * initial_bins,
+            "missing_bins": initial_bins,
             "written_offsets": set(),
             "written_ranges": [],
             "rate_bytes": 0,
@@ -1335,7 +1379,7 @@ class FlightControllerLogService:
         with self._stream_cv:
             self._stream_state = st
         try:
-            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+            if pause_telem:
                 try:
                     print("[LOG SERVICE] Pausing telemetry streams to maximize Ethernet bandwidth...")
                     self._set_telemetry_streams(0)
@@ -1345,7 +1389,7 @@ class FlightControllerLogService:
                 self._qgc_request_missing_range_locked(st)
 
             timeout_sec = max(
-                float(self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC),
+                float(wall_timeout),
                 float(expected) / 20000.0 + 300.0,
                 3600.0
             )
@@ -1362,7 +1406,7 @@ class FlightControllerLogService:
                     if st["complete"]:
                         break
                     now_t = time.time()
-                    if now_t - st["last_ts"] >= self.QGC_DATA_TIMEOUT_SEC:
+                    if now_t - st["last_ts"] >= retry_sec:
                         self._qgc_request_missing_range_locked(st)
                         st["last_ts"] = now_t
                     self._qgc_update_rates_locked(st)
@@ -1378,7 +1422,7 @@ class FlightControllerLogService:
         finally:
             fh.flush()
             fh.close()
-            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+            if pause_telem:
                 try:
                     print("[LOG SERVICE] Restoring telemetry streams after log download...")
                     self._set_telemetry_streams(4)

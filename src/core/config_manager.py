@@ -558,23 +558,99 @@ PARAM_DEFINITIONS: List[Dict[str, Any]] = [
         "env_var": "JECH_FC_LOG_CACHE_DIR",
         "description": "Local directory where binary .bin DataFlash logs from the flight controller are saved."
     },
-    {
-        "name": "FC_LOG_DOWNLOAD_TIMEOUT",
-        "category": "System Services",
-        "default": 3600,
-        "type": "int",
-        "unit": "s",
-        "env_var": "JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC",
-        "description": "Maximum seconds allowed for downloading a single .BIN flight log over MAVLink FTP (default: 3600s / 1 hour)."
-    },
+
+    # -------------------------------------------------------------------------
+    # 7. LOG TRANSFER & DOWNLOADING
+    # -------------------------------------------------------------------------
     {
         "name": "FC_LOG_DEFAULT_METHOD",
-        "category": "System Services",
+        "category": "Log Transfer Options",
         "default": "qgc",
         "type": "string",
         "options": ["qgc", "mavftp"],
         "env_var": "JECH_FC_LOG_DEFAULT_METHOD",
-        "description": "Default download protocol for DataFlash logs: 'qgc' (QGC Fast streaming, 400-600 KB/s) or 'mavftp' (MAVLink FTP)."
+        "description": "Default download protocol for DataFlash logs: 'qgc' (QGC Fast streaming, 400-600 KB/s) or 'mavftp' (MAVLink FTP, ~100 KB/s)."
+    },
+    {
+        "name": "FC_LOG_PAUSE_TELEMETRY",
+        "category": "Log Transfer Options",
+        "default": True,
+        "type": "bool",
+        "env_var": "JECH_FC_LOG_PAUSE_TELEMETRY",
+        "description": "Pause vehicle MAVLink telemetry stream requests during download to give maximum link bandwidth to log packets."
+    },
+    {
+        "name": "FC_LOG_DOWNLOAD_TIMEOUT",
+        "category": "Log Transfer Options",
+        "default": 7200,
+        "type": "int",
+        "unit": "s",
+        "env_var": "JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC",
+        "description": "Maximum safety wall-clock seconds allowed for downloading a single .BIN flight log (default: 7200s / 2 hours)."
+    },
+    {
+        "name": "FC_LOG_QGC_CHUNK_BINS",
+        "category": "Log Transfer Options",
+        "default": 512,
+        "type": "int",
+        "unit": "bins",
+        "options": [128, 256, 512, 1024, 2048, 4096],
+        "env_var": "JECH_FC_LOG_QGC_CHUNK_BINS",
+        "description": "Block size for QGC fast streaming in 90-byte LOG_DATA bins (512 bins = 46 KB standard QGC block)."
+    },
+    {
+        "name": "FC_LOG_QGC_RETRY_SEC",
+        "category": "Log Transfer Options",
+        "default": 0.2,
+        "type": "float",
+        "unit": "s",
+        "env_var": "JECH_FC_LOG_QGC_RETRY_SEC",
+        "description": "Silence timeout before QGC fast download sends a retry request for missing chunks."
+    },
+    {
+        "name": "FC_LOG_FTP_MAX_BACKLOG",
+        "category": "Log Transfer Options",
+        "default": 160,
+        "type": "int",
+        "unit": "packets",
+        "env_var": "JECH_FC_LOG_FTP_MAX_BACKLOG",
+        "description": "MAVFTP maximum in-flight unacknowledged packets (backlog window). Default 160 allows high throughput on low-latency links."
+    },
+    {
+        "name": "FC_LOG_FTP_BURST_SIZE",
+        "category": "Log Transfer Options",
+        "default": 239,
+        "type": "int",
+        "unit": "bytes",
+        "env_var": "JECH_FC_LOG_FTP_BURST_SIZE",
+        "description": "MAVFTP payload burst size in bytes per packet (max standard MAVLink FTP payload is 239 bytes)."
+    },
+    {
+        "name": "FC_LOG_FTP_IDLE_DETECTION",
+        "category": "Log Transfer Options",
+        "default": 3.5,
+        "type": "float",
+        "unit": "s",
+        "env_var": "JECH_FC_LOG_FTP_IDLE_DETECTION",
+        "description": "MAVFTP inactivity timeout in seconds. If no packet is received or sent for this time, timeout is triggered."
+    },
+    {
+        "name": "FC_LOG_FTP_READ_RETRY",
+        "category": "Log Transfer Options",
+        "default": 1.0,
+        "type": "float",
+        "unit": "s",
+        "env_var": "JECH_FC_LOG_FTP_READ_RETRY",
+        "description": "MAVFTP burst read timeout before re-issuing a missing burst read request (seconds)."
+    },
+    {
+        "name": "FC_LOG_FTP_RETRY",
+        "category": "Log Transfer Options",
+        "default": 0.5,
+        "type": "float",
+        "unit": "s",
+        "env_var": "JECH_FC_LOG_FTP_RETRY",
+        "description": "MAVFTP command response retry interval in seconds (open, terminate, reset session, etc.)."
     }
 ]
 
