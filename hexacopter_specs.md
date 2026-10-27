@@ -20,7 +20,7 @@ A structured reference document detailing the hardware, avionics, power distribu
 | **10** | **Power System** | **5V 7A Dedicated UBEC** | High-Efficiency Synchronous Step-Down | Dedicated 5.0 V @ 7.0 A Power for Raspberry Pi 5 & Vision | 48 × 26 × 12 mm | Internal Chassis Bay |
 | **11** | **Power System** | **XL4005 Buck Converter** | DC-DC Step-Down (Tuned to 7.0 V @ 5 A Peak) | Dedicated 7.0 V Regulated Rail for Robotic Servos | 43 × 21 × 14 mm | Internal Chassis Bay |
 | **12** | **Companion** | **Raspberry Pi 5 (8GB)** | Broadcom BCM2712 Quad-Core 2.4 GHz (8 GB RAM) | Companion Computer (ROS2, MAVLink-Router, Edge AI) | 85 × 56 × 17 mm | Rear Top Carbon Deck |
-| **13** | **Vision** | **Arducam 64MP OwlSight** | OmniVision OV64A40, 64MP Motorized Autofocus (F1.9, 84° FOV) | High-Resolution Aerial Inspection & Precision Landing (MIPI CSI-2) | 25 × 24 × 12 mm | Forward Nose Bay |
+| **13** | **Vision** | **Raspberry Pi AI Camera** | Sony IMX500, 12.3MP + On-Sensor Neural Processing (RP2040 DSP, 78° FOV) | Edge AI Object Detection & Precision Landing Vision (MIPI CSI-2) | 25 × 24 × 12 mm | Forward Nose Bay |
 | **14** | **Connectivity** | **CAPUF EC200U 4G LTE** | Quectel EC200U-CN Cat 1 Modem + GNSS | Beyond Visual Line of Sight (BVLOS) 4G Telemetry (USB) | 40 × 30 × 10 mm | Top Deck Flank |
 | **15** | **Connectivity** | **BL-M8812EU2 5GHz Wi-Fi** | Realtek RTL8812EU (800mW / 29dBm, 2T2R 802.11ac) | High-Power Long-Range Digital Video & Data Link (USB 2.0) | 32 × 32 × 10 mm | Internal Chassis Bay (Right Flank) |
 | **16** | **Propulsion** | **BotLab 55A ESC #1** | AM32 32-bit AT32F421 4-in-1 ESC (Ch 1–3) | Drives Motors 1, 2, 3 via Digital DShot600 | 44 × 44 × 9 mm | Internal Bay (Right Side) |
@@ -83,7 +83,7 @@ flowchart TD
         RPI["Raspberry Pi 5 (8GB RAM)"]
         EC["CAPUF EC200U 4G LTE Modem"]
         WIFI["BL-M8812EU2 5GHz Link (800mW)"]
-        ARDU["Arducam 64MP OwlSight (OV64A40)"]
+        AICAM["Raspberry Pi AI Camera (Sony IMX500)"]
         LIDAR["Benewake TF-Luna LiDAR"]
         BUZZ["Acoustic Buzzer / Speaker"]
         PBUFF["500mAh Buffer Battery"]
@@ -91,7 +91,7 @@ flowchart TD
         PBUFF -. "UPS Backup" .-> RPI
         RPI -->|"USB 3.0"| EC
         RPI -->|"USB 2.0 (High-Power)"| WIFI
-        RPI -->|"MIPI CSI-2"| ARDU
+        RPI -->|"MIPI CSI-2"| AICAM
         RPI -->|"UART"| LIDAR
         RPI -->|"GPIO"| BUZZ
     end
@@ -135,7 +135,7 @@ flowchart TD
   * **500 mAh Buffer Battery:** UPS buffer circuit preventing sudden power loss file corruption on the Raspberry Pi NVMe/microSD.
   * **CAPUF EC200U 4G LTE Modem:** Cellular data uplink supporting remote GCS telemetry over ZeroTier VPN.
   * **BL-M8812EU2 High-Power 5GHz Wi-Fi Link:** Realtek RTL8812EU 802.11a/n/ac 2T2R module (up to 29 dBm / ~800 mW) for long-range, low-latency HD video streaming (WFB-ng / RTSP) and high-throughput companion data telemetry, operating outside the 2.4 GHz RC band.
-  * **Arducam 64MP OwlSight (OV64A40):** 64 MP ultra-high-resolution vision & landing sensor with motorized autofocus (CDAF/VCM), native `libcamera` integration via MIPI CSI-2.
+  * **Raspberry Pi AI Camera (Sony IMX500):** 12.3 MP Intelligent Vision Sensor with integrated hardware neural processing accelerator (NPU) for zero-CPU on-sensor object detection & high-speed precision landing tracking (MIPI CSI-2).
   * **Benewake TF-Luna LiDAR:** 850 nm Time-of-Flight rangefinder (0.2 m – 8.0 m) for precision distance sensing.
   * **RPi Speaker / Piezo Buzzer:** Audible feedback, arming chimes, and acoustic beacon.
 * **Inter-Subsystem Links:** Connected to **Subsystem 2 (CUAV V6X Autopilot)** via high-speed UART (`SERIAL5 @ 921,600 baud`) running MAVLink 2.
@@ -301,62 +301,65 @@ The propulsion architecture utilizes six motors and propellers driven by two cen
   * **Connection to FC:** Connected to CUAV V6X **`SERIAL5` (TELEM3)** via high-speed UART (`SERIAL5_PROTOCOL = 2` / MAVLink2, `SERIAL5_BAUD = 921600`) or 100M Ethernet
   * **Power Supply:** Dedicated 5V / 7A High-Current UBEC (Step-Down DC-DC regulator from 6S main battery)
 
-* **Primary Vision Subsystem (Arducam 64MP OwlSight):**
-  * **Model & SKU:** Arducam 64MP OwlSight Autofocus Camera Module for Raspberry Pi (SKU: B0399 / OV64A40)
-  * **Sensor Model:** OmniVision OV64A40 (1/1.32" Optical Format, Quad-Bayer BSI CMOS)
-  * **Still Resolution:** 64 Megapixels (9248 × 6944 active pixel array)
-  * **Pixel Size:** 1.008 µm × 1.008 µm (2.016 µm equivalent in 16MP 4-in-1 superpixel binned mode)
+* **Primary Vision Subsystem (Raspberry Pi AI Camera - Sony IMX500):**
+  * **Model & SKU:** Official Raspberry Pi AI Camera (SC1610 / Sony IMX500)
+  * **Sensor Model:** Sony IMX500 Intelligent Vision Sensor with integrated AI inference accelerator (1/2.3" optical format)
+  * **Still Resolution:** 12.3 Megapixels (4056 × 3040 active pixel array)
+  * **Pixel Size:** 1.55 µm × 1.55 µm (back-illuminated stacked CMOS architecture)
+  * **Neural Network Accelerator:** Integrated on-chip hardware tensor processing engine (executes neural network models directly on the sensor silicon, offloading 100% host CPU load)
   * **Shutter Type:** Electronic Rolling Shutter (ERS)
   * **Optics & Lens Parameters:**
-    * **Focal Length:** 6.65 mm
-    * **Aperture (F.NO):** F1.9 ± 5%
-    * **Field of View (FOV):** 84° (Diagonal) × 68° (Horizontal) × 56° (Vertical)
-    * **Optical Distortion:** < 1.5%
-    * **Filter:** Built-in 650nm IR-cut filter (visible daylight spectrum)
-  * **Focus Mechanism:** Motorized programmable dual-mode focus (Contrast Detection Autofocus / CDAF + Manual VCM software step control, 0–1023 steps)
-    * **Focus Range:** 8 cm to Infinity (∞)
-    * **Continuous AF:** Supported natively via `--autofocus-mode continuous`
+    * **Focal Length:** 4.74 mm
+    * **Aperture (F.NO):** F1.79
+    * **Field of View (FOV):** 78.3° (Diagonal) × 66° (Horizontal) × 52.3° (Vertical)
+    * **Focus Type:** Integrated adjustable focus (hyperfocal sharp from 0.4 m to infinity, immune to motor vibration hunting)
+    * **Filter:** Built-in IR-cut filter
   * **Supported Video & Resolution Modes:**
-    * **9152 × 6944 (Full 64MP Still Capture):** Up to 2.7 FPS (ultra-detailed asset inspection / photogrammetry)
-    * **4624 × 3472 (16MP 4-in-1 Binned / Superpixel):** Up to 10 FPS (high dynamic range, low-light optimization)
-    * **3840 × 2160 (4K UHD):** Up to 20 FPS (raw sensor feed)
-    * **2312 × 1736:** Up to 30 FPS
-    * **1920 × 1080 (1080p FHD):** Up to 60 FPS (standard real-time inspection & video pipeline)
-    * **1280 × 720 (720p HD):** Up to 120 FPS
+    * **4056 × 3040 (Full Sensor 12.3MP):** Up to 10 FPS
+    * **2028 × 1520 (2×2 Binned 2K):** Up to 40 FPS
+    * **1920 × 1080 (1080p FHD):** Up to 60 FPS
+    * **1280 × 720 (720p HD):** Up to 60 FPS
+    * **640 × 360 / 640 × 480:** Up to 60 FPS (low-latency ArUco pose estimation & RTSP streaming)
   * **Hardware Interface & Cabling to Raspberry Pi 5:**
-    * **Bus:** MIPI CSI-2 (2-lane / 4-lane high-speed differential receiver)
+    * **Bus:** MIPI CSI-2 (2-lane high-speed differential receiver)
     * **Cable:** 15-pin (1.0 mm pitch, camera side) to 22-pin (0.5 mm pitch, RPi 5 side) flexible flat cable (FPC)
-    * **Connector Assignment:** Connected to Raspberry Pi 5 **CAM0** (or CAM1) CSI port
-    * **Link Frequency:** 360 MHz (`link-frequency = 360000000`)
-  * **Software Driver & Linux Stack (`libcamera`):**
-    * **Driver:** In-tree Linux kernel driver (`ov64a40`), native support in Raspberry Pi OS Bookworm (Kernel 6.x) without proprietary vendor patches
+    * **Connector Assignment:** Connected to Raspberry Pi 5 **CAM0** or **CAM1** CSI port
+  * **Software Driver & Linux Stack (`libcamera` / `rpicam-apps`):**
+    * **Driver:** In-tree Linux kernel driver (`imx500` / `imx500-pi5`), native support in Raspberry Pi OS Bookworm (Kernel 6.x)
     * **Boot Config (`/boot/firmware/config.txt`):**
       ```text
-      camera_auto_detect=0
-      dtoverlay=ov64a40,cam0,link-frequency=360000000
+      camera_auto_detect=1
       ```
-    * **Command-Line & Test Operations:**
+    * **Firmware & Model Stack:**
+      ```bash
+      # Firmware and postprocessing tools
+      imx500-firmware
+      imx500-models
+      rpicam-apps-imx500-postprocess
+      ```
+    * **Command-Line Operations:**
       ```bash
       # List active camera
-      rpicam-still --list-cameras
+      rpicam-hello --list-cameras
 
-      # Live stream preview with continuous autofocus
-      rpicam-still -t 0 --autofocus-mode continuous
+      # Preview feed
+      rpicam-hello -t 0
+      ```
 
       # Capture full 64MP image
       rpicam-still -o inspection_64mp.jpg --width 9248 --height 6944
       ```
   * **Electrical Specifications:**
     * **Input Voltage:** 3.3 V DC (powered directly via MIPI CSI FPC from Raspberry Pi 5)
-    * **Power Consumption:** ~1.2 W – 1.8 W (active capture + VCM focus actuator drive)
+    * **Power Consumption:** ~1.4 W – 1.9 W (active sensor + on-chip neural processing unit)
   * **Physical Characteristics:**
-    * **Board Dimensions:** 25 mm × 24 mm × 12 mm
-    * **Weight:** ~15 g
+    * **Board Dimensions:** 25 mm × 24 mm × 11.9 mm
+    * **Weight:** ~13 g
     * **Mounting Position:** Forward Nose Bay (Centered / Underslung 20° forward tilt)
   * **Operational Roles & Use Cases:**
-    * **Precision Asset Inspection:** High-resolution inspection of power lines, wind turbine blades, solar panel micro-cracks, and structural fasteners.
-    * **Lossless Digital Zoom:** Down-sampling or cropping the 64MP canvas allows up to 4×–8× digital zoom without mechanical gimbal lenses.
-    * **Aerial Photogrammetry:** High-density orthomosaic image capture with GPS geotagging synchronized via companion MAVLink telemetry.
+    * **Precision Landing & ArUco Pose Estimation:** 60 FPS real-time tracking of landing dock markers.
+    * **Edge AI Object Detection:** On-chip hardware inference (YOLOv8 / MobileNet) running directly on the sensor silicon without consuming Raspberry Pi 5 CPU cycles.
+    * **Low-Latency FPV Live Streaming:** RTSP stream feed over 5GHz Wi-Fi link.
 
 * **High-Power 5GHz Digital Video & High-Throughput Telemetry Link (BL-M8812EU2):**
   * **Module Model:** BL-M8812EU2 High-Power 5GHz Wireless Module

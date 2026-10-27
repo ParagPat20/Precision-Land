@@ -9,16 +9,7 @@ echo "=================================================="
 echo "Installing Precision-Land Autonomous Drone Service"
 echo "=================================================="
 
-# 1. Pre-lock VCM focus on Arducam 64MP
-for subdev in /dev/v4l-subdev3 /dev/v4l-subdev1 /dev/v4l-subdev2; do
-  if [[ -e "${subdev}" ]]; then
-    echo "[CAMERA] Setting hardware VCM focus to 160 on ${subdev}..."
-    v4l2-ctl -d "${subdev}" --set-ctrl=focus_absolute=160 2>/dev/null || true
-    break
-  fi
-done
-
-# 2. Make runner scripts executable
+# 1. Make runner scripts executable
 chmod +x "${SCRIPT_DIR}/scripts/run_precision_land_tmux.sh" 2>/dev/null || true
 
 # 3. Install systemd service

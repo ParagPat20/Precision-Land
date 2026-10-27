@@ -1734,8 +1734,8 @@ config_manager.subscribe(_on_codebase_param_update)
 # Find full directory path of this script, used for loading config and other files
 cwd                 = path.dirname(path.abspath(__file__))
 calib_path          = cwd+"/../opencv/"
-# Arducam 64MP OV64A40 camera resolution
-# Default: 640x360 for high/stable frame rate (9x lower CPU processing overhead than 1080p)
+# Camera resolution: Raspberry Pi AI Camera (Sony IMX500) / Picamera2
+# Default: 640x360 or 1280x720 for high frame rate and low CPU processing overhead
 # Using parsed resolution from CLI arguments.
 if args.no_camera:
     aruco_tracker = None

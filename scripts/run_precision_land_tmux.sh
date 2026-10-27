@@ -75,17 +75,10 @@ start_web() {
 # 4. Precision Landing Engine (Vision + ArUco + Camera + HUD + Firebase + Servos)
 start_precision_land() {
   if ! tmux has-session -t "${SESSION_PL}" 2>/dev/null; then
-    echo "[SERVICE] Launching Precision-Land autonomy engine..."
+    echo "[SERVICE] Launching Precision-Land autonomy engine (Raspberry Pi AI Camera IMX500)..."
     tmux new-session -d -s "${SESSION_PL}" -c "${PROJECT_DIR}"
-    # Pre-lock VCM autofocus motor on Arducam 64MP to hyperfocal distance (sharp from 0.8m to infinity)
-    for subdev in /dev/v4l-subdev3 /dev/v4l-subdev1 /dev/v4l-subdev2; do
-      if [[ -e "${subdev}" ]]; then
-        v4l2-ctl -d "${subdev}" --set-ctrl=focus_absolute=160 2>/dev/null || true
-        break
-      fi
-    done
-    # Runs headless with autofocus locked and vertical flip enabled
-    tmux send-keys -t "${SESSION_PL}" "${PYTHON_CMD} ${MAIN_PY} --no-video --no-servo --focus auto --vflip" C-m
+    # Runs headless with vertical flip enabled
+    tmux send-keys -t "${SESSION_PL}" "${PYTHON_CMD} ${MAIN_PY} --no-video --no-servo --vflip" C-m
   fi
 }
 

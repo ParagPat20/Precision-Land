@@ -187,51 +187,32 @@ class ArucoSingleTracker():
                 self._picam2.configure(cfg)
                 self._picam2.start()
                 
-                # Configure Focus for 64MP Camera (OV64A40)
-                # 64MP has a Voice Coil Motor (VCM) for autofocus.
+                # Configure Focus if supported by camera sensor
                 try:
-                    if self.focus_mode in ("manual", "fixed"):
-                        # Manual Focus: dioptres = 1 / distance_in_meters
-                        # e.g., 0.5 dioptres = 2.0 meters, giving wide depth of field from 0.8m to infinity
-                        self._picam2.set_controls({"AfMode": 0, "LensPosition": float(self.lens_position)})
-                        dist_m = 1.0 / max(0.01, self.lens_position) if self.lens_position > 0.01 else float('inf')
-                        print(f"[CAMERA] 64MP Manual Focus locked at LensPosition={self.lens_position} dioptres (~{dist_m:.1f}m)")
-                    elif self.focus_mode == "infinity":
-                        self._picam2.set_controls({"AfMode": 0, "LensPosition": 0.0})
-                        print("[CAMERA] 64MP Manual Focus locked at Infinity (LensPosition=0.0)")
+                    props = self._picam2.camera_properties
+                    has_af = "LensPosition" in self._picam2.camera_controls or (props and "LensPosition" in props)
+                    if has_af:
+                        if self.focus_mode in ("manual", "fixed"):
+                            self._picam2.set_controls({"AfMode": 0, "LensPosition": float(self.lens_position)})
+                            dist_m = 1.0 / max(0.01, self.lens_position) if self.lens_position > 0.01 else float('inf')
+                            print(f"[CAMERA] Manual Focus set at LensPosition={self.lens_position} dioptres (~{dist_m:.1f}m)")
+                        elif self.focus_mode == "infinity":
+                            self._picam2.set_controls({"AfMode": 0, "LensPosition": 0.0})
+                            print("[CAMERA] Manual Focus locked at Infinity (LensPosition=0.0)")
+                        else:
+                            self._picam2.set_controls({"AfMode": 2, "AfRange": 0, "AfSpeed": 1})
+                            try:
+                                self._picam2.set_controls({"AfTrigger": 0})
+                            except Exception:
+                                pass
+                            print("[CAMERA] Continuous Autofocus active")
                     else:
-                        # Continuous / Auto Focus:
-                        # AfMode: 2 = Continuous
-                        # AfRange: 0 = Normal range (prevents getting trapped in extreme macro < 15cm)
-                        # AfSpeed: 1 = Fast slew rate
-                        af_controls = {
-                            "AfMode": 2,
-                            "AfRange": 0,
-                            "AfSpeed": 1,
-                        }
-                        self._picam2.set_controls(af_controls)
-                        # Trigger an immediate autofocus sweep so lens does not sit idle at macro
-                        try:
-                            self._picam2.set_controls({"AfTrigger": 0})
-                        except Exception:
-                            pass
-                        print("[CAMERA] 64MP Continuous Autofocus active (Normal Range, Fast Slew, Sweep Triggered)")
+                        print("[CAMERA] Fixed-focus lens detected (Sony IMX500 / fixed optics), no VCM motor adjustments required.")
                 except Exception as af_error:
-                    print(f"[CAMERA] Warning: Could not configure 64MP autofocus: {af_error}")
-                
-                # Hardware VCM focus lock for Arducam 64MP on Raspberry Pi (focus_absolute=160 gives sharp focus from 0.8m to infinity)
-                for subdev in ("/dev/v4l-subdev3", "/dev/v4l-subdev1", "/dev/v4l-subdev2"):
-                    if os.path.exists(subdev):
-                        try:
-                            import subprocess
-                            subprocess.run(["v4l2-ctl", "-d", subdev, "--set-ctrl=focus_absolute=160"],
-                                           check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            print(f"[CAMERA] 64MP VCM hardware focus locked at focus_absolute=160 on {subdev}")
-                            break
-                        except Exception:
-                            pass
+                    # Ignore on fixed-focus cameras such as Raspberry Pi AI Camera (IMX500)
+                    pass
 
-                time.sleep(0.5)  # warmup for camera and autofocus to stabilize
+                time.sleep(0.5)  # warmup for camera to stabilize
                 self._use_picamera = True
                 print(f"[CAMERA] Picamera2 (64MP AF) initialized successfully at {camera_size[0]}x{camera_size[1]}")
             except Exception as e:
