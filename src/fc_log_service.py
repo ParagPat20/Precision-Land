@@ -1075,17 +1075,24 @@ class FlightControllerLogService:
         with self._stream_cv:
             self._stream_state = st
             
+        if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+            try:
+                print("[LOG SERVICE] Pausing telemetry streams to maximize Ethernet MAVFTP bandwidth...")
+                self._set_telemetry_streams(0)
+            except Exception as te:
+                print(f"[LOG SERVICE] Warning: could not pause telemetry streams: {te}")
+
         settings = MAVFTPSettings([
             ("debug", int, 0),
             ("pkt_loss_tx", int, 0),
             ("pkt_loss_rx", int, 0),
-            ("max_backlog", int, 40),
-            ("burst_read_size", int, 300),
-            ("write_size", int, 300),
+            ("max_backlog", int, 60),
+            ("burst_read_size", int, 239),
+            ("write_size", int, 239),
             ("write_qsize", int, 5),
-            ("idle_detection_time", float, 3.7),
-            ("read_retry_time", float, 1.0),
-            ("retry_time", float, 0.5),
+            ("idle_detection_time", float, 2.5),
+            ("read_retry_time", float, 0.4),
+            ("retry_time", float, 0.25),
         ])
         
         try:
@@ -1119,6 +1126,12 @@ class FlightControllerLogService:
                 st["complete"] = True
                 
         finally:
+            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+                try:
+                    print("[LOG SERVICE] Restoring telemetry streams after log download...")
+                    self._set_telemetry_streams(4)
+                except Exception as te:
+                    print(f"[LOG SERVICE] Warning: could not restore telemetry streams: {te}")
             with self._stream_cv:
                 self._stream_state = None
                 

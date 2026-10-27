@@ -31,18 +31,55 @@ function formatParamValue(value) {
     return String(value)
 }
 
+let paramDocs = null
+
+function escapeHtml(str) {
+    if (!str) return ""
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;")
+}
+
+async function loadParamDocs() {
+    if (paramDocs !== null) return paramDocs
+    try {
+        const response = await fetch("/webtools/Libraries/arducopter_param_definitions.json")
+        if (response.ok) {
+            paramDocs = await response.json()
+        } else {
+            paramDocs = {}
+        }
+    } catch (e) {
+        console.warn("Could not load ArduCopter param documentation:", e)
+        paramDocs = {}
+    }
+    return paramDocs
+}
+
 function paramSort(a, b) {
     return a.localeCompare(b, undefined, { numeric: true })
 }
 
 function rowsFromParams(params) {
-    return Object.keys(params).sort(paramSort).map((name) => ({
-        name,
-        value: Number(params[name].value),
-        edited: editedValues.has(name) ? editedValues.get(name) : formatParamValue(params[name].value),
-        type: Number(params[name].type || 4),
-        changed: editedValues.has(name),
-    }))
+    const docs = paramDocs || {}
+    return Object.keys(params).sort(paramSort).map((name) => {
+        const doc = docs[name] || {}
+        return {
+            name,
+            displayName: doc.n || "",
+            description: doc.d || "",
+            units: doc.u || "",
+            range: doc.r ? `${doc.r.low} to ${doc.r.high}` : "",
+            options: doc.v || null,
+            value: Number(params[name].value),
+            edited: editedValues.has(name) ? editedValues.get(name) : formatParamValue(params[name].value),
+            type: Number(params[name].type || 4),
+            changed: editedValues.has(name),
+        }
+    })
 }
 
 function updateSummary() {
@@ -60,16 +97,17 @@ function buildTable() {
         layout: "fitColumns",
         reactiveData: false,
         columns: [
-            { title: "Name", field: "name", width: 260, headerSort: true },
+            { title: "Name", field: "name", width: 220, headerSort: true },
             {
                 title: "Current",
                 field: "value",
-                width: 180,
+                width: 140,
                 formatter: (cell) => formatParamValue(cell.getValue()),
             },
             {
                 title: "New Value",
                 field: "edited",
+                width: 140,
                 editor: "input",
                 cellEdited: (cell) => {
                     const row = cell.getRow()
@@ -93,12 +131,51 @@ function buildTable() {
                 },
             },
             {
+                title: "Units",
+                field: "units",
+                width: 85,
+                formatter: (cell) => cell.getValue() ? `<span style="font-weight:600; color:#475569;">${escapeHtml(cell.getValue())}</span>` : ""
+            },
+            {
+                title: "Description",
+                field: "description",
+                minWidth: 380,
+                formatter: (cell) => {
+                    const data = cell.getRow().getData()
+                    const desc = data.description
+                    const disp = data.displayName
+                    const options = data.options
+                    const range = data.range
+
+                    let html = ""
+                    if (disp) {
+                        html += `<div style="font-weight:600; color:#0f172a; margin-bottom:2px;">${escapeHtml(disp)}</div>`
+                    }
+                    if (desc) {
+                        html += `<div style="color:#334155; line-height:1.35; white-space:normal;">${escapeHtml(desc)}</div>`
+                    }
+                    if (options && typeof options === "object") {
+                        const optEntries = Object.entries(options).map(([k, v]) =>
+                            `<span style="display:inline-block; margin-right:8px; font-size:11px; color:#475569;"><b style="color:#0f172a;">${escapeHtml(k)}:</b> ${escapeHtml(v)}</span>`
+                        ).join("")
+                        html += `<div style="margin-top:4px; padding:3px 6px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:4px; font-size:11px;">${optEntries}</div>`
+                    } else if (range) {
+                        html += `<div style="margin-top:3px; font-size:11px; color:#64748b;"><b>Range:</b> ${escapeHtml(range)}</div>`
+                    }
+                    return html || '<span style="color:#94a3b8; font-style:italic;">No description available</span>'
+                },
+                tooltip: (cell) => {
+                    const data = cell.getRow().getData()
+                    return data.description || data.displayName || ""
+                }
+            },
+            {
                 title: "State",
                 field: "changed",
-                width: 110,
+                width: 90,
                 formatter: (cell) => cell.getValue() ? "Changed" : "Same",
             },
-            { title: "Type", field: "type", width: 90 },
+            { title: "Type", field: "type", width: 70 },
         ],
         rowFormatter: (row) => {
             row.getElement().style.backgroundColor = row.getData().changed ? "#fff8e1" : ""
@@ -137,7 +214,8 @@ async function fetchParams(refresh) {
     }
 }
 
-function initialLoad() {
+async function initialLoad() {
+    await loadParamDocs()
     fetchParams(false)
 }
 
@@ -152,7 +230,12 @@ function applyFilter() {
     const term = document.getElementById("search").value.trim().toUpperCase()
     table.clearFilter()
     if (term.length > 0) {
-        table.setFilter((data) => data.name.toUpperCase().includes(term))
+        table.setFilter((data) => {
+            return (data.name && data.name.toUpperCase().includes(term)) ||
+                   (data.displayName && data.displayName.toUpperCase().includes(term)) ||
+                   (data.description && data.description.toUpperCase().includes(term)) ||
+                   (data.units && data.units.toUpperCase().includes(term))
+        })
     }
 }
 

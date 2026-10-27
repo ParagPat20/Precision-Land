@@ -17,7 +17,7 @@
     background: #f6f8fa;
   }
   header {
-    max-width: 1280px;
+    max-width: min(1680px, 98vw);
   }
   h1 {
     margin: 0 0 12px 0;
@@ -53,8 +53,8 @@
     cursor: not-allowed;
   }
   input[type="search"] {
-    min-width: 280px;
-    padding: 8px;
+    min-width: 320px;
+    padding: 8px 12px;
     border: 1px solid #8a98a8;
     border-radius: 6px;
   }
@@ -64,11 +64,13 @@
     border: 1px solid #b9c3cf;
     border-radius: 6px;
     background: #ffffff;
-    max-width: 1280px;
+    max-width: min(1680px, 98vw);
   }
   #table {
-    max-width: 1280px;
+    max-width: min(1680px, 98vw);
     background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
   }
   dialog {
     width: min(920px, 92vw);
