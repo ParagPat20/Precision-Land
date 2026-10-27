@@ -837,7 +837,7 @@ class MAVFTP:  # pylint: disable=too-many-instance-attributes
                             self.fh.tell(),
                         )
                     self.duplicates += 1
-                    return MAVFTPReturn("BurstReadFile", FtpError.Fail)
+                    return MAVFTPReturn("BurstReadFile", FtpError.Success)
                 self.__write_payload(op)
                 self.fh.seek(ofs)
                 if self.__check_read_finished():
@@ -1467,6 +1467,8 @@ class MAVFTP:  # pylint: disable=too-many-instance-attributes
     def __last_send_time_was_more_than_idle_detection_time_ago(
         self, now: float
     ) -> bool:
+        if self.last_burst_read is not None and now - self.last_burst_read < 3.0 and not self.reached_eof:
+            return False
         return self.last_send_time is not None and now - self.last_send_time > float(
             self.ftp_settings.idle_detection_time
         )
