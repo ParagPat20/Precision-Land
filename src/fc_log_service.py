@@ -1240,7 +1240,7 @@ class FlightControllerLogService:
             ("burst_read_size", int, 239),
             ("write_size", int, 239),
             ("write_qsize", int, 5),
-            ("idle_detection_time", float, 30.0),
+            ("idle_detection_time", float, 3.5),
             ("read_retry_time", float, 1.0),
             ("retry_time", float, 0.5),
         ])

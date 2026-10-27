@@ -1484,9 +1484,9 @@ class MAVFTP:  # pylint: disable=too-many-instance-attributes
         start_time = time.time()
         ret = MAVFTPReturn(operation_name, FtpError.Fail)
         recv_timeout = 0.1
-        assert (  # noqa: S101
-            timeout == 0 or timeout > float(self.ftp_settings.idle_detection_time)
-        ), "timeout must be > settings.idle_detection_time"
+        idle_time = float(self.ftp_settings.idle_detection_time)
+        if timeout > 0 and timeout <= idle_time:
+            timeout = idle_time + 1.0
         assert recv_timeout < self.ftp_settings.retry_time, (
             "recv_timeout must be < settings.retry_time"
         )  # noqa: S101
