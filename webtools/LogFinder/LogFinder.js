@@ -105,14 +105,18 @@ function renderLogDownloadBanner(status) {
     const block = status && status.busy === true
     if (!block) {
         el.style.display = "none"
-        el.textContent = ""
+        el.innerHTML = ""
         document.querySelectorAll("[data-fc-download-btn]").forEach((b) => {
             b.disabled = false
             b.removeAttribute("title")
         })
         return
     }
-    el.style.display = "block"
+    el.style.display = "flex"
+    el.style.alignItems = "center"
+    el.style.justifyContent = "space-between"
+    el.style.gap = "12px"
+
     const elapsed = status.elapsed_sec != null ? ` · ${status.elapsed_sec}s elapsed` : ""
     const got = Number(status.bytes_downloaded) || 0
     const exp = Number(status.expected_bytes) || 0
@@ -129,7 +133,49 @@ function renderLogDownloadBanner(status) {
     const retries = Number(status.retries) > 0 ? ` | retries ${Number(status.retries)}` : ""
     const method = status.transfer_method ? ` | ${status.transfer_method}` : ""
     const head = status.detail ? `${status.detail} | ` : ""
-    el.textContent = `${head}${logLabel}: ${sizePart}${nowSpeed}${avgSpeed}${packets}${missing}${retries}${method}${elapsed}`
+    const textMsg = `${head}${logLabel}: ${sizePart}${nowSpeed}${avgSpeed}${packets}${missing}${retries}${method}${elapsed}`
+
+    let textSpan = el.querySelector(".log-banner-text")
+    if (!textSpan) {
+        el.innerHTML = ""
+        textSpan = document.createElement("span")
+        textSpan.className = "log-banner-text"
+        textSpan.style.flex = "1"
+        el.appendChild(textSpan)
+
+        const cancelBtn = document.createElement("button")
+        cancelBtn.id = "log_download_cancel_btn"
+        cancelBtn.textContent = "❌ Cancel Download"
+        cancelBtn.style.background = "#c62828"
+        cancelBtn.style.color = "white"
+        cancelBtn.style.border = "none"
+        cancelBtn.style.borderRadius = "4px"
+        cancelBtn.style.padding = "6px 14px"
+        cancelBtn.style.fontWeight = "bold"
+        cancelBtn.style.fontSize = "13px"
+        cancelBtn.style.cursor = "pointer"
+        cancelBtn.style.whiteSpace = "nowrap"
+        cancelBtn.style.boxShadow = "0 1px 3px rgba(0,0,0,0.2)"
+        cancelBtn.title = "Immediately abort log download and free FC link"
+        cancelBtn.addEventListener("click", async () => {
+            cancelBtn.disabled = true
+            cancelBtn.textContent = "Cancelling..."
+            try {
+                const origin = fcLogApiOrigin() || window.location.origin
+                const cancelUrl = new URL("/api/fc-logs/cancel", origin).toString()
+                await fetch(cancelUrl, { method: "POST" })
+                await fetchLogDownloadStatus()
+                setTimeout(() => refreshLogDownloadBanner(), 300)
+            } catch (err) {
+                console.error("Failed to cancel download:", err)
+                cancelBtn.disabled = false
+                cancelBtn.textContent = "❌ Cancel Download"
+            }
+        })
+        el.appendChild(cancelBtn)
+    }
+    textSpan.textContent = textMsg
+
     document.querySelectorAll("[data-fc-download-btn]").forEach((b) => {
         b.disabled = true
         b.title = "Wait for the current transfer to finish (single FC link)."
@@ -150,7 +196,7 @@ function startLogDownloadStatusPolling() {
         return
     }
     refreshLogDownloadBanner()
-    logDownloadPollTimer = window.setInterval(refreshLogDownloadBanner, 2000)
+    logDownloadPollTimer = window.setInterval(refreshLogDownloadBanner, 1000)
 }
 
 function open_param_viewer() {
@@ -341,7 +387,10 @@ function render_inventory(logs, source, transferStatus) {
                     btnFTP.disabled = false
                     btnQGC.textContent = "⚡ QGC Fast (~500 KB/s)"
                     btnFTP.textContent = "📁 MAVFTP"
-                    alert(error.message || error)
+                    const msg = String(error.message || error)
+                    if (!msg.toLowerCase().includes("cancel")) {
+                        alert(msg)
+                    }
                 }
             }
 

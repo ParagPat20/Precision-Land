@@ -39,7 +39,7 @@ class FlightControllerLogService:
     LOG_DATA_LEN = 90
     QGC_CHUNK_BINS = int(os.environ.get("JECH_FC_LOG_QGC_CHUNK_BINS", "4096"))  # 368KB per chunk (was 512)
     QGC_CHUNK_SIZE = LOG_DATA_LEN * QGC_CHUNK_BINS
-    QGC_DATA_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_QGC_RETRY_SEC", "0.15")) # Faster retries on UDP (was 0.5)
+    QGC_DATA_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_QGC_RETRY_SEC", "0.5"))  # Wait for 0.5s silence before requesting missing range
     LOG_DOWNLOAD_WALL_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC", "7200"))
     PAUSE_TELEMETRY_DURING_DOWNLOAD = os.environ.get("JECH_FC_LOG_PAUSE_TELEMETRY", "1") != "0"
 
@@ -214,6 +214,20 @@ class FlightControllerLogService:
             "retries": retries,
             "transfer_method": transfer_method,
         }
+
+    def cancel_download(self):
+        """Immediately halts any in-progress log download (QGC or MAVFTP) and resets flight controller stream."""
+        with self._stream_cv:
+            if self._stream_state:
+                self._stream_state["cancelled"] = True
+                self._stream_cv.notify_all()
+                try:
+                    self._send_log_request_end()
+                except Exception:
+                    pass
+                print("[LOG SERVICE] Download cancellation signal issued by operator.")
+                return {"ok": True, "message": "Log download cancelled"}
+        return {"ok": False, "message": "No active log download to cancel"}
 
     def default_servo_config(self):
         return {
@@ -527,6 +541,13 @@ class FlightControllerLogService:
                         self._send_json({"error": str(error)}, status=500)
                     return
 
+                if parsed.path == "/api/fc-logs/cancel":
+                    try:
+                        self._send_json(service.cancel_download())
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
                 if parsed.path.startswith("/logs/"):
                     relative_name = unquote(parsed.path[len("/logs/"):])
                     try:
@@ -598,6 +619,13 @@ class FlightControllerLogService:
 
             def do_POST(self):
                 parsed = urlparse(self.path)
+                if parsed.path == "/api/fc-logs/cancel":
+                    try:
+                        self._send_json(service.cancel_download())
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
                 if parsed.path == "/api/params/write":
                     try:
                         body = self._read_json_body()
@@ -818,8 +846,6 @@ class FlightControllerLogService:
                 st["complete"] = True
             elif self._qgc_chunk_complete_locked(st):
                 self._qgc_advance_chunk_locked(st)
-                self._qgc_request_missing_range_locked(st)
-            elif bin_index < len(st["chunk_table"]) - 1 and st["chunk_table"][bin_index + 1]:
                 self._qgc_request_missing_range_locked(st)
 
             st["missing_bins"] = st["chunk_table"].count(False)
@@ -1069,6 +1095,7 @@ class FlightControllerLogService:
         st["current_chunk"] += 1
         st["chunk_table"] = [False] * self._qgc_chunk_bins(st["expected_size"], st["current_chunk"])
         st["missing_bins"] = len(st["chunk_table"])
+        st["chunk_requested"] = False
 
     def _qgc_update_rates_locked(self, st):
         now = time.time()
@@ -1098,7 +1125,10 @@ class FlightControllerLogService:
             return
         master = self.vehicle._master
         master.mav.log_request_data_send(master.target_system, master.target_component, st["log_id"], offset, count)
-        st["retries"] += 1
+        if st.get("chunk_requested", False):
+            st["retries"] += 1
+        else:
+            st["chunk_requested"] = True
         st["last_request_ts"] = time.time()
         st["missing_bins"] = st["chunk_table"].count(False)
 
@@ -1220,6 +1250,8 @@ class FlightControllerLogService:
             def ftp_progress_callback(percentage):
                 now_cb = time.time()
                 with self._stream_cv:
+                    if st.get("cancelled", False):
+                        raise RuntimeError(f"Log {log_id} MAVFTP download cancelled by operator")
                     dt = max(now_cb - st["last_rate_ts"], 0.000001)
                     if dt >= 1.0 or ftp.read_total >= expected:
                         bytes_diff = ftp.read_total - st["bytes_written"]
@@ -1318,14 +1350,19 @@ class FlightControllerLogService:
             deadline = time.monotonic() + timeout_sec
             while time.monotonic() < deadline:
                 with self._stream_cv:
+                    if st.get("cancelled", False):
+                        raise RuntimeError(f"Log {log_id} download cancelled by operator")
                     if st["complete"]:
                         break
                     self._stream_cv.wait(timeout=0.05)
+                    if st.get("cancelled", False):
+                        raise RuntimeError(f"Log {log_id} download cancelled by operator")
                     if st["complete"]:
                         break
-                    if time.time() - st["last_request_ts"] >= self.QGC_DATA_TIMEOUT_SEC:
+                    now_t = time.time()
+                    if now_t - st["last_ts"] >= self.QGC_DATA_TIMEOUT_SEC:
                         self._qgc_request_missing_range_locked(st)
-                        st["last_ts"] = time.time()
+                        st["last_ts"] = now_t
                     self._qgc_update_rates_locked(st)
             with self._stream_cv:
                 ok = st["complete"]
