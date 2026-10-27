@@ -36,10 +36,9 @@ class FTPMasterWrapper:
 class FlightControllerLogService:
     # QGroundControl downloads DataFlash logs in 512 LOG_DATA bins per chunk.
     # Since we are over Ethernet/UDP, we can increase this drastically for faster downloads!
-    LOG_DATA_LEN = 90
-    QGC_CHUNK_BINS = int(os.environ.get("JECH_FC_LOG_QGC_CHUNK_BINS", "4096"))  # 368KB per chunk (was 512)
+    QGC_CHUNK_BINS = int(os.environ.get("JECH_FC_LOG_QGC_CHUNK_BINS", "512"))  # 512 bins (46KB) matches QGroundControl standard block
     QGC_CHUNK_SIZE = LOG_DATA_LEN * QGC_CHUNK_BINS
-    QGC_DATA_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_QGC_RETRY_SEC", "0.5"))  # Wait for 0.5s silence before requesting missing range
+    QGC_DATA_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_QGC_RETRY_SEC", "0.2"))  # 200ms silence timeout for low-latency Ethernet RTT
     LOG_DOWNLOAD_WALL_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC", "7200"))
     PAUSE_TELEMETRY_DURING_DOWNLOAD = os.environ.get("JECH_FC_LOG_PAUSE_TELEMETRY", "1") != "0"
 
@@ -838,18 +837,21 @@ class FlightControllerLogService:
                 st["rate_bytes"] += cnt
                 st["rate_packets"] += 1
 
-            st["chunk_table"][bin_index] = True
+            if not st["chunk_table"][bin_index]:
+                st["chunk_table"][bin_index] = True
+                st["missing_bins"] = max(0, st["missing_bins"] - 1)
             st["last_ts"] = time.time()
 
             self._qgc_update_rates_locked(st)
             if self._qgc_log_complete_locked(st):
                 st["complete"] = True
+                self._stream_cv.notify_all()
             elif self._qgc_chunk_complete_locked(st):
                 self._qgc_advance_chunk_locked(st)
                 self._qgc_request_missing_range_locked(st)
-
-            st["missing_bins"] = st["chunk_table"].count(False)
-            self._stream_cv.notify_all()
+                self._stream_cv.notify_all()
+            elif st["rate_packets"] % 50 == 0:
+                self._stream_cv.notify_all()
 
     def _send_log_request_list(self):
         master = self.vehicle._master
@@ -1084,7 +1086,7 @@ class FlightControllerLogService:
         return max(1, min(self.QGC_CHUNK_BINS, bins))
 
     def _qgc_chunk_complete_locked(self, st):
-        return bool(st["chunk_table"]) and all(st["chunk_table"])
+        return bool(st["chunk_table"]) and st.get("missing_bins", len(st["chunk_table"])) == 0
 
     def _qgc_log_complete_locked(self, st):
         return self._qgc_chunk_complete_locked(st) and (
@@ -1093,8 +1095,9 @@ class FlightControllerLogService:
 
     def _qgc_advance_chunk_locked(self, st):
         st["current_chunk"] += 1
-        st["chunk_table"] = [False] * self._qgc_chunk_bins(st["expected_size"], st["current_chunk"])
-        st["missing_bins"] = len(st["chunk_table"])
+        num_bins = self._qgc_chunk_bins(st["expected_size"], st["current_chunk"])
+        st["chunk_table"] = [False] * num_bins
+        st["missing_bins"] = num_bins
         st["chunk_requested"] = False
 
     def _qgc_update_rates_locked(self, st):
@@ -1116,9 +1119,9 @@ class FlightControllerLogService:
         start = 0
         while start < len(st["chunk_table"]) and st["chunk_table"][start]:
             start += 1
-        end = start
-        while end < len(st["chunk_table"]) and not st["chunk_table"][end]:
-            end += 1
+        if start >= len(st["chunk_table"]):
+            return
+        end = len(st["chunk_table"])
         offset = st["current_chunk"] * self.QGC_CHUNK_SIZE + start * self.LOG_DATA_LEN
         count = (end - start) * self.LOG_DATA_LEN
         if count <= 0:
@@ -1130,7 +1133,6 @@ class FlightControllerLogService:
         else:
             st["chunk_requested"] = True
         st["last_request_ts"] = time.time()
-        st["missing_bins"] = st["chunk_table"].count(False)
 
     def fetch_log_list(self, timeout=8.0, attempts=2):
         try:
