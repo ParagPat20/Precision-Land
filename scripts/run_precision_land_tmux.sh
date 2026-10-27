@@ -78,7 +78,7 @@ start_precision_land() {
     echo "[SERVICE] Launching Precision-Land autonomy engine (Raspberry Pi AI Camera IMX500)..."
     tmux new-session -d -s "${SESSION_PL}" -c "${PROJECT_DIR}"
     # Runs headless with vertical flip enabled
-    tmux send-keys -t "${SESSION_PL}" "${PYTHON_CMD} ${MAIN_PY} --no-video --no-servo --vflip" C-m
+    tmux send-keys -t "${SESSION_PL}" "${PYTHON_CMD} ${MAIN_PY} --no-video --vflip" C-m
   fi
 }
 

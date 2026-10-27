@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Servo Controller & Mechanism Test Tool</title>
+<link rel="icon" href="/webtools/images/AP_favicon.png">
+<style>
+  :root {
+    --bg-main: #f8fafc;
+    --card-bg: #ffffff;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --border-color: #e2e8f0;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --success: #16a34a;
+    --success-hover: #15803d;
+    --warning: #ea580c;
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --radius: 8px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 24px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-primary);
+    background: var(--bg-main);
+    line-height: 1.45;
+  }
+
+  .container {
+    max-width: 1480px;
+    margin: 0 auto;
+  }
+
+  /* Navigation Bar */
+  .nav-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .title-group h1 {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .title-group p {
+    margin: 4px 0 0 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .nav-links {
+    display: flex;
+    gap: 6px;
+    background: #e2e8f0;
+    padding: 4px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  .nav-links a {
+    padding: 6px 14px;
+    text-decoration: none;
+    color: #475569;
+    font-weight: 600;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+  }
+  .nav-links a:hover {
+    color: #0f172a;
+  }
+  .nav-links a.active {
+    background: #ffffff;
+    color: var(--primary);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+
+  /* Drone Autonomy Mode Banner */
+  .drone-mode-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 16px 20px;
+    border-radius: var(--radius);
+    background: #ffffff;
+    border: 2px solid #cbd5e1;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
+  }
+  .drone-mode-banner.active-mode {
+    border-color: #86efac;
+    background: #f0fdf4;
+  }
+  .drone-mode-banner.paused-mode {
+    border-color: #fdba74;
+    background: #fff7ed;
+  }
+  .mode-indicator {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .status-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #94a3b8;
+  }
+  .status-dot.green { background: #22c55e; box-shadow: 0 0 0 4px rgba(34,197,94,0.2); }
+  .status-dot.orange { background: #f97316; box-shadow: 0 0 0 4px rgba(249,115,22,0.2); }
+  .status-dot.red { background: #ef4444; }
+  .mode-title {
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .mode-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+
+  /* Button Styles */
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #1e293b;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+  }
+  button:hover:not(:disabled) {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  button.btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+  button.btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+  button.btn-success { background: var(--success); color: #fff; border-color: var(--success); }
+  button.btn-success:hover:not(:disabled) { background: var(--success-hover); }
+  button.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+  button.btn-danger:hover:not(:disabled) { background: var(--danger-hover); }
+  button.btn-warning { background: var(--warning); color: #fff; border-color: var(--warning); }
+  button.btn-sm { padding: 4px 8px; font-size: 11px; }
+
+  /* Quick Actions Toolbar */
+  .toolbar-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
+  }
+  .toolbar-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+  }
+  .toolbar-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  /* Servo Grid */
+  .servo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .servo-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 16px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transition: border-color 0.15s;
+  }
+  .servo-card.offline {
+    opacity: 0.75;
+    border-style: dashed;
+  }
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  .servo-title {
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .servo-subtitle {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+  .badge {
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .badge-st { background: #dbeafe; color: #1e40af; }
+  .badge-sc { background: #fef3c7; color: #92400e; }
+  .badge-online { background: #dcfce7; color: #166534; }
+  .badge-offline { background: #fee2e2; color: #991b1b; }
+
+  /* Encoder Position Display */
+  .position-box {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 10px 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+  }
+  .pos-number {
+    font-size: 28px;
+    font-weight: 800;
+    font-family: monospace;
+    color: #0f172a;
+  }
+  .pos-degrees {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .progress-track {
+    width: 100%;
+    height: 8px;
+    background: #e2e8f0;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--primary);
+    width: 0%;
+    transition: width 0.2s ease;
+  }
+
+  /* Telemetry Meta Stats */
+  .telemetry-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    background: #f8fafc;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    text-align: center;
+  }
+  .telemetry-item b {
+    display: block;
+    color: var(--text-primary);
+    font-size: 12px;
+  }
+  .telemetry-item span {
+    color: var(--text-secondary);
+  }
+
+  /* Jog & Slider Control */
+  .control-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .control-row input[type="range"] {
+    flex: 1;
+    cursor: pointer;
+  }
+  .control-row input[type="number"] {
+    width: 76px;
+    padding: 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 12px;
+    text-align: center;
+  }
+
+  /* Two Column Layout for Subsystem & Config */
+  .panels-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .panel-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    box-shadow: var(--shadow-sm);
+  }
+  .panel-card h2 {
+    margin: 0 0 12px 0;
+    font-size: 17px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Calibration Table */
+  .config-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-top: 10px;
+  }
+  .config-table th, .config-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #e2e8f0;
+    text-align: left;
+  }
+  .config-table th {
+    background: #f8fafc;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+  .config-table input[type="number"] {
+    width: 74px;
+    padding: 4px 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+
+  /* Log Console */
+  #activity_log {
+    background: #0f172a;
+    color: #e2e8f0;
+    font-family: monospace;
+    font-size: 12px;
+    padding: 12px 16px;
+    border-radius: 6px;
+    height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    line-height: 1.4;
+  }
+  .log-time { color: #94a3b8; margin-right: 6px; }
+  .log-ok { color: #4ade80; }
+  .log-err { color: #f87171; }
+  .log-warn { color: #fbbf24; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header & Navigation -->
+  <header class="nav-header">
+    <div class="title-group">
+      <h1>🎛️ Servo Controller & Mechanism Tool</h1>
+      <p>Interactive testing, jog calibration, and teach-in for ST3215 Dual Lids (ID 1 & 2) and SC09 Latches (ID 3 & 4)</p>
+    </div>
+    <div class="nav-links">
+      <a href="/webtools/CodebaseParams/index.html">Codebase Params</a>
+      <a href="/webtools/ParamViewer/index.html">CUAV Params</a>
+      <a href="/webtools/ServoConfig/index.html" class="active">Servo Config & Test</a>
+      <a href="/webtools/LogFinder/index.html">Log Finder</a>
+      <a href="/webtools/index.html">All Tools</a>
+    </div>
+  </header>
+
+  <!-- 1. Drone Autonomy Mode Control Banner -->
+  <div id="drone_mode_banner" class="drone-mode-banner active-mode">
+    <div class="mode-indicator">
+      <div id="drone_mode_dot" class="status-dot green"></div>
+      <div>
+        <div id="drone_mode_title" class="mode-title">Drone Autonomy Mode: ACTIVE</div>
+        <div id="drone_mode_desc" class="mode-desc">ServoController is actively monitoring MAVLink Channel 16 / autonomous flight triggers.</div>
+      </div>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center;">
+      <span id="port_badge" style="font-size:12px; font-weight:600; color:#475569; background:#f1f5f9; padding:6px 10px; border-radius:6px; border:1px solid #cbd5e1;">Port: Detecting...</span>
+      <button id="btn_toggle_drone_mode" class="btn-warning" onclick="toggleDroneMode()">🛑 Pause Drone Mode for Manual Testing</button>
+    </div>
+  </div>
+
+  <!-- 2. Quick Actions Toolbar -->
+  <div class="toolbar-card">
+    <div class="toolbar-title">Full Mechanism Sequence & Calibration Actions</div>
+    <div class="toolbar-buttons">
+      <button class="btn-danger" onclick="executeSequence('lock_sequence')">🔒 Run Full Lock Sequence</button>
+      <button class="btn-primary" onclick="executeSequence('unlock_sequence')">🔓 Run Full Unlock Sequence</button>
+      <span style="border-right: 1px solid #cbd5e1; height:24px; margin: 0 4px;"></span>
+      <button class="btn-success" onclick="captureLiveSequence('lock')">📸 Capture Live as Lock Target</button>
+      <button class="btn-success" onclick="captureLiveSequence('unlock')">📸 Capture Live as Unlock Target</button>
+      <span style="border-right: 1px solid #cbd5e1; height:24px; margin: 0 4px;"></span>
+      <button onclick="relaxAllServos()" title="Torque OFF: allows manually moving the lids and latches by hand">🔓 Relax All (Torque OFF)</button>
+      <button onclick="holdAllServos()" title="Torque ON: holds all servos at their current live encoder positions">🔒 Hold All (Torque ON)</button>
+      <span style="border-right: 1px solid #cbd5e1; height:24px; margin: 0 4px;"></span>
+      <button onclick="fetchStatus()">🔄 Refresh Status</button>
+      <label style="font-size:12px; color:var(--text-secondary); display:inline-flex; align-items:center; gap:4px; margin-left:6px; cursor:pointer;">
+        <input type="checkbox" id="auto_refresh" checked onchange="toggleAutoRefresh(this.checked)"> Auto-Refresh (1s)
+      </label>
+    </div>
+  </div>
+
+  <!-- 3. Four Live Servo Telemetry Cards -->
+  <div class="servo-grid" id="servo_cards_container">
+    <!-- Populated dynamically by JavaScript -->
+    <div style="grid-column: 1 / -1; text-align:center; padding:30px; color:#64748b;">Loading connected servos...</div>
+  </div>
+
+  <!-- 4. Subsystem Sync Movement & Calibration Panels -->
+  <div class="panels-row">
+
+    <!-- Dual Lid Control -->
+    <div class="panel-card">
+      <h2>🚀 Dual Lid Synchronized Control (ID 1 & 2)</h2>
+      <p style="font-size:12px; color:var(--text-secondary); margin-top:0;">Simultaneously controls ST3215 Dual Lid lifters with synchronized motion and encoder tolerance monitoring.</p>
+      
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:12px;">
+        <div>
+          <label style="font-size:11px; font-weight:700; color:var(--text-secondary);">ID 1 Target Position (0-4095):</label>
+          <input type="number" id="dual_lid_tgt1" value="2048" style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:13px;">
+        </div>
+        <div>
+          <label style="font-size:11px; font-weight:700; color:var(--text-secondary);">ID 2 Target Position (0-4095):</label>
+          <input type="number" id="dual_lid_tgt2" value="2048" style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:13px;">
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px; font-weight:700; color:var(--text-secondary);">Speed (steps/s):</label>
+          <input type="number" id="dual_lid_speed" value="2400" style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:13px;">
+        </div>
+        <div>
+          <label style="font-size:11px; font-weight:700; color:var(--text-secondary);">Tolerance (±ticks):</label>
+          <input type="number" id="dual_lid_tol" value="70" style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:13px;">
+        </div>
+      </div>
+
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn-primary" onclick="moveDualLidsFromInputs()">Move Lids to Custom Targets</button>
+        <button class="btn-success" onclick="moveDualLidsPreset('unlock')">Lids UP (Unlock Pos)</button>
+        <button class="btn-danger" onclick="moveDualLidsPreset('lock')">Lids DOWN (Lock Pos)</button>
+      </div>
+    </div>
+
+    <!-- Dual Latch Control -->
+    <div class="panel-card">
+      <h2>🔐 Dual Latch Synchronized Control (ID 3 & 4)</h2>
+      <p style="font-size:12px; color:var(--text-secondary); margin-top:0;">Controls SC09 locking latches / kadi pins to mechanically lock or release the dual lids.</p>
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:12px;">
+        <div>
+          <label style="font-size:11px; font-weight:700; color:var(--text-secondary);">ID 3 Latch Target (0-1023):</label>
+          <input type="number" id="latch_tgt3" value="520" style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:13px;">
+        </div>
+        <div>
+          <label style="font-size:11px; font-weight:700; color:var(--text-secondary);">ID 4 Latch Target (0-1023):</label>
+          <input type="number" id="latch_tgt4" value="700" style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:13px;">
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px; font-weight:700; color:var(--text-secondary);">Latch Speed:</label>
+        <input type="number" id="latch_speed" value="1500" style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:13px;">
+      </div>
+
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn-primary" onclick="moveLatchesFromInputs()">Move Latches to Custom Targets</button>
+        <button class="btn-danger" onclick="moveLatchesPreset('lock')">Engage Latches (Lock)</button>
+        <button class="btn-success" onclick="moveLatchesPreset('unlock')">Retract Latches (Unlock)</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 5. Centralized Sequence Configuration Table -->
+  <div class="panel-card" style="margin-bottom:24px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+      <div>
+        <h2 style="margin:0;">⚙️ Calibrated Sequence Configuration</h2>
+        <span style="font-size:12px; color:var(--text-secondary);">Modifications sync directly with <code>servo_sequences.json</code> and companion parameters (<code>SERVO_1_LOCK_POS</code>, etc.).</span>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-success" onclick="saveSequenceConfigFromTable()">💾 Save Configuration</button>
+        <button onclick="reloadSequenceConfig()">↺ Reload</button>
+      </div>
+    </div>
+
+    <table class="config-table">
+      <thead>
+        <tr>
+          <th>Servo ID & Role</th>
+          <th>Type / Range</th>
+          <th>Live Position</th>
+          <th>Locked Target</th>
+          <th>Unlocked Target</th>
+          <th>Speed</th>
+          <th>Quick Actions</th>
+        </tr>
+      </thead>
+      <tbody id="sequence_config_tbody">
+        <tr><td colspan="7" style="text-align:center; padding:15px; color:#64748b;">Loading sequence configuration...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 6. Real-time Activity Log -->
+  <div class="panel-card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary);">Activity & Response Console</span>
+      <button class="btn-sm" onclick="document.getElementById('activity_log').textContent=''">Clear Console</button>
+    </div>
+    <div id="activity_log">Ready. System initialized.</div>
+  </div>
+
+</div>
+
+<script>
+let droneModeActive = true;
+let currentStatus = null;
+let autoRefreshTimer = null;
+
+function log(msg, type = "info") {
+  const el = document.getElementById("activity_log");
+  const time = new Date().toLocaleTimeString();
+  let colorClass = "log-ok";
+  if (type === "err") colorClass = "log-err";
+  if (type === "warn") colorClass = "log-warn";
+  el.innerHTML = `<span class="log-time">[${time}]</span> <span class="${colorClass}">${escapeHtml(msg)}</span>\n` + el.innerHTML;
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function apiPost(action, payload = {}) {
+  try {
+    const res = await fetch("/api/servo-action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...payload })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    return data;
+  } catch (err) {
+    log(`Action '${action}' failed: ${err.message}`, "err");
+    throw err;
+  }
+}
+
+async function fetchStatus() {
+  try {
+    const res = await fetch("/api/servo-status");
+    const data = await res.json();
+    currentStatus = data;
+    renderStatus(data);
+  } catch (err) {
+    log(`Status fetch error: ${err.message}`, "err");
+  }
+}
+
+function renderStatus(data) {
+  droneModeActive = !!data.drone_mode_active;
+  
+  // Banner
+  const banner = document.getElementById("drone_mode_banner");
+  const dot = document.getElementById("drone_mode_dot");
+  const title = document.getElementById("drone_mode_title");
+  const desc = document.getElementById("drone_mode_desc");
+  const btn = document.getElementById("btn_toggle_drone_mode");
+  const portBadge = document.getElementById("port_badge");
+
+  portBadge.textContent = `Port: ${data.port || "Auto"} (${data.connected ? "Connected" : "Disconnected"})`;
+
+  if (droneModeActive) {
+    banner.className = "drone-mode-banner active-mode";
+    dot.className = "status-dot green";
+    title.textContent = "Drone Autonomy Mode: ACTIVE";
+    desc.textContent = "ServoController is actively listening to MAVLink Channel 16 / autonomous flight triggers.";
+    btn.className = "btn-warning";
+    btn.textContent = "🛑 Pause Drone Mode for Manual Testing";
+  } else {
+    banner.className = "drone-mode-banner paused-mode";
+    dot.className = "status-dot orange";
+    title.textContent = "Drone Autonomy Mode: PAUSED (Manual Testing Mode)";
+    desc.textContent = "Background flight triggers are stopped. Servos can be safely tested without autopilot interference.";
+    btn.className = "btn-success";
+    btn.textContent = "▶ Resume Drone Mode (Re-enable Autonomous Flight)";
+  }
+
+  // Render 4 Servo Cards
+  renderServoCards(data);
+
+  // Render Sequence Config Table
+  renderConfigTable(data.sequence_config || {});
+}
+
+function renderServoCards(data) {
+  const container = document.getElementById("servo_cards_container");
+  const servos = (data.servos || []);
+  const seq = data.sequence_config || { lock: {}, unlock: {} };
+
+  if (servos.length === 0) {
+    container.innerHTML = `<div style="grid-column: 1 / -1; text-align:center; padding:30px; color:#ef4444; background:#fff; border-radius:8px; border:1px solid #fecaca;">
+      <b>No servos detected on the serial bus.</b> Check physical power (12V for ST3215, 7.4V for SC09) and USB connection.
+      <div style="margin-top:10px;"><button class="btn-primary" onclick="apiPost('connect')">🔌 Retry / Connect Servos</button></div>
+    </div>`;
+    return;
+  }
+
+  const roleNames = {
+    1: "Lid 1 (Main Lifter)",
+    2: "Lid 2 (Dual Lifter)",
+    3: "Latch 1 (Kadi Lock)",
+    4: "Latch 2 (Aux Latch)"
+  };
+
+  container.innerHTML = servos.map(s => {
+    const isST = (s.model === "ST3215" || s.id <= 2);
+    const maxLimit = isST ? 4095 : 1023;
+    const pos = s.position != null ? s.position : "--";
+    const deg = s.position != null ? ((s.position / maxLimit) * 360).toFixed(1) + "°" : "--";
+    const pct = s.position != null ? Math.min(100, Math.max(0, (s.position / maxLimit) * 100)).toFixed(1) : 0;
+    const role = roleNames[s.id] || "Servo " + s.id;
+    const isOnline = s.ok && s.position != null;
+    const torqueOn = s.torque === 1;
+
+    // Associated sequence targets
+    const lkKey = s.id === 1 ? 'st1_pos' : (s.id === 2 ? 'st2_pos' : (s.id === 3 ? 'sc3_pos' : 'sc4_pos'));
+    const unKey = lkKey;
+    const lkVal = seq.lock ? seq.lock[lkKey] : "--";
+    const unVal = seq.unlock ? seq.unlock[unKey] : "--";
+
+    return `
+    <div class="servo-card ${isOnline ? '' : 'offline'}">
+      <div class="card-header">
+        <div>
+          <div class="servo-title">Servo ID ${s.id}: ${escapeHtml(role)}</div>
+          <div class="servo-subtitle">${s.model || (isST ? 'ST3215' : 'SC09')} • Range: 0 - ${maxLimit}</div>
+        </div>
+        <div style="display:flex; gap:4px; align-items:center;">
+          <span class="badge ${isST ? 'badge-st' : 'badge-sc'}">${isST ? 'ST3215' : 'SC09'}</span>
+          <span class="badge ${isOnline ? 'badge-online' : 'badge-offline'}">${isOnline ? 'Online' : 'Offline'}</span>
+        </div>
+      </div>
+
+      <div class="position-box">
+        <div>
+          <span style="font-size:11px; text-transform:uppercase; font-weight:700; color:#64748b;">Live Encoder</span>
+          <div class="pos-number" id="pos_val_${s.id}">${pos}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="pos-degrees">${deg}</div>
+          <span style="font-size:11px; font-weight:600; color:${torqueOn ? '#16a34a' : '#ea580c'};">${torqueOn ? '🔒 Torque ON' : '🔓 Torque OFF'}</span>
+        </div>
+      </div>
+
+      <div class="progress-track">
+        <div class="progress-fill" style="width: ${pct}%;"></div>
+      </div>
+
+      <div class="telemetry-row">
+        <div class="telemetry-item">
+          <b>${s.voltage_v != null ? s.voltage_v.toFixed(1) + 'V' : '--'}</b>
+          <span>Voltage</span>
+        </div>
+        <div class="telemetry-item">
+          <b>${s.temperature_c != null ? s.temperature_c + '°C' : '--'}</b>
+          <span>Temp</span>
+        </div>
+        <div class="telemetry-item">
+          <b>${s.speed != null ? Math.abs(s.speed) : '0'}</b>
+          <span>Speed</span>
+        </div>
+        <div class="telemetry-item">
+          <b>${s.load != null ? s.load : '0'}</b>
+          <span>Load</span>
+        </div>
+      </div>
+
+      <!-- Quick Step Jogs -->
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-size:11px; font-weight:700; color:var(--text-secondary);">Fine Jog:</span>
+        <div style="display:flex; gap:4px;">
+          <button class="btn-sm" onclick="jogServo(${s.id}, -50)">-50</button>
+          <button class="btn-sm" onclick="jogServo(${s.id}, -10)">-10</button>
+          <button class="btn-sm" onclick="jogServo(${s.id}, 10)">+10</button>
+          <button class="btn-sm" onclick="jogServo(${s.id}, 50)">+50</button>
+        </div>
+      </div>
+
+      <!-- Slider & Go -->
+      <div class="control-row">
+        <input type="range" id="slider_${s.id}" min="0" max="${maxLimit}" value="${s.position || 0}" 
+               oninput="document.getElementById('num_${s.id}').value = this.value">
+        <input type="number" id="num_${s.id}" min="0" max="${maxLimit}" value="${s.position || 0}"
+               oninput="document.getElementById('slider_${s.id}').value = this.value">
+        <button class="btn-primary btn-sm" onclick="moveServoDirect(${s.id})">Go</button>
+      </div>
+
+      <!-- Torque & Quick Preset Actions -->
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-top:4px;">
+        <div style="display:flex; gap:4px;">
+          <button class="btn-sm" onclick="toggleServoTorque(${s.id}, true)">Torque ON</button>
+          <button class="btn-sm" onclick="toggleServoTorque(${s.id}, false)">Torque OFF</button>
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button class="btn-sm btn-danger" onclick="setSingleTargetFromLive(${s.id}, 'lock')" title="Current Lock Pos: ${lkVal}">Set Lock</button>
+          <button class="btn-sm btn-success" onclick="setSingleTargetFromLive(${s.id}, 'unlock')" title="Current Unlock Pos: ${unVal}">Set Unlock</button>
+        </div>
+      </div>
+    </div>
+    `;
+  }).join("");
+}
+
+function renderConfigTable(cfg) {
+  const tbody = document.getElementById("sequence_config_tbody");
+  const lk = cfg.lock || {};
+  const un = cfg.unlock || {};
+
+  const rows = [
+    { id: 1, role: "Servo 1 (Lid 1 - Main Lifter)", type: "ST3215 (0-4095)", lkKey: "st1_pos", unKey: "st1_pos", spdKey: "st_speed" },
+    { id: 2, role: "Servo 2 (Lid 2 - Dual Lifter)", type: "ST3215 (0-4095)", lkKey: "st2_pos", unKey: "st2_pos", spdKey: "st_speed" },
+    { id: 3, role: "Servo 3 (Latch 1 - Kadi Lock)", type: "SC09 (0-1023)", lkKey: "sc3_pos", unKey: "sc3_pos", spdKey: "sc_speed" },
+    { id: 4, role: "Servo 4 (Latch 2 - Aux Latch)", type: "SC09 (0-1023)", lkKey: "sc4_pos", unKey: "sc4_pos", spdKey: "sc_speed" },
+  ];
+
+  tbody.innerHTML = rows.map(r => {
+    const liveServo = (currentStatus && currentStatus.servos) ? currentStatus.servos.find(s => s.id === r.id) : null;
+    const livePos = (liveServo && liveServo.position != null) ? liveServo.position : "--";
+    const lkVal = lk[r.lkKey] != null ? lk[r.lkKey] : 0;
+    const unVal = un[r.unKey] != null ? un[r.unKey] : 0;
+    const spdVal = lk[r.spdKey] != null ? lk[r.spdKey] : 2400;
+
+    return `
+    <tr>
+      <td><b>ID ${r.id}</b>: ${r.role}</td>
+      <td style="color:#64748b;">${r.type}</td>
+      <td><span style="font-weight:700; color:#0f172a;" id="tbl_live_${r.id}">${livePos}</span></td>
+      <td><input type="number" id="tbl_lk_${r.id}" value="${lkVal}"></td>
+      <td><input type="number" id="tbl_un_${r.id}" value="${unVal}"></td>
+      <td><input type="number" id="tbl_spd_${r.id}" value="${spdVal}"></td>
+      <td>
+        <button class="btn-sm" onclick="moveSingleServo(${r.id}, document.getElementById('tbl_lk_${r.id}').value)">Test Lock</button>
+        <button class="btn-sm" onclick="moveSingleServo(${r.id}, document.getElementById('tbl_un_${r.id}').value)">Test Unlock</button>
+      </td>
+    </tr>
+    `;
+  }).join("");
+}
+
+// User Actions
+async function toggleDroneMode() {
+  const targetAction = droneModeActive ? "pause_drone_mode" : "resume_drone_mode";
+  try {
+    const res = await apiPost(targetAction);
+    log(res.message || "Drone mode updated", "warn");
+    await fetchStatus();
+  } catch(e) {}
+}
+
+async function executeSequence(seqAction) {
+  if (droneModeActive) {
+    if (!confirm("Drone Autonomy Mode is currently ACTIVE. Would you like to automatically pause Drone Mode so manual sequence testing is not overridden?")) {
+      return;
+    }
+    await apiPost("pause_drone_mode");
+  }
+  try {
+    const res = await apiPost(seqAction);
+    log(`[SEQUENCE STARTED] ${res.message || seqAction}`, "ok");
+    setTimeout(fetchStatus, 500);
+    setTimeout(fetchStatus, 1500);
+    setTimeout(fetchStatus, 3000);
+  } catch(e) {}
+}
+
+async function captureLiveSequence(seqType) {
+  if (!confirm(`Are you sure you want to capture current physical encoder positions of all 4 servos and save them as the '${seqType.toUpperCase()}' sequence?`)) {
+    return;
+  }
+  try {
+    const res = await apiPost("capture_live", { sequence: seqType });
+    log(`[TEACH-IN] Captured live positions for ${seqType}: ${JSON.stringify(res.captured)}`, "ok");
+    await fetchStatus();
+  } catch(e) {}
+}
+
+async function setSingleTargetFromLive(sid, seqType) {
+  if (!currentStatus || !currentStatus.servos) return;
+  const s = currentStatus.servos.find(item => item.id === sid);
+  if (!s || s.position == null) {
+    alert(`Servo ${sid} is offline. Cannot capture position.`);
+    return;
+  }
+  const pos = s.position;
+  const key = sid === 1 ? 'st1_pos' : (sid === 2 ? 'st2_pos' : (sid === 3 ? 'sc3_pos' : 'sc4_pos'));
+  
+  const cfg = currentStatus.sequence_config || { lock: {}, unlock: {} };
+  if (!cfg[seqType]) cfg[seqType] = {};
+  cfg[seqType][key] = pos;
+
+  try {
+    await apiPost("save_sequence_config", { config: cfg });
+    log(`Set Servo ${sid} live pos (${pos}) to ${seqType.toUpperCase()} sequence!`, "ok");
+    await fetchStatus();
+  } catch(e) {}
+}
+
+async function jogServo(sid, delta) {
+  try {
+    const res = await apiPost("jog", { id: sid, delta: delta });
+    log(`Jogged Servo ${sid} by ${delta > 0 ? '+' : ''}${delta} -> New Pos: ${res.position}`, "ok");
+    setTimeout(fetchStatus, 150);
+  } catch(e) {}
+}
+
+async function moveServoDirect(sid) {
+  const numInput = document.getElementById(`num_${sid}`);
+  const target = parseInt(numInput.value, 10);
+  if (isNaN(target)) return;
+  try {
+    await apiPost("move", { id: sid, position: target, speed: 2000, acc: 50 });
+    log(`Moving Servo ${sid} directly to ${target}...`, "ok");
+    setTimeout(fetchStatus, 250);
+  } catch(e) {}
+}
+
+async function moveSingleServo(sid, target) {
+  target = parseInt(target, 10);
+  if (isNaN(target)) return;
+  try {
+    await apiPost("move", { id: sid, position: target, speed: 2000, acc: 50 });
+    log(`Moving Servo ${sid} to ${target}...`, "ok");
+    setTimeout(fetchStatus, 300);
+  } catch(e) {}
+}
+
+async function toggleServoTorque(sid, enable) {
+  try {
+    await apiPost("torque", { id: sid, enable: enable });
+    log(`Torque on Servo ${sid} set to ${enable ? 'ON' : 'OFF'}`, "ok");
+    await fetchStatus();
+  } catch(e) {}
+}
+
+async function relaxAllServos() {
+  try {
+    await apiPost("relax_all");
+    log("All servos RELAXED (Torque OFF). You can now position lids and latches manually by hand.", "warn");
+    await fetchStatus();
+  } catch(e) {}
+}
+
+async function holdAllServos() {
+  try {
+    const res = await apiPost("hold_all");
+    log("All servos LOCKED (Torque ON at current positions).", "ok");
+    await fetchStatus();
+  } catch(e) {}
+}
+
+async function moveDualLidsFromInputs() {
+  const t1 = parseInt(document.getElementById("dual_lid_tgt1").value, 10);
+  const t2 = parseInt(document.getElementById("dual_lid_tgt2").value, 10);
+  const spd = parseInt(document.getElementById("dual_lid_speed").value, 10);
+  const tol = parseInt(document.getElementById("dual_lid_tol").value, 10);
+  try {
+    const res = await apiPost("move_lids", { target1: t1, target2: t2, speed: spd, tolerance: tol });
+    log(res.message, "ok");
+  } catch(e) {}
+}
+
+async function moveDualLidsPreset(state) {
+  const cfg = (currentStatus && currentStatus.sequence_config) ? currentStatus.sequence_config[state] : {};
+  const t1 = cfg ? cfg.st1_pos : (state === 'unlock' ? 4000 : 1450);
+  const t2 = cfg ? cfg.st2_pos : (state === 'unlock' ? 500 : 3450);
+  try {
+    const res = await apiPost("move_lids", { target1: t1, target2: t2, speed: 2400 });
+    log(`Dual Lids moving to ${state.toUpperCase()} (ID 1: ${t1}, ID 2: ${t2})`, "ok");
+  } catch(e) {}
+}
+
+async function moveLatchesFromInputs() {
+  const t3 = parseInt(document.getElementById("latch_tgt3").value, 10);
+  const t4 = parseInt(document.getElementById("latch_tgt4").value, 10);
+  const spd = parseInt(document.getElementById("latch_speed").value, 10);
+  try {
+    const res = await apiPost("move_latches", { target3: t3, target4: t4, speed: spd });
+    log(res.message, "ok");
+  } catch(e) {}
+}
+
+async function moveLatchesPreset(state) {
+  const cfg = (currentStatus && currentStatus.sequence_config) ? currentStatus.sequence_config[state] : {};
+  const t3 = cfg ? cfg.sc3_pos : (state === 'unlock' ? 675 : 520);
+  const t4 = cfg ? cfg.sc4_pos : (state === 'unlock' ? 550 : 700);
+  try {
+    const res = await apiPost("move_latches", { target3: t3, target4: t4, speed: 1500 });
+    log(`Latches moving to ${state.toUpperCase()} (ID 3: ${t3}, ID 4: ${t4})`, "ok");
+  } catch(e) {}
+}
+
+async function saveSequenceConfigFromTable() {
+  const cfg = {
+    lock: {
+      st1_pos: parseInt(document.getElementById("tbl_lk_1").value, 10),
+      st2_pos: parseInt(document.getElementById("tbl_lk_2").value, 10),
+      sc3_pos: parseInt(document.getElementById("tbl_lk_3").value, 10),
+      sc4_pos: parseInt(document.getElementById("tbl_lk_4").value, 10),
+      st_speed: parseInt(document.getElementById("tbl_spd_1").value, 10),
+      sc_speed: parseInt(document.getElementById("tbl_spd_3").value, 10),
+    },
+    unlock: {
+      st1_pos: parseInt(document.getElementById("tbl_un_1").value, 10),
+      st2_pos: parseInt(document.getElementById("tbl_un_2").value, 10),
+      sc3_pos: parseInt(document.getElementById("tbl_un_3").value, 10),
+      sc4_pos: parseInt(document.getElementById("tbl_un_4").value, 10),
+      st_speed: parseInt(document.getElementById("tbl_spd_1").value, 10),
+      sc_speed: parseInt(document.getElementById("tbl_spd_3").value, 10),
+    }
+  };
+
+  try {
+    await apiPost("save_sequence_config", { config: cfg });
+    log("Successfully saved sequence calibration to servo_sequences.json and companion parameters!", "ok");
+    await fetchStatus();
+  } catch(e) {}
+}
+
+async function reloadSequenceConfig() {
+  await fetchStatus();
+  log("Reloaded sequence configuration from server.", "info");
+}
+
+function toggleAutoRefresh(enabled) {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  if (enabled) {
+    autoRefreshTimer = setInterval(fetchStatus, 1000);
+  }
+}
+
+// Initial Load
+fetchStatus();
+toggleAutoRefresh(true);
+</script>
+</body>
+</html>

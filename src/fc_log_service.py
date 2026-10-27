@@ -251,16 +251,130 @@ class FlightControllerLogService:
         self.servo_controller.initialize_servos(st_config=st, sc09_configs=sc09_configs)
         return {"ok": True, "config": self.servo_controller.get_config()}
 
+    def ensure_servo_controller(self, port=None):
+        if self.servo_controller is not None and self.servo_controller.connected:
+            return self.servo_controller
+        try:
+            from servo_controller import ServoController
+            print("[SERVO] Initializing ServoController on demand...")
+            self.servo_controller = ServoController(
+                vehicle=self.vehicle,
+                port_name=port,
+                baudrate=1000000
+            )
+            self.servo_controller.initialize_servos()
+            self.servo_controller.start_monitoring()
+            return self.servo_controller
+        except Exception as e:
+            print(f"[SERVO] Failed to initialize servo controller on demand: {e}")
+            return None
+
     def servo_status(self, sid=None):
         if not self.servo_controller:
-            return {"ok": False, "error": "Servo controller is not connected", "config": self.load_servo_config()}
-        return self.servo_controller.read_status(sid=sid)
+            self.ensure_servo_controller()
+        if not self.servo_controller:
+            return {
+                "ok": False,
+                "connected": False,
+                "error": "Servo controller is not initialized or port not connected",
+                "drone_mode_active": False,
+                "config": self.load_servo_config()
+            }
+        status = self.servo_controller.read_status(sid=sid)
+        status["connected"] = self.servo_controller.connected
+        status["port"] = getattr(self.servo_controller, "port_name", "Unknown")
+        status["drone_mode_active"] = getattr(self.servo_controller, "drone_mode_enabled", True)
+        status["sequence_active"] = getattr(self.servo_controller, "sequence_active", False)
+        status["last_state"] = getattr(self.servo_controller, "last_state", "unknown")
+        status["physical_state"] = self.servo_controller.detect_physical_state()
+        status["sequence_config"] = self.servo_controller.load_sequence_config()
+        return status
 
     def servo_action(self, body):
+        action = str(body.get("action", "")).strip().lower()
+
+        if action == "connect":
+            port = body.get("port")
+            ctrl = self.ensure_servo_controller(port=port)
+            if not ctrl or not ctrl.connected:
+                return {"ok": False, "error": "Failed to connect to servo serial bus"}
+            return {"ok": True, "message": "Connected to servo controller", "status": self.servo_status()}
+
+        if not self.servo_controller:
+            self.ensure_servo_controller()
         if not self.servo_controller:
             return {"ok": False, "error": "Servo controller is not connected"}
-        action = str(body.get("action", "")).strip().lower()
+
         sid = body.get("id", body.get("sid", "all"))
+
+        # Drone autonomy mode pause/resume
+        if action == "pause_drone_mode":
+            return self.servo_controller.pause_drone_mode()
+        if action == "resume_drone_mode":
+            return self.servo_controller.resume_drone_mode()
+
+        # Full Sequences
+        if action == "lock_sequence":
+            threading.Thread(target=self.servo_controller.perform_locking, kwargs={"force": True}, daemon=True, name="WebLockSeq").start()
+            return {"ok": True, "message": "Lock sequence started in background"}
+        if action == "unlock_sequence":
+            threading.Thread(target=self.servo_controller.perform_unlocking, kwargs={"force": True}, daemon=True, name="WebUnlockSeq").start()
+            return {"ok": True, "message": "Unlock sequence started in background"}
+
+        # Subsystem Sync Movement
+        if action == "move_lids":
+            target1 = int(body.get("target1", 2048))
+            target2 = int(body.get("target2", 2048))
+            speed = body.get("speed")
+            acc = int(body.get("acc", 50))
+            tol = int(body.get("tolerance", 70))
+            threading.Thread(
+                target=self.servo_controller.move_dual_lid_sync,
+                args=(target1, target2),
+                kwargs={"speed": int(speed) if speed else 2400, "acc": acc, "tolerance": tol, "label": "WEB DUAL LID"},
+                daemon=True,
+                name="WebDualLid"
+            ).start()
+            return {"ok": True, "message": f"Moving Dual Lids: ID 1 -> {target1}, ID 2 -> {target2}"}
+
+        if action == "move_latches":
+            target3 = int(body.get("target3", 520))
+            target4 = int(body.get("target4", 700))
+            speed = body.get("speed")
+            threading.Thread(
+                target=self.servo_controller.move_latches,
+                args=(target3, target4),
+                kwargs={"speed": int(speed) if speed else 1500},
+                daemon=True,
+                name="WebLatches"
+            ).start()
+            return {"ok": True, "message": f"Moving Latches: ID 3 -> {target3}, ID 4 -> {target4}"}
+
+        # Fine-Tuning & Jogging
+        if action == "jog":
+            if sid in (None, "all"):
+                raise ValueError("jog requires a specific servo id")
+            delta = int(body.get("delta", 50))
+            speed = body.get("speed")
+            return self.servo_controller.jog(sid, delta, speed=speed)
+
+        # Torque & Hand Positioning
+        if action == "relax_all":
+            return self.servo_controller.relax_all()
+        if action == "hold_all":
+            return self.servo_controller.hold_all()
+
+        # Teach-In & Calibration
+        if action == "capture_live":
+            seq = body.get("sequence", "lock")
+            return self.servo_controller.capture_live_as_sequence(seq)
+        if action == "save_sequence_config":
+            cfg = body.get("config", {})
+            return self.servo_controller.save_sequence_config(cfg)
+        if action == "load_sequence_config":
+            return {"ok": True, "config": self.servo_controller.load_sequence_config()}
+
+        # Basic Actions
         if action == "move":
             if sid in (None, "all"):
                 raise ValueError("move requires a specific servo id")
@@ -284,7 +398,7 @@ class FlightControllerLogService:
                 return self.servo_controller.set_all_torque(enable)
             return self.servo_controller.set_torque(sid, enable)
         if action == "status":
-            return self.servo_controller.read_status(sid=sid)
+            return self.servo_status(sid=sid)
         raise ValueError(f"Unknown servo action: {action}")
 
     def start(self):

@@ -208,6 +208,9 @@ class ServoController:
         self.last_stream_request_time = 0
         self.sequence_active = False
         
+        # Drone autonomy mode flag (can be paused via WebTool to stop flight control interference)
+        self.drone_mode_enabled = True
+
         saved_st = self._load_saved_state()
         self.last_triggered_state = saved_st
         self.last_state = saved_st
@@ -221,6 +224,18 @@ class ServoController:
                 print(f"[SERVO] Warning: Failed to add SERVO_OUTPUT_RAW message listener: {e}")
 
         self._connect()
+
+    def pause_drone_mode(self):
+        """Disables MAVLink automatic servo trigger loop so operator can manually test servos."""
+        self.drone_mode_enabled = False
+        print("[SERVO] Drone autonomy servo monitoring PAUSED.")
+        return {"ok": True, "drone_mode_active": False, "message": "Drone autonomy servo monitoring PAUSED. Servos ready for manual testing."}
+
+    def resume_drone_mode(self):
+        """Re-enables MAVLink automatic servo trigger loop for autonomous drone flight."""
+        self.drone_mode_enabled = True
+        print("[SERVO] Drone autonomy servo monitoring RESUMED.")
+        return {"ok": True, "drone_mode_active": True, "message": "Drone autonomy servo monitoring RESUMED. Autonomous flight active."}
 
     def _load_saved_state(self):
         try:
@@ -606,6 +621,114 @@ class ServoController:
         ids = self._servo_ids() if sid in (None, "all") else [int(sid)]
         results = [self.move_servo(item, self._home_position_for(item)) for item in ids]
         return {"ok": all(item.get("ok") for item in results), "results": results}
+
+    def jog(self, sid, delta, speed=None):
+        """Step-jog a servo by relative delta ticks (e.g. +50, -50)."""
+        sid = int(sid)
+        st = self._read_status_one(sid)
+        if not st.get("ok") or st.get("position") is None:
+            return {"ok": False, "error": f"Could not read current position of servo {sid}"}
+        curr = st["position"]
+        new_pos = self._clamp_position(sid, curr + int(delta))
+        return self.move_servo(sid, new_pos, speed=speed)
+
+    def relax_all(self):
+        """Turns off holding torque on all 4 servos so operator can manipulate lids/latches by hand."""
+        return self.set_all_torque(False)
+
+    def hold_all(self):
+        """Reads live positions of all servos and locks holding torque at their exact positions."""
+        results = []
+        for sid in self._servo_ids():
+            st = self._read_status_one(sid)
+            if st.get("ok") and st.get("position") is not None:
+                self.set_torque(sid, True)
+                res = self.move_servo(sid, st["position"], speed=1500)
+                results.append({"id": sid, "held_pos": st["position"], "ok": res.get("ok", False)})
+            else:
+                results.append({"id": sid, "ok": False, "error": "Offline"})
+        return {"ok": True, "servos": results}
+
+    def save_sequence_config(self, new_config):
+        """Persists sequence settings to servo_sequences.json and syncs with config_manager."""
+        import json
+        cfg = json.loads(json.dumps(DEFAULT_SEQUENCE_CONFIG))
+        current = self.load_sequence_config()
+        cfg["lock"].update(current.get("lock", {}))
+        cfg["unlock"].update(current.get("unlock", {}))
+        if isinstance(new_config, dict):
+            if "lock" in new_config and isinstance(new_config["lock"], dict):
+                cfg["lock"].update(new_config["lock"])
+            if "unlock" in new_config and isinstance(new_config["unlock"], dict):
+                cfg["unlock"].update(new_config["unlock"])
+
+        # 1. Save to JSON files (both in STServo_Python and root)
+        paths_to_save = [
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "STServo_Python", "servo_sequences.json")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "servo_sequences.json")),
+        ]
+        for p in paths_to_save:
+            try:
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, 'w', encoding='utf-8') as f:
+                    json.dump(cfg, f, indent=2)
+                print(f"[SERVO] Saved sequence config to {p}")
+            except Exception as e:
+                print(f"[SERVO] Warning saving {p}: {e}")
+
+        # 2. Sync directly with config_manager
+        try:
+            from core.config_manager import config_manager
+            lk = cfg.get("lock", {})
+            un = cfg.get("unlock", {})
+            if "st1_pos" in lk: config_manager.set("SERVO_1_LOCK_POS", int(lk["st1_pos"]))
+            if "st2_pos" in lk: config_manager.set("SERVO_2_LOCK_POS", int(lk["st2_pos"]))
+            if "sc3_pos" in lk: config_manager.set("SERVO_3_LOCK_POS", int(lk["sc3_pos"]))
+            if "sc4_pos" in lk: config_manager.set("SERVO_4_LOCK_POS", int(lk["sc4_pos"]))
+            if "st_speed" in lk: config_manager.set("SERVO_ST_SPEED", int(lk["st_speed"]))
+            if "sc_speed" in lk: config_manager.set("SERVO_SC_SPEED", int(lk["sc_speed"]))
+
+            if "st1_pos" in un: config_manager.set("SERVO_1_UNLOCK_POS", int(un["st1_pos"]))
+            if "st2_pos" in un: config_manager.set("SERVO_2_UNLOCK_POS", int(un["st2_pos"]))
+            if "sc3_pos" in un: config_manager.set("SERVO_3_UNLOCK_POS", int(un["sc3_pos"]))
+            if "sc4_pos" in un: config_manager.set("SERVO_4_UNLOCK_POS", int(un["sc4_pos"]))
+            config_manager.save()
+            print("[SERVO] Synced sequence config with config_manager parameters.")
+        except Exception as ce:
+            print(f"[SERVO] Warning updating config_manager: {ce}")
+
+        return {"ok": True, "config": cfg}
+
+    def capture_live_as_sequence(self, seq_key='lock'):
+        """Teach-In: reads current live encoder positions of all 4 servos and sets as sequence target."""
+        seq_key = str(seq_key).lower().strip()
+        if seq_key not in ['lock', 'unlock']:
+            return {"ok": False, "error": f"Invalid sequence key: {seq_key}"}
+
+        cfg = self.load_sequence_config()
+        sub = cfg.get(seq_key, {})
+        captured = {}
+
+        for sid in [1, 2, 3, 4]:
+            st = self._read_status_one(sid)
+            if st.get("ok") and st.get("position") is not None:
+                pos = int(st["position"])
+                if sid == 1:
+                    sub["st1_pos"] = pos
+                    captured["st1_pos"] = pos
+                elif sid == 2:
+                    sub["st2_pos"] = pos
+                    captured["st2_pos"] = pos
+                elif sid == 3:
+                    sub["sc3_pos"] = pos
+                    captured["sc3_pos"] = pos
+                elif sid == 4:
+                    sub["sc4_pos"] = pos
+                    captured["sc4_pos"] = pos
+
+        cfg[seq_key] = sub
+        self.save_sequence_config(cfg)
+        return {"ok": True, "sequence": seq_key, "captured": captured, "config": cfg}
 
     def reset_home_position(self, sid=None):
         """
@@ -1264,6 +1387,11 @@ class ServoController:
         print("[SERVO] Monitor loop started successfully.")
         while self._running:
             try:
+                # If drone autonomy is paused for manual WebTool testing, skip MAVLink triggers
+                if not getattr(self, "drone_mode_enabled", True):
+                    time.sleep(0.2)
+                    continue
+
                 # Periodically request the stream if we haven't received a MAVLink update recently
                 current_time = time.time()
                 if (current_time - self.last_servo6_raw_rx_time > 3.0) and (current_time - self.last_stream_request_time > 5.0):
