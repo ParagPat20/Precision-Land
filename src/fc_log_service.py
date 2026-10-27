@@ -406,6 +406,8 @@ class FlightControllerLogService:
                         metadata = service.download_log_by_id(log_id)
                         self._send_json(metadata)
                     except Exception as error:
+                        import traceback
+                        traceback.print_exc()
                         self._send_json({"error": str(error)}, status=500)
                     return
 
@@ -1086,13 +1088,13 @@ class FlightControllerLogService:
             ("debug", int, 0),
             ("pkt_loss_tx", int, 0),
             ("pkt_loss_rx", int, 0),
-            ("max_backlog", int, 60),
+            ("max_backlog", int, 40),
             ("burst_read_size", int, 239),
             ("write_size", int, 239),
             ("write_qsize", int, 5),
-            ("idle_detection_time", float, 2.5),
-            ("read_retry_time", float, 0.4),
-            ("retry_time", float, 0.25),
+            ("idle_detection_time", float, 4.0),
+            ("read_retry_time", float, 1.2),
+            ("retry_time", float, 0.6),
         ])
         
         try:
