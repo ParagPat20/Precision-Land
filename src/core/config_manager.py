@@ -566,6 +566,15 @@ PARAM_DEFINITIONS: List[Dict[str, Any]] = [
         "unit": "s",
         "env_var": "JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC",
         "description": "Maximum seconds allowed for downloading a single .BIN flight log over MAVLink FTP (default: 3600s / 1 hour)."
+    },
+    {
+        "name": "FC_LOG_DEFAULT_METHOD",
+        "category": "System Services",
+        "default": "qgc",
+        "type": "string",
+        "options": ["qgc", "mavftp"],
+        "env_var": "JECH_FC_LOG_DEFAULT_METHOD",
+        "description": "Default download protocol for DataFlash logs: 'qgc' (QGC Fast streaming, 400-600 KB/s) or 'mavftp' (MAVLink FTP)."
     }
 ]
 

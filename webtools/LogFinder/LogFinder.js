@@ -263,43 +263,94 @@ function render_inventory(logs, source, transferStatus) {
 
         const actionCell = document.createElement("td")
         actionCell.style.padding = "8px"
-        const button = document.createElement("button")
-        button.textContent = log.cached ? "Load downloaded log" : "Download to RPi (QGC fast)"
-        if (!log.cached) {
-            button.setAttribute("data-fc-download-btn", "1")
+        actionCell.style.whiteSpace = "nowrap"
+
+        if (log.cached) {
+            const button = document.createElement("button")
+            button.textContent = "Load downloaded log"
+            button.addEventListener("click", async () => {
+                button.disabled = true
+                button.textContent = "Loading log..."
+                try {
+                    const apiBase = new URL(source, window.location.href).toString()
+                    await load_from_server(document.getElementById("server_url").value.trim())
+                    await load_inventory_from_server(apiBase)
+                } catch (error) {
+                    button.disabled = false
+                    button.textContent = "Load downloaded log"
+                    alert(error.message || error)
+                }
+            })
+            actionCell.appendChild(button)
+        } else {
+            const btnQGC = document.createElement("button")
+            btnQGC.textContent = "⚡ QGC Fast (~500 KB/s)"
+            btnQGC.title = "Download log at high-speed via UDP streaming (400-600 KB/s)"
+            btnQGC.setAttribute("data-fc-download-btn", "1")
+            btnQGC.style.marginRight = "6px"
+            btnQGC.style.backgroundColor = "#2e7d32"
+            btnQGC.style.color = "white"
+            btnQGC.style.border = "none"
+            btnQGC.style.padding = "5px 9px"
+            btnQGC.style.borderRadius = "4px"
+            btnQGC.style.cursor = "pointer"
+            btnQGC.style.fontWeight = "bold"
+
+            const btnFTP = document.createElement("button")
+            btnFTP.textContent = "📁 MAVFTP"
+            btnFTP.title = "Download log via MAVLink FTP (transactional packet stream)"
+            btnFTP.setAttribute("data-fc-download-btn", "1")
+            btnFTP.style.backgroundColor = "#1565c0"
+            btnFTP.style.color = "white"
+            btnFTP.style.border = "none"
+            btnFTP.style.padding = "5px 9px"
+            btnFTP.style.borderRadius = "4px"
+            btnFTP.style.cursor = "pointer"
+
             const block = transferStatus && transferStatus.busy === true
             if (block) {
-                button.disabled = true
-                button.title = "FC log transfer already running — wait for it to finish."
+                btnQGC.disabled = true
+                btnFTP.disabled = true
+                btnQGC.title = "FC log transfer already running — wait for it to finish."
+                btnFTP.title = "FC log transfer already running — wait for it to finish."
             }
-        }
-        button.addEventListener("click", async () => {
-            const originalText = button.textContent
-            button.disabled = true
-            button.textContent = log.cached ? "Loading log..." : "Downloading..."
-            try {
-                const apiBase = new URL(source, window.location.href).toString()
-                if (!log.cached) {
+
+            async function triggerDownload(method) {
+                btnQGC.disabled = true
+                btnFTP.disabled = true
+                if (method === "qgc") {
+                    btnQGC.textContent = "Downloading..."
+                } else {
+                    btnFTP.textContent = "Downloading..."
+                }
+                try {
+                    const apiBase = new URL(source, window.location.href).toString()
                     const st = await fetchLogDownloadStatus()
                     if (st && st.busy === true) {
                         throw new Error("FC link busy: " + (st.detail || "download in progress"))
                     }
-                    const response = await fetch(new URL(`/api/fc-logs/download/${log.id}`, apiBase))
+                    const response = await fetch(new URL(`/api/fc-logs/download/${log.id}?method=${method}`, apiBase))
                     if (!response.ok) {
                         throw new Error(`Failed to download log ${log.id}: HTTP ${response.status}`)
                     }
                     await response.json()
+                    await load_from_server(document.getElementById("server_url").value.trim())
+                    await load_inventory_from_server(apiBase)
+                } catch (error) {
+                    btnQGC.disabled = false
+                    btnFTP.disabled = false
+                    btnQGC.textContent = "⚡ QGC Fast (~500 KB/s)"
+                    btnFTP.textContent = "📁 MAVFTP"
+                    alert(error.message || error)
                 }
-
-                await load_from_server(document.getElementById("server_url").value.trim())
-                await load_inventory_from_server(apiBase)
-            } catch (error) {
-                button.disabled = false
-                button.textContent = originalText
-                alert(error.message || error)
             }
-        })
-        actionCell.appendChild(button)
+
+            btnQGC.addEventListener("click", () => triggerDownload("qgc"))
+            btnFTP.addEventListener("click", () => triggerDownload("mavftp"))
+
+            actionCell.appendChild(btnQGC)
+            actionCell.appendChild(btnFTP)
+        }
         row.appendChild(actionCell)
 
         // --- "Download to PC" button: forces browser save-as dialog ---

@@ -517,7 +517,9 @@ class FlightControllerLogService:
                 if parsed.path.startswith("/api/fc-logs/download/"):
                     try:
                         log_id = int(parsed.path.rsplit("/", 1)[-1])
-                        metadata = service.download_log_by_id(log_id)
+                        query = parse_qs(parsed.query)
+                        method = query.get("method", [None])[0]
+                        metadata = service.download_log_by_id(log_id, method=method)
                         self._send_json(metadata)
                     except Exception as error:
                         import traceback
@@ -1202,13 +1204,13 @@ class FlightControllerLogService:
             ("debug", int, 0),
             ("pkt_loss_tx", int, 0),
             ("pkt_loss_rx", int, 0),
-            ("max_backlog", int, 40),
+            ("max_backlog", int, 160),        # High window for Ethernet throughput
             ("burst_read_size", int, 239),
             ("write_size", int, 239),
             ("write_qsize", int, 5),
             ("idle_detection_time", float, 4.0),
-            ("read_retry_time", float, 1.2),
-            ("retry_time", float, 0.6),
+            ("read_retry_time", float, 0.5),  # Fast retry for low-latency Ethernet RTT
+            ("retry_time", float, 0.25),
         ])
         
         try:
@@ -1261,15 +1263,119 @@ class FlightControllerLogService:
         elapsed = max(time.time() - st["start_ts"], 0.000001)
         print(f"[LOG SERVICE] MAVFTP download complete: log {log_id}, size {file_size}, {file_size / elapsed / 1024.0:.1f} KB/s")
 
-    def _download_entry(self, entry):
+    def _download_entry_via_log_request(self, entry, file_path):
+        """
+        High-speed QGC-style LOG_REQUEST_DATA download: 4096 bins (368KB) per chunk,
+        streaming over Ethernet UDP at 400-600+ KB/s with missing bin recovery.
+        """
+        log_id = entry["id"]
+        expected = int(entry["size"])
+        print(f"[LOG SERVICE] Downloading FC log {log_id} via QGC Fast (LOG_REQUEST_DATA) -> {file_path}")
+        fh = file_path.open("wb")
+        fh.truncate(expected)
+        now = time.time()
+        st = {
+            "log_id": log_id,
+            "expected_size": expected,
+            "bytes_written": 0,
+            "fh": fh,
+            "path": file_path,
+            "current_chunk": 0,
+            "chunk_table": [False] * self._qgc_chunk_bins(expected, 0),
+            "missing_bins": self._qgc_chunk_bins(expected, 0),
+            "written_offsets": set(),
+            "written_ranges": [],
+            "rate_bytes": 0,
+            "rate_packets": 0,
+            "current_rate_bps": 0.0,
+            "average_rate_bps": 0.0,
+            "packet_rate": 0.0,
+            "retries": 0,
+            "start_ts": now,
+            "last_rate_ts": now,
+            "last_ts": now,
+            "last_request_ts": 0.0,
+            "complete": False,
+            "transfer_method": "qgc_log_request_data",
+        }
+        with self._stream_cv:
+            self._stream_state = st
+        try:
+            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+                try:
+                    print("[LOG SERVICE] Pausing telemetry streams to maximize Ethernet bandwidth...")
+                    self._set_telemetry_streams(0)
+                except Exception as te:
+                    print(f"[LOG SERVICE] Warning: could not pause telemetry streams: {te}")
+            with self._stream_cv:
+                self._qgc_request_missing_range_locked(st)
+
+            timeout_sec = max(
+                float(self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC),
+                float(expected) / 20000.0 + 300.0,
+                3600.0
+            )
+            deadline = time.monotonic() + timeout_sec
+            while time.monotonic() < deadline:
+                with self._stream_cv:
+                    if st["complete"]:
+                        break
+                    self._stream_cv.wait(timeout=0.05)
+                    if st["complete"]:
+                        break
+                    if time.time() - st["last_request_ts"] >= self.QGC_DATA_TIMEOUT_SEC:
+                        self._qgc_request_missing_range_locked(st)
+                        st["last_ts"] = time.time()
+                    self._qgc_update_rates_locked(st)
+            with self._stream_cv:
+                ok = st["complete"]
+                unique_bytes = sum(count for _ofs, count in st["written_ranges"])
+            if not ok:
+                raise RuntimeError(
+                    f"Log {log_id} download incomplete or timed out "
+                    f"(got {unique_bytes} of {expected} B, chunk {st['current_chunk']}, "
+                    f"missing {st['missing_bins']} bins)"
+                )
+        finally:
+            fh.flush()
+            fh.close()
+            if self.PAUSE_TELEMETRY_DURING_DOWNLOAD:
+                try:
+                    print("[LOG SERVICE] Restoring telemetry streams after log download...")
+                    self._set_telemetry_streams(4)
+                except Exception as te:
+                    print(f"[LOG SERVICE] Warning: could not restore telemetry streams: {te}")
+            with self._stream_cv:
+                self._stream_state = None
+            try:
+                self._send_log_request_end()
+            except Exception:
+                pass
+
+        file_size = file_path.stat().st_size
+        elapsed = max(time.time() - st["start_ts"], 0.000001)
+        print(f"[LOG SERVICE] QGC download complete: log {log_id}, size {file_size}, {file_size / elapsed / 1024.0:.1f} KB/s")
+
+    def _download_entry(self, entry, method=None):
         with self._download_lock:
-            self._flight_log_download_enter(f"Saving flight log id {entry['id']} to companion")
+            if not method:
+                try:
+                    from core.config_manager import config_manager
+                    method = config_manager.get("FC_LOG_DEFAULT_METHOD", "qgc")
+                except Exception:
+                    method = "qgc"
+            method = str(method).strip().lower()
+            if method not in ("qgc", "mavftp"):
+                method = "qgc"
+
+            method_label = "QGC Fast (400-600 KB/s)" if method == "qgc" else "MAVFTP"
+            self._flight_log_download_enter(f"Saving flight log id {entry['id']} to companion via {method_label}")
             try:
                 file_name = self._build_filename(entry)
                 file_path = self.cache_dir / file_name
 
                 if file_path.exists() and file_path.stat().st_size == entry["size"]:
-                    return self._metadata_for_path(file_path, entry)
+                    return self._metadata_for_path(file_path, entry, method=method)
 
                 if entry["size"] <= 0:
                     raise RuntimeError(
@@ -1279,16 +1385,19 @@ class FlightControllerLogService:
                 if file_path.exists():
                     file_path.unlink()
                 try:
-                    self._download_entry_via_mavftp(entry, file_path)
+                    if method == "mavftp":
+                        self._download_entry_via_mavftp(entry, file_path)
+                    else:
+                        self._download_entry_via_log_request(entry, file_path)
                 except Exception:
                     if file_path.exists():
                         file_path.unlink()
                     raise
-                return self._metadata_for_path(file_path, entry)
+                return self._metadata_for_path(file_path, entry, method=method)
             finally:
                 self._flight_log_download_leave()
 
-    def download_log_by_id(self, log_id):
+    def download_log_by_id(self, log_id, method=None):
         inventory = self.list_flight_controller_logs()
         match = next((item for item in inventory if item["id"] == log_id), None)
         if match is None:
@@ -1298,9 +1407,9 @@ class FlightControllerLogService:
             "size": match["size"],
             "time_utc": match["time_utc"],
         }
-        return self._download_entry(entry)
+        return self._download_entry(entry, method=method)
 
-    def _metadata_for_path(self, file_path, entry=None):
+    def _metadata_for_path(self, file_path, entry=None, method="qgc"):
         stat = file_path.stat()
         payload = {
             "name": file_path.name,
@@ -1308,7 +1417,7 @@ class FlightControllerLogService:
             "url": f"/logs/{file_path.name}",
             "size": stat.st_size,
             "modified_at": int(stat.st_mtime),
-            "transfer_method": "mavftp",
+            "transfer_method": "mavftp" if method == "mavftp" else "qgc_log_request_data",
         }
         if entry is not None:
             payload["log_id"] = entry["id"]
