@@ -98,6 +98,7 @@ from fc_log_service import start_log_services
 from core.mission_generator import DeliveryTemplate, LatLng
 from servo_controller import ServoController
 from rtsp_streamer import RTSPStreamer
+from core.config_manager import config_manager
 
 # Backoff configuration for Firebase reconnections
 FIREBASE_INITIAL_BACKOFF = 5  # seconds
@@ -1374,32 +1375,33 @@ print(f"[CAM_GEOMETRY] Pitch tilt={CAM_TILT_PITCH_DEG}° forward | Lever-arm off
 def camera_to_uav(x_cam, y_cam, z_cam):
     """
     Transforms marker 3D position from camera coordinates to Drone Body Frame (FRD - Forward, Right, Down).
-
-    OpenCV Camera Frame:
-      x_cam: Right in image
-      y_cam: Down in image (towards tail when camera looks down)
-      z_cam: Optical axis (distance straight out of lens, pitched forward by CAM_TILT_PITCH_DEG)
-
-    Drone Body Frame (FRD - Forward, Right, Down):
-      x_uav: Forward towards nose (cm)
-      y_uav: Right towards starboard (cm)
-      z_uav: Down towards ground (cm)
+    Dynamic tilt and offsets are pulled live from config_manager.
     """
     # Flip camera values when camera is mounted inverted / rotated
-    if getattr(args, 'vflip', False) or getattr(args, 'flip_x', False):
+    vflip_active = config_manager.get("CAM_VFLIP", getattr(args, 'vflip', True)) or config_manager.get("CAM_FLIP_X", getattr(args, 'flip_x', False))
+    if vflip_active:
         x_cam = -x_cam
-    if getattr(args, 'flip_y', False):
+    if config_manager.get("CAM_FLIP_Y", getattr(args, 'flip_y', False)):
         y_cam = -y_cam
 
-    # 1. Pitch rotation around lateral axis (tilted forward from nadir by CAM_TILT_PITCH_DEG)
-    x_forward = -y_cam * _COS_TILT + z_cam * _SIN_TILT
-    y_right   = x_cam
-    z_down    = y_cam * _SIN_TILT + z_cam * _COS_TILT
+    # 1. Dynamic Pitch rotation around lateral axis (tilted forward from nadir)
+    tilt_deg = float(config_manager.get("CAM_TILT_PITCH_DEG", 20.0))
+    tilt_rad = math.radians(tilt_deg)
+    cos_t = math.cos(tilt_rad)
+    sin_t = math.sin(tilt_rad)
 
-    # 2. Add physical lever-arm offset (kept at 0.0 if handled in ArduPilot via PLND_CAM_POS_X)
-    x_uav = x_forward + CAM_OFFSET_FORWARD_CM
-    y_uav = y_right   + CAM_OFFSET_RIGHT_CM
-    z_uav = max(1.0, z_down + CAM_OFFSET_DOWN_CM)
+    x_forward = -y_cam * cos_t + z_cam * sin_t
+    y_right   = x_cam
+    z_down    = y_cam * sin_t + z_cam * cos_t
+
+    # 2. Add physical lever-arm offset
+    fwd_cm = float(config_manager.get("CAM_OFFSET_FORWARD_CM", 0.0))
+    right_cm = float(config_manager.get("CAM_OFFSET_RIGHT_CM", 0.0))
+    down_cm = float(config_manager.get("CAM_OFFSET_DOWN_CM", 0.0))
+
+    x_uav = x_forward + fwd_cm
+    y_uav = y_right   + right_cm
+    z_uav = max(1.0, z_down + down_cm)
 
     return x_uav, y_uav, z_uav
 
@@ -1699,14 +1701,34 @@ set_param_nonblocking("AUTO_OPTIONS", 135, mavutil.mavlink.MAV_PARAM_TYPE_INT16)
 init_firebase_listener()
 
 #--------------------------------------------------
-#-------------- LANDING MARKER  
+#-------------- LANDING MARKER (DYNAMIC CONFIG)
 #--------------------------------------------------    
-#--- Define Tag
-# IMPORTANT: Update this ID to match your physical ArUco marker
-id_to_find      = 72  # Changed from 132 back to 72
-marker_size     = 17.8 #- [cm]
-freq_send       = 10 #- Hz
+# Pull live values from config_manager (fallback to code defaults)
+id_to_find      = int(config_manager.get("PLND_TARGET_ID", 72))
+marker_size     = float(config_manager.get("PLND_MARKER_SIZE", 17.8))
+freq_send       = float(config_manager.get("PLND_SEND_FREQ", 10.0))
 
+# Listener to auto-update tracker when parameters change live via WebTools
+def _on_codebase_param_update(changed_dict):
+    global id_to_find, marker_size, freq_send, confidence_threshold
+    if "PLND_TARGET_ID" in changed_dict and aruco_tracker is not None:
+        new_id = int(changed_dict["PLND_TARGET_ID"])
+        id_to_find = new_id
+        aruco_tracker.id_to_find = new_id
+        print(f"[LIVE CONFIG] ArUco target ID auto-updated to: {new_id}", flush=True)
+    if "PLND_MARKER_SIZE" in changed_dict and aruco_tracker is not None:
+        new_sz = float(changed_dict["PLND_MARKER_SIZE"])
+        marker_size = new_sz
+        aruco_tracker.marker_size = new_sz
+        print(f"[LIVE CONFIG] ArUco marker size auto-updated to: {new_sz} cm", flush=True)
+    if "PLND_SEND_FREQ" in changed_dict:
+        freq_send = max(1.0, float(changed_dict["PLND_SEND_FREQ"]))
+        print(f"[LIVE CONFIG] Send frequency auto-updated to: {freq_send} Hz", flush=True)
+    if "PLND_CONF_THRESH" in changed_dict:
+        confidence_threshold = float(changed_dict["PLND_CONF_THRESH"])
+        print(f"[LIVE CONFIG] Confidence threshold auto-updated to: {confidence_threshold}%", flush=True)
+
+config_manager.subscribe(_on_codebase_param_update)
 
 #--- Get the camera calibration path
 # Find full directory path of this script, used for loading config and other files
@@ -1763,13 +1785,13 @@ mavlink20 = 'MAVLINK20' in os.environ
 #--------------------------------------------------
 #-------------- ROLLING STABILITY BUFFER
 #--------------------------------------------------
-# Initialize detection stability buffer with maxlen=7
-# This prevents jerky movements when marker detection drops temporarily
-detection_buffer = deque(maxlen=7)
+# Initialize detection stability buffer with dynamic size and threshold
+buffer_size_val = int(config_manager.get("PLND_BUFFER_SIZE", 7))
+detection_buffer = deque(maxlen=max(1, buffer_size_val))
 last_known_position = None  # Store last known valid position (x_cm, y_cm, z_cm)
-confidence_threshold =20.0  # Minimum confidence percentage to send position data
+confidence_threshold = float(config_manager.get("PLND_CONF_THRESH", 20.0))
 
-print(f"Rolling Stability Buffer initialized (size: 7, threshold: {confidence_threshold}%)", flush=True)
+print(f"Rolling Stability Buffer initialized (size: {buffer_size_val}, threshold: {confidence_threshold}%)", flush=True)
 
 last_recorded_ts = 0.0
 

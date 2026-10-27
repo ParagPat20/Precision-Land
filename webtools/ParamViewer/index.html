@@ -108,7 +108,14 @@
 </head>
 <body onload="initialLoad()">
 <header>
-  <h1>CUAV Parameter Viewer</h1>
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
+    <h1 style="margin:0;">CUAV Parameter Viewer</h1>
+    <div style="display:flex; gap:6px; background:#e2e8f0; padding:4px; border-radius:8px; font-size:13px;">
+      <a href="/webtools/CodebaseParams/index.html" style="padding:6px 14px; text-decoration:none; color:#475569; font-weight:600; border-radius:6px;">Codebase Params</a>
+      <a href="/webtools/ParamViewer/index.html" style="padding:6px 14px; text-decoration:none; background:#ffffff; color:#2364aa; font-weight:600; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">CUAV (ArduPilot) Params</a>
+      <a href="/webtools/index.html" style="padding:6px 14px; text-decoration:none; color:#475569; font-weight:600; border-radius:6px;">All Tools</a>
+    </div>
+  </div>
   <div class="toolbar">
     <button id="refresh_params" class="primary" type="button" onclick="refreshParams()">Refresh Params</button>
     <button id="write_params" class="danger" type="button" onclick="confirmEditedParams()" disabled>Write Params</button>

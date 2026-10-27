@@ -381,6 +381,17 @@ class FlightControllerLogService:
                         self._send_json({"error": str(error)}, status=500)
                     return
 
+                if parsed.path == "/api/codebase-params":
+                    try:
+                        from core.config_manager import config_manager
+                        self._send_json({
+                            "params": config_manager.get_full_catalog(),
+                            "categories": config_manager.get_categories()
+                        })
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
                 if parsed.path == "/api/logs/latest":
                     try:
                         metadata = service.download_latest_log()
@@ -509,6 +520,96 @@ class FlightControllerLogService:
                     try:
                         body = self._read_json_body()
                         self._send_json(service.servo_action(body))
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path == "/api/codebase-params":
+                    try:
+                        from core.config_manager import config_manager
+                        body = self._read_json_body()
+                        updates = body.get("updates", {})
+                        if not isinstance(updates, dict):
+                            raise ValueError("updates must be a dictionary of param_name -> value")
+                        saved_params = config_manager.set_many(updates)
+                        self._send_json({
+                            "ok": True,
+                            "updated_count": len(saved_params),
+                            "params": config_manager.get_full_catalog(),
+                            "categories": config_manager.get_categories()
+                        })
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path == "/api/codebase-params/reset":
+                    try:
+                        from core.config_manager import config_manager
+                        body = self._read_json_body()
+                        param_names = body.get("names", None)
+                        reset_params = config_manager.reset_to_defaults(param_names)
+                        self._send_json({
+                            "ok": True,
+                            "reset_count": len(reset_params),
+                            "params": config_manager.get_full_catalog(),
+                            "categories": config_manager.get_categories()
+                        })
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path == "/api/system/restart":
+                    try:
+                        import subprocess
+                        # Respond first so the client receives success before services restart
+                        self._send_json({
+                            "ok": True,
+                            "message": "Restarting companion services now..."
+                        })
+
+                        def _do_restart():
+                            time.sleep(1.0)
+                            # On Linux / systemd, restart the system service if configured
+                            service_name = os.environ.get("JECH_SYSTEMD_SERVICE", "precision-land.service")
+                            try:
+                                # Try systemctl restart first
+                                res = subprocess.run(["systemctl", "restart", service_name], capture_output=True, timeout=10)
+                                if res.returncode == 0:
+                                    return
+                            except Exception:
+                                pass
+
+                            # Fallback: re-execute python process
+                            try:
+                                import sys
+                                print("[SYSTEM] Re-executing Python process...", flush=True)
+                                os.execv(sys.executable, [sys.executable] + sys.argv)
+                            except Exception as ex:
+                                print(f"[SYSTEM] Could not execv, exiting process for manager restart: {ex}", flush=True)
+                                os._exit(0)
+
+                        threading.Thread(target=_do_restart, daemon=True).start()
+                    except Exception as error:
+                        self._send_json({"error": str(error)}, status=500)
+                    return
+
+                if parsed.path == "/api/system/git-pull":
+                    try:
+                        import subprocess
+                        project_root = Path(__file__).resolve().parent.parent
+                        git_res = subprocess.run(
+                            ["git", "pull"],
+                            cwd=str(project_root),
+                            capture_output=True,
+                            text=True,
+                            timeout=60
+                        )
+                        output_msg = git_res.stdout or git_res.stderr or "No output from git pull"
+                        self._send_json({
+                            "ok": git_res.returncode == 0,
+                            "output": output_msg.strip(),
+                            "return_code": git_res.returncode
+                        })
                     except Exception as error:
                         self._send_json({"error": str(error)}, status=500)
                     return

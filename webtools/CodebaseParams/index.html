@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<base href="/webtools/CodebaseParams/">
+<title>Codebase Full Parameter List</title>
+<link rel="icon" href="/webtools/images/AP_favicon.png">
+<link href="/webtools/modules/tabulator/dist/css/tabulator.min.css" rel="stylesheet">
+<script src="/webtools/modules/tabulator/dist/js/tabulator.min.js"></script>
+<script type="text/javascript" src="/webtools/CodebaseParams/codebaseParams.js"></script>
+<style>
+  :root {
+    --primary: #1976d2;
+    --primary-hover: #1565c0;
+    --success: #2e7d32;
+    --danger: #d32f2f;
+    --warning: #ed6c02;
+    --bg-page: #f8fafc;
+    --card-bg: #ffffff;
+    --border: #d0d7de;
+    --text-main: #1e293b;
+    --text-muted: #64748b;
+  }
+  body {
+    margin: 18px 24px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-main);
+    background: var(--bg-page);
+  }
+  header {
+    max-width: 1400px;
+    margin-bottom: 12px;
+  }
+  .header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .badge {
+    font-size: 13px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: #e2e8f0;
+    color: #475569;
+    font-weight: 600;
+  }
+  .nav-tabs {
+    display: flex;
+    gap: 6px;
+    background: #e2e8f0;
+    padding: 4px;
+    border-radius: 8px;
+  }
+  .nav-tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    color: #475569;
+    transition: all 0.15s ease;
+  }
+  .nav-tab.active {
+    background: #ffffff;
+    color: var(--primary);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+  .nav-tab:hover:not(.active) {
+    color: #1e293b;
+  }
+  .categories-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 14px 0 10px 0;
+  }
+  .cat-pill {
+    padding: 5px 12px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: #ffffff;
+    font-size: 13px;
+    cursor: pointer;
+    color: #475569;
+    transition: all 0.15s ease;
+  }
+  .cat-pill:hover {
+    background: #f1f5f9;
+  }
+  .cat-pill.active {
+    background: var(--primary);
+    color: #ffffff;
+    border-color: var(--primary);
+  }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 12px 0;
+    max-width: 1400px;
+  }
+  button {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #ffffff;
+    color: var(--text-main);
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  button:hover:not(:disabled) {
+    background: #f1f5f9;
+  }
+  button.primary {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #ffffff;
+  }
+  button.primary:hover:not(:disabled) {
+    background: var(--primary-hover);
+  }
+  button.success {
+    border-color: var(--success);
+    background: var(--success);
+    color: #ffffff;
+  }
+  button.danger {
+    border-color: var(--danger);
+    background: var(--danger);
+    color: #ffffff;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  input[type="search"] {
+    min-width: 320px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    background: #ffffff;
+  }
+  input[type="search"]:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.2);
+  }
+  .filter-select {
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    background: #ffffff;
+  }
+  #status {
+    margin: 10px 0;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #ffffff;
+    max-width: 1400px;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #table {
+    max-width: 1400px;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  /* Tabulator overrides */
+  .tabulator .tabulator-header {
+    background-color: #f1f5f9;
+    border-bottom: 2px solid var(--border);
+  }
+  .tabulator-row.row-modified {
+    background-color: #fffbeb !important;
+    font-weight: 500;
+  }
+  .tabulator-row.row-customized {
+    background-color: #f0fdf4 !important;
+  }
+  .tabulator-cell.cell-editable {
+    background-color: #eff6ff;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .param-badge-type {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    background: #e2e8f0;
+    color: #475569;
+  }
+  .param-badge-modified {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 4px;
+    background: #fef3c7;
+    color: #b45309;
+    border: 1px solid #fde68a;
+  }
+  .param-badge-custom {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    background: #dcfce7;
+    color: #15803d;
+  }
+  dialog {
+    width: min(850px, 94vw);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+  }
+  dialog::backdrop {
+    background: rgba(15, 23, 42, 0.5);
+  }
+  .dialog-body {
+    padding: 20px;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    background: #f8fafc;
+  }
+  .diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+    font-size: 13px;
+  }
+  .diff-table th, .diff-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+  }
+  .diff-table th {
+    background: #f1f5f9;
+  }
+  .diff-old {
+    color: #dc2626;
+    text-decoration: line-through;
+  }
+  .diff-new {
+    color: #16a34a;
+    font-weight: bold;
+  }
+</style>
+</head>
+<body onload="initCodebaseParams()">
+<header>
+  <div class="header-top">
+    <div>
+      <h1>
+        Codebase Parameter Manager
+        <span class="badge" id="total_params_badge">0 Parameters</span>
+      </h1>
+      <p style="margin: 4px 0 0 0; color: var(--text-muted); font-size: 13px;">
+        Centralized configuration for Companion Computer codebase: Precision-Landing, Video Streaming, Servos, MAVLink & System Services.
+      </p>
+    </div>
+    <div class="nav-tabs">
+      <a href="/webtools/CodebaseParams/index.html" class="nav-tab active">Codebase Params</a>
+      <a href="/webtools/ParamViewer/index.html" class="nav-tab">CUAV (ArduPilot) Params</a>
+      <a href="/webtools/LogFinder/index.html" class="nav-tab">Log Finder</a>
+      <a href="/webtools/index.html" class="nav-tab">All WebTools</a>
+    </div>
+  </div>
+
+  <div class="categories-bar" id="categories_container">
+    <button type="button" class="cat-pill active" onclick="filterByCategory('all')">All Categories</button>
+  </div>
+
+  <div class="toolbar">
+    <button id="save_params" class="success" type="button" onclick="confirmSaveParams()" disabled>
+      💾 Save Changes (<span id="changes_counter">0</span>)
+    </button>
+    <button id="discard_changes" type="button" onclick="discardChanges()" disabled>
+      ✖ Discard
+    </button>
+    <button id="reset_defaults" class="danger" type="button" onclick="confirmResetDefaults()">
+      ↺ Reset to Defaults
+    </button>
+    <button id="refresh_params" class="primary" type="button" onclick="refreshParams()">
+      🔄 Reload
+    </button>
+    <button id="restart_services" class="danger" type="button" onclick="confirmRestartServices()">
+      ⚡ Full Restart
+    </button>
+    <button id="pull_updates" type="button" onclick="confirmGitPull()">
+      ☁ Pull Updates
+    </button>
+    <button type="button" onclick="exportParamsJson()">
+      📥 Export JSON
+    </button>
+    
+    <input id="search_input" type="search" placeholder="Search name, description, category, unit..." oninput="applyTableFilter()">
+    
+    <select id="state_filter" class="filter-select" onchange="applyTableFilter()">
+      <option value="all">Filter: All Parameters</option>
+      <option value="modified">Filter: Unsaved Modified Only</option>
+      <option value="custom">Filter: Custom (Non-Default) Only</option>
+    </select>
+  </div>
+
+  <div id="status">
+    <span id="status_text">Loading codebase parameters...</span>
+    <span id="summary_text" style="color: var(--text-muted);"></span>
+  </div>
+</header>
+
+<div id="table"></div>
+
+<!-- Confirmation Dialog -->
+<dialog id="confirm_dialog">
+  <div class="dialog-body">
+    <h2 id="dialog_title" style="margin-top:0;">Save Parameter Changes</h2>
+    <p id="dialog_message">Review the changes to be applied to config/codebase_params.json and live system environment:</p>
+    <div id="dialog_content"></div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" onclick="closeDialog()">Cancel</button>
+    <button id="dialog_confirm_btn" class="primary" type="button">Confirm</button>
+  </div>
+</dialog>
+
+</body>
+</html>
