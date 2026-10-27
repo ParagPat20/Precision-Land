@@ -246,11 +246,32 @@ class ServoController:
 
     def load_sequence_config(self):
         """
-        Loads sequence settings from servo_sequences.json if present,
+        Loads sequence settings from config_manager (or servo_sequences.json if present),
         otherwise uses configured default constants.
         """
         import json
         config = json.loads(json.dumps(DEFAULT_SEQUENCE_CONFIG))
+
+        # 1. Pull dynamic overrides from config_manager if available
+        try:
+            from core.config_manager import config_manager
+            config["lock"]["st1_pos"] = int(config_manager.get("SERVO_1_LOCK_POS", DEFAULT_LID1_LOCK_POS))
+            config["lock"]["st2_pos"] = int(config_manager.get("SERVO_2_LOCK_POS", DEFAULT_LID2_LOCK_POS))
+            config["lock"]["sc3_pos"] = int(config_manager.get("SERVO_3_LOCK_POS", DEFAULT_LATCH3_LOCK_POS))
+            config["lock"]["sc4_pos"] = int(config_manager.get("SERVO_4_LOCK_POS", DEFAULT_LATCH4_LOCK_POS))
+            config["lock"]["st_speed"] = int(config_manager.get("SERVO_ST_SPEED", DEFAULT_LID_SPEED))
+            config["lock"]["sc_speed"] = int(config_manager.get("SERVO_SC_SPEED", DEFAULT_LATCH_SPEED))
+
+            config["unlock"]["st1_pos"] = int(config_manager.get("SERVO_1_UNLOCK_POS", DEFAULT_LID1_UNLOCK_POS))
+            config["unlock"]["st2_pos"] = int(config_manager.get("SERVO_2_UNLOCK_POS", DEFAULT_LID2_UNLOCK_POS))
+            config["unlock"]["sc3_pos"] = int(config_manager.get("SERVO_3_UNLOCK_POS", DEFAULT_LATCH3_UNLOCK_POS))
+            config["unlock"]["sc4_pos"] = int(config_manager.get("SERVO_4_UNLOCK_POS", DEFAULT_LATCH4_UNLOCK_POS))
+            config["unlock"]["st_speed"] = int(config_manager.get("SERVO_ST_SPEED", DEFAULT_LID_SPEED))
+            config["unlock"]["sc_speed"] = int(config_manager.get("SERVO_SC_SPEED", DEFAULT_LATCH_SPEED))
+        except Exception:
+            pass
+
+        # 2. Check json overrides if on disk
         possible_paths = [
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "STServo_Python", "servo_sequences.json")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "servo_sequences.json")),

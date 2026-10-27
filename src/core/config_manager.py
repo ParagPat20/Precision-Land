@@ -375,6 +375,96 @@ PARAM_DEFINITIONS: List[Dict[str, Any]] = [
         "env_var": "JECH_SERVO_UNLOCK_PWM",
         "description": "PWM pulse width commanded to unlock/release payload (2000 = unlocked/high)."
     },
+    {
+        "name": "SERVO_1_LOCK_POS",
+        "category": "Servo Controls",
+        "default": 1450,
+        "type": "int",
+        "unit": "ticks",
+        "env_var": "JECH_SERVO_1_LOCK_POS",
+        "description": "Servo ID 1 (ST3215 Lid 1) target position for LOCKED state (0-4095)."
+    },
+    {
+        "name": "SERVO_1_UNLOCK_POS",
+        "category": "Servo Controls",
+        "default": 4000,
+        "type": "int",
+        "unit": "ticks",
+        "env_var": "JECH_SERVO_1_UNLOCK_POS",
+        "description": "Servo ID 1 (ST3215 Lid 1) target position for UNLOCKED state (0-4095)."
+    },
+    {
+        "name": "SERVO_2_LOCK_POS",
+        "category": "Servo Controls",
+        "default": 3450,
+        "type": "int",
+        "unit": "ticks",
+        "env_var": "JECH_SERVO_2_LOCK_POS",
+        "description": "Servo ID 2 (ST3215 Lid 2) target position for LOCKED state (0-4095)."
+    },
+    {
+        "name": "SERVO_2_UNLOCK_POS",
+        "category": "Servo Controls",
+        "default": 500,
+        "type": "int",
+        "unit": "ticks",
+        "env_var": "JECH_SERVO_2_UNLOCK_POS",
+        "description": "Servo ID 2 (ST3215 Lid 2) target position for UNLOCKED state (0-4095)."
+    },
+    {
+        "name": "SERVO_3_LOCK_POS",
+        "category": "Servo Controls",
+        "default": 520,
+        "type": "int",
+        "unit": "ticks",
+        "env_var": "JECH_SERVO_3_LOCK_POS",
+        "description": "Servo ID 3 (SC09 Latch 3 / Kadi) target position for LOCKED state (0-1023)."
+    },
+    {
+        "name": "SERVO_3_UNLOCK_POS",
+        "category": "Servo Controls",
+        "default": 675,
+        "type": "int",
+        "unit": "ticks",
+        "env_var": "JECH_SERVO_3_UNLOCK_POS",
+        "description": "Servo ID 3 (SC09 Latch 3 / Kadi) target position for UNLOCKED state (0-1023)."
+    },
+    {
+        "name": "SERVO_4_LOCK_POS",
+        "category": "Servo Controls",
+        "default": 700,
+        "type": "int",
+        "unit": "ticks",
+        "env_var": "JECH_SERVO_4_LOCK_POS",
+        "description": "Servo ID 4 (SC09 Latch 4 / Kadi) target position for LOCKED state (0-1023)."
+    },
+    {
+        "name": "SERVO_4_UNLOCK_POS",
+        "category": "Servo Controls",
+        "default": 550,
+        "type": "int",
+        "unit": "ticks",
+        "env_var": "JECH_SERVO_4_UNLOCK_POS",
+        "description": "Servo ID 4 (SC09 Latch 4 / Kadi) target position for UNLOCKED state (0-1023)."
+    },
+    {
+        "name": "SERVO_ST_SPEED",
+        "category": "Servo Controls",
+        "default": 2400,
+        "type": "int",
+        "unit": "steps/s",
+        "env_var": "JECH_SERVO_ST_SPEED",
+        "description": "Movement speed for ST3215 Dual Lid Servos (ID 1 & 2)."
+    },
+    {
+        "name": "SERVO_SC_SPEED",
+        "category": "Servo Controls",
+        "default": 1500,
+        "type": "int",
+        "unit": "steps/s",
+        "env_var": "JECH_SERVO_SC_SPEED",
+        "description": "Movement speed for SC09 Latch Servos (ID 3 & 4)."
+    },
 
     # -------------------------------------------------------------------------
     # 5. MAVLINK TELEMETRY & FLIGHT CONTROLLER
