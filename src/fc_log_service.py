@@ -35,7 +35,7 @@ class FTPMasterWrapper:
 
 class FlightControllerLogService:
     # QGroundControl downloads DataFlash logs in 512 LOG_DATA bins per chunk.
-    # Since we are over Ethernet/UDP, we can increase this drastically for faster downloads!
+    LOG_DATA_LEN = 90
     QGC_CHUNK_BINS = int(os.environ.get("JECH_FC_LOG_QGC_CHUNK_BINS", "512"))  # 512 bins (46KB) matches QGroundControl standard block
     QGC_CHUNK_SIZE = LOG_DATA_LEN * QGC_CHUNK_BINS
     QGC_DATA_TIMEOUT_SEC = float(os.environ.get("JECH_FC_LOG_QGC_RETRY_SEC", "0.2"))  # 200ms silence timeout for low-latency Ethernet RTT
