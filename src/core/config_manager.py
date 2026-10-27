@@ -561,11 +561,11 @@ PARAM_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "name": "FC_LOG_DOWNLOAD_TIMEOUT",
         "category": "System Services",
-        "default": 60,
+        "default": 3600,
         "type": "int",
         "unit": "s",
         "env_var": "JECH_FC_LOG_DOWNLOAD_TIMEOUT_SEC",
-        "description": "Maximum seconds allowed for downloading a single .BIN flight log over MAVLink FTP."
+        "description": "Maximum seconds allowed for downloading a single .BIN flight log over MAVLink FTP (default: 3600s / 1 hour)."
     }
 ]
 

@@ -1234,7 +1234,13 @@ class FlightControllerLogService:
             if res.error_code != FtpError.Success:
                 raise RuntimeError(f"MAVFTP download initiation failed: {res.error_code}")
             
-            res = ftp.process_ftp_reply("get", timeout=self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC)
+            # Ensure timeout is generous enough for large logs even if env var was set low
+            timeout_sec = max(
+                float(self.LOG_DOWNLOAD_WALL_TIMEOUT_SEC),
+                float(expected) / 10000.0 + 300.0,
+                3600.0
+            )
+            res = ftp.process_ftp_reply("get", timeout=timeout_sec)
             if res.error_code != FtpError.Success:
                 raise RuntimeError(f"MAVFTP download failed: {res.error_code}")
                 
