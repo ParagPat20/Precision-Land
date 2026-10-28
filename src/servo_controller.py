@@ -114,11 +114,11 @@ def resolve_servo_port(manual_port=None):
     Resolve the STServo serial bus for Linux/RPi first, while keeping Windows
     development usable. Set JECH_SERVO_PORT or pass --servo-port to override.
     """
-    if manual_port:
+    if manual_port and str(manual_port).strip().lower() not in ("auto", "none", ""):
         return manual_port
 
     env_port = os.environ.get("JECH_SERVO_PORT")
-    if env_port:
+    if env_port and str(env_port).strip().lower() not in ("auto", "none", ""):
         return env_port
 
     if os.name == "nt":
@@ -453,6 +453,9 @@ class ServoController:
     def _result_ok(self, sid, operation, result, error, handler=None):
         handler = handler or self._handler_for(sid)
         if result != COMM_SUCCESS:
+            if result == COMM_PORT_BUSY and self.portHandler:
+                # Auto-heal stuck portHandler.is_using flag
+                self.portHandler.is_using = False
             print(f"[SERVO] ID {sid} {operation} failed: {handler.getTxRxResult(result)}")
             return False
         if error:
@@ -762,6 +765,21 @@ class ServoController:
 
     def read_status(self, sid=None):
         ids = self._servo_ids() if sid in (None, "all") else [int(sid)]
+        if getattr(self, "sequence_active", False):
+            # Fast return during active motion sequence to prevent half-duplex bus collision
+            servos = []
+            for item in ids:
+                is_st = self._is_st3215(item)
+                servos.append({
+                    "ok": True,
+                    "id": item,
+                    "model": "ST3215" if is_st else "SC09",
+                    "position": None,
+                    "speed": None,
+                    "moving": 1,
+                    "sequence_active": True
+                })
+            return {"ok": True, "servos": servos, "config": self.get_config(), "busy": True}
         return {"ok": True, "servos": [self._read_status_one(item) for item in ids], "config": self.get_config()}
 
     def _read_status_one(self, sid):
@@ -1278,40 +1296,18 @@ class ServoController:
                 self.move_latches(sc3_pos, sc4_pos, sc_spd, timeout=2.0)
                 return
 
-            latches_thread = None
-            latches_started = threading.Event()
-
-            def trigger_latches_on_threshold():
-                nonlocal latches_thread
-                if latches_started.is_set():
-                    return
-                latches_started.set()
-                print(f"\n[SERVO] >>> THRESHOLD REACHED: Sending Latches (ID 3 & 4) to lock targets ({sc3_pos}, {sc4_pos}) with FULL TORQUE while Lid finishes movement to target...")
-                latches_thread = threading.Thread(
-                    target=self.move_latches,
-                    args=(sc3_pos, sc4_pos, sc_spd, 5.0),
-                    name="LockLatchesThread"
-                )
-                latches_thread.start()
-
-            # Step 1: Move Dual Lid DOWN synchronously towards st1_pos & st2_pos.
-            # Once threshold is reached, trigger_latches_on_threshold fires.
-            # Servo 1 & 2 NEVER stop at threshold; they continue all the way to target!
-            print(f"\nStep 1: Dual Lid DOWN -> ID 1: {st1_pos} & ID 2: {st2_pos} (Speed: {st_spd}, Tol: ±{st_tol}, Threshold: {st_threshold})")
+            # Step 1: Move Dual Lid DOWN synchronously towards st1_pos & st2_pos with full torque
+            print(f"\nStep 1: Dual Lid DOWN -> ID 1: {st1_pos} & ID 2: {st2_pos} (Speed: {st_spd}, Tol: ±{st_tol})")
             self.move_dual_lid_sync(
                 st1_pos, st2_pos,
                 speed=st_spd, acc=st_acc, tolerance=st_tol,
-                threshold=st_threshold, on_threshold_cb=trigger_latches_on_threshold,
                 label="LOCK: DUAL LID DOWN"
             )
+            time.sleep(0.3)
 
-            # In case threshold was not triggered during lid motion, trigger latches now
-            if not latches_started.is_set():
-                trigger_latches_on_threshold()
-
-            # Step 2: Wait for latches to finish locking to target
-            if latches_thread:
-                latches_thread.join(timeout=6.0)
+            # Step 2: Engage Latches (Servo 3 & 4) with FULL TORQUE (Sequential - prevents half-duplex UART bus collisions)
+            print(f"\nStep 2: Engaging Latches with FULL TORQUE -> ID 3: {sc3_pos} & ID 4: {sc4_pos} (Speed: {sc_spd})")
+            self.move_latches(sc3_pos, sc4_pos, speed=sc_spd, timeout=5.0)
 
             print("\nLocking sequence complete! All servos reached target with torque held.")
             self.last_state = 'lock'

@@ -20,11 +20,11 @@ def resolve_servo_port(manual_port=None):
     Resolve the STServo serial bus for Linux/RPi first, while keeping Windows
     development usable. Set JECH_SERVO_PORT or pass --servo-port to override.
     """
-    if manual_port:
+    if manual_port and str(manual_port).strip().lower() not in ("auto", "none", ""):
         return manual_port
 
     env_port = os.environ.get("JECH_SERVO_PORT")
-    if env_port:
+    if env_port and str(env_port).strip().lower() not in ("auto", "none", ""):
         return env_port
 
     if os.name == "nt":
